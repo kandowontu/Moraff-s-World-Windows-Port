@@ -5,10 +5,12 @@ void input_init(Input *inp) {
     memset(inp, 0, sizeof(*inp));
 }
 
-static void input_push(Input *inp, int key) {
+static void input_push(Input *inp, int key, int x, int y) {
     int next = (inp->tail + 1) % KEY_QUEUE_SIZE;
     if (next == inp->head) return; /* queue full, drop key */
     inp->keys[inp->tail] = key;
+    inp->event_x[inp->tail] = x;
+    inp->event_y[inp->tail] = y;
     inp->tail = next;
 }
 
@@ -23,14 +25,18 @@ void input_pump(Input *inp) {
             if (ev.key.repeat) break;
             int dos_key = input_sdl_to_dos(ev.key.keysym.sym, (SDL_Keymod)ev.key.keysym.mod);
             if (dos_key > 0) {
-                input_push(inp, dos_key);
+                input_push(inp, dos_key, -1, -1);
             } else if (dos_key < 0) {
                 /* Extended key: push 0 then scancode */
-                input_push(inp, 0);
-                input_push(inp, -dos_key);
+                input_push(inp, 0, -1, -1);
+                input_push(inp, -dos_key, -1, -1);
             }
             break;
         }
+        case SDL_MOUSEBUTTONDOWN:
+            if (ev.button.button == SDL_BUTTON_LEFT)
+                input_push(inp, INPUT_MOUSE_CLICK, ev.button.x, ev.button.y);
+            break;
         default:
             break;
         }
@@ -49,12 +55,33 @@ int input_getch(Input *inp) {
         SDL_Delay(10);
     }
     int key = inp->keys[inp->head];
+    if (key == INPUT_MOUSE_CLICK) {
+        inp->last_mouse_x = inp->event_x[inp->head];
+        inp->last_mouse_y = inp->event_y[inp->head];
+    }
     inp->head = (inp->head + 1) % KEY_QUEUE_SIZE;
+    return key;
+}
+
+int input_wait_any_key(Input *inp) {
+    int key = input_getch(inp);
+
+    /* DOS getch() represents arrows and function keys as two bytes: a zero
+     * prefix followed by the scan code.  Modal "any key" screens must drain
+     * both bytes or the scan code is mistaken for an ASCII command by the
+     * next game loop (Down's 0x50, for example, is 'P' / Pockets). */
+    if (key == 0)
+        (void)input_getch(inp);
     return key;
 }
 
 int input_poll_quit(Input *inp) {
     return inp->quit_requested;
+}
+
+void input_last_mouse_click(Input *inp, int *x, int *y) {
+    if (x) *x = inp->last_mouse_x;
+    if (y) *y = inp->last_mouse_y;
 }
 
 /* Map SDL keys to what the original DOS game expects.
@@ -116,8 +143,17 @@ int input_sdl_to_dos(SDL_Keycode sym, SDL_Keymod mod) {
     case SDLK_F9:        return -0x43;
     case SDLK_F10:       return -0x44;
 
-    /* Numpad */
+    /* Numpad.  SDL reports navigation-pad keys as KP digits on some
+       keyboards when Num Lock is off, so retain their DOS navigation role. */
     case SDLK_KP_ENTER:  return 0x0D;
+    case SDLK_KP_8:      return -0x48;
+    case SDLK_KP_2:      return -0x50;
+    case SDLK_KP_4:      return -0x4B;
+    case SDLK_KP_6:      return -0x4D;
+    case SDLK_KP_7:      return -0x47;
+    case SDLK_KP_1:      return -0x4F;
+    case SDLK_KP_9:      return -0x49;
+    case SDLK_KP_3:      return -0x51;
 
     /* Home/End/PgUp/PgDn */
     case SDLK_HOME:      return -0x47;

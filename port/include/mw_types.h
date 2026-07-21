@@ -2,6 +2,7 @@
 #define MW_TYPES_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -17,7 +18,7 @@ typedef int32_t  s32;
 typedef struct {
     char name[20];                  /* 0x000 - player name (null-terminated) */
     char _pad_014[20];              /* 0x014 */
-    u8   race;                      /* 0x028 - 0=Human,1=Dwarf,2=Hobbit,3=Elf,4=Gnome,5=Half-Elf,6=Half-Orc */
+    u8   race;                      /* 0x028 - Human,Elf,Dwarf,Hobbit,Gnome,Ogre,Sprite,Imp */
     u8   sex;                       /* 0x029 - 0=Male, 1=Female */
     u8   class_id;                  /* 0x02A - 0=Fighter,1=Worshipper,2=Monk,3=Wizard,4=Priest,5=Sage,6=Mage */
     char _pad_02B[6];               /* 0x02B */
@@ -25,7 +26,9 @@ typedef struct {
     u16  hp_max;                    /* 0x033 */
     float sp_cur;                   /* 0x035 - spell points (float32) */
     float sp_max;                   /* 0x039 */
-    char _pad_03D[68];              /* 0x03D - 0x080 */
+    u16  height_inches;             /* 0x03D - rolled from race height */
+    u16  weight_pounds;             /* 0x03F - rolled from race weight */
+    char _pad_041[64];              /* 0x041 - 0x080 */
     u8   weapon_inventory[8];       /* 0x081 - owned mundane weapons (Fist is implicit) */
     char _pad_089[5];               /* 0x089 - 0x08D */
     u8   eq_wep_enchant[12];        /* 0x08E - permanent weapon enchant per weapon slot */
@@ -65,11 +68,12 @@ typedef struct {
     char _pad_474[820];             /* 0x474 */
 
     u16  level;                     /* 0x7A8 */
-    char _pad_7AA[2];               /* 0x7AA */
+    u16  facing_dir;                /* 0x7AA - 0=N, 1=S, 2=W, 3=E */
     u16  x_pos;                     /* 0x7AC */
     u16  y_pos;                     /* 0x7AE */
     u16  floor_depth;               /* 0x7B0 */
-    char _pad_7B2[20];              /* 0x7B2 */
+    u16  dungeon_number;            /* 0x7B2 - procedural dungeon seed */
+    char _pad_7B4[18];              /* 0x7B4 */
     u8   ring_regen;                /* 0x7C6 */
     u8   combat_bonus;              /* 0x7C7 - mystery byte: adds to both attack and defense */
     u8   holy_grenade;              /* 0x7C8 */
@@ -106,9 +110,11 @@ typedef struct {
     u16  eff_hold_monster;          /* 0x7F6 */
     char _pad_7F8[6];               /* 0x7F8 */
     u8   floor_slosher;             /* 0x7FE */
-    char _pad_7FF[7];               /* 0x7FF */
-    u16  raise_contract;            /* 0x806 */
-    char _pad_808[6];               /* 0x808 */
+    char _pad_7FF[5];               /* 0x7FF */
+    u16  raise_floor;                /* 0x804 - raise-dead return floor/seed */
+    u16  raise_x;                    /* 0x806 - 0xFFFF means no contract */
+    u16  raise_y;                    /* 0x808 - raise-dead return Y */
+    char _pad_80A[4];               /* 0x80A */
     u8   potion_heal;               /* 0x80E */
     char _pad_80F[1];               /* 0x80F */
     u8   stone_teleport;            /* 0x810 */
@@ -119,18 +125,37 @@ typedef struct {
     u16  stat_con;                  /* 0x818 */
     u16  stat_agi;                  /* 0x81A */
     u16  stat_luck;                 /* 0x81C */
-    char _pad_81E[40];              /* 0x81E */
+    u8   trapdoor_keys[18];         /* 0x81E - keys 1..17, indexed by label/10 */
+    char _pad_830[21];              /* 0x830 */
+    u8   quest_flags;                /* 0x845 - shadow/red dragon reward chain */
     u8   gauntlet;                  /* 0x846 */
-    char _pad_847[225];             /* 0x847 - pad to 0x928 */
+    char _pad_847[17];              /* 0x847 */
+    double experience;              /* 0x858 - original 64-bit XP value */
+    char _pad_860[200];             /* 0x860 - pad to 0x928 */
 } Character;
 #pragma pack(pop)
 
 _Static_assert(sizeof(Character) == 0x928, "Character struct must be 2344 bytes");
+_Static_assert(offsetof(Character, weapon_inventory) == 0x081, "weapon inventory offset");
+_Static_assert(offsetof(Character, height_inches) == 0x03D, "height offset");
+_Static_assert(offsetof(Character, weight_pounds) == 0x03F, "weight offset");
+_Static_assert(offsetof(Character, eq_wep_enchant) == 0x08E, "weapon enchant offset");
+_Static_assert(offsetof(Character, equipped_weapon) == 0x09B, "equipped weapon offset");
+_Static_assert(offsetof(Character, armor_inventory) == 0x0B0, "armor inventory offset");
+_Static_assert(offsetof(Character, armor_enchant) == 0x0B8, "armor enchant offset");
+_Static_assert(offsetof(Character, equipped_armor) == 0x0C0, "equipped armor offset");
+_Static_assert(offsetof(Character, facing_dir) == 0x7AA, "facing direction offset");
+_Static_assert(offsetof(Character, dungeon_number) == 0x7B2, "dungeon number offset");
+_Static_assert(offsetof(Character, raise_floor) == 0x804, "raise floor offset");
+_Static_assert(offsetof(Character, raise_x) == 0x806, "raise X offset");
+_Static_assert(offsetof(Character, trapdoor_keys) == 0x81E, "trapdoor key offset");
+_Static_assert(offsetof(Character, quest_flags) == 0x845, "quest flags offset");
+_Static_assert(offsetof(Character, experience) == 0x858, "experience offset");
 
 /* Race IDs */
 enum {
-    RACE_HUMAN = 0, RACE_DWARF, RACE_HOBBIT, RACE_ELF,
-    RACE_GNOME, RACE_HALFELF, RACE_HALFORC, RACE_COUNT
+    RACE_HUMAN = 0, RACE_ELF, RACE_DWARF, RACE_HOBBIT,
+    RACE_GNOME, RACE_OGRE, RACE_SPRITE, RACE_IMP, RACE_COUNT
 };
 
 /* Class IDs */
@@ -140,7 +165,7 @@ enum {
 };
 
 static const char *race_names[] = {
-    "HUMAN", "DWARF", "HOBBIT", "ELF", "GNOME", "HALF-ELF", "HALF-ORC"
+    "HUMAN", "ELF", "DWARF", "HOBBIT", "GNOME", "OGRE", "SPRITE", "IMP"
 };
 
 static const char *class_names[] = {

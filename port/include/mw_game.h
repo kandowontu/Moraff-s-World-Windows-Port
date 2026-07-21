@@ -12,6 +12,7 @@
 #define MONSTERS_PER_FLOOR 145
 #define PIT_GROUP_FLOORS   32
 #define PIT_ROW_BYTES      10
+#define BESTIARY_MONSTER_COUNT 112
 
 /* The DOS MON.MAP record is deliberately kept byte-for-byte compatible. */
 typedef struct MonsterRecord {
@@ -49,8 +50,12 @@ typedef struct Game {
     /* Dungeon state */
     int   cur_floor;
     int   cur_x, cur_y;
+    int   dungeon_number;       /* original character field +0x7B2 / g_C8A4 */
     int   last_move_dir;        /* 0=N, 1=S, 2=W, 3=E (matches original g_C89C) */
     int   view_mode;            /* 0-2, cycled by Z key (matches original g_45C9) */
+    int   brick_speed;          /* 0-3, compatibility setting cycled by B */
+    int   sound_enabled;        /* original O-key on/off state */
+    int   map_player_visible;   /* timed blink phase for the map cursor */
     u8   *dungeon_data;         /* loaded from dung.bin */
     int   dungeon_data_size;
     u8   *worldmap_data;        /* loaded from worldmap.bin */
@@ -74,6 +79,12 @@ typedef struct Game {
     int   pit_group;
     int   pit_state_loaded;
     int   pit_state_dirty;
+
+    /* Per-character monster record.  This lives in a sidecar file so the
+     * original byte-for-byte character save remains compatible. */
+    u32   bestiary_kills[BESTIARY_MONSTER_COUNT];
+    int   bestiary_loaded;
+    int   bestiary_dirty;
 
     /* Graphics assets */
     u8   *world_pic_data[256];  /* image table from world.pic */
@@ -104,6 +115,8 @@ void game_draw_combat_overlay(Game *g, Character *player,
                               int monster_level, int monster_hp,
                               const char *msg1, const char *msg2,
                               const char *msg3);
+void game_draw_bestiary_test(Game *g, int selected);
+int  game_ui_self_test(Game *g);
 void game_update_visibility(Game *g);
 
 /* Character I/O */
@@ -111,6 +124,8 @@ int  game_load_character(Game *g, int slot);
 int  game_save_character(Game *g, int slot);
 int  game_load_world_state(Game *g, int slot);
 int  game_save_world_state(Game *g);
+int  game_load_bestiary(Game *g, int slot);
+int  game_save_bestiary(Game *g);
 
 /* Asset loading */
 int  game_load_pics(Game *g);
@@ -151,5 +166,8 @@ void game_make_path(Game *g, char *out, int out_sz, const char *filename);
 
 /* Drawing helpers (internal to mw_game.c) */
 void draw_minimap(Game *g, int mx, int my, int mw, int mh);
+
+/* Read-only deterministic regression checks for town economy and drops. */
+int game_economy_self_test(void);
 
 #endif /* MW_GAME_H */

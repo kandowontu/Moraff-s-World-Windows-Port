@@ -10,6 +10,12 @@ static int select_monster_floor(Game *g, int floor);
 static int load_pit_group(Game *g, int group);
 static int pit_bit_is_set(Game *g, int x, int y);
 static int pitfall_target(Game *g, int x, int y);
+static double experience_for_level(int level);
+static void draw_trapdoor_notice(Game *g, Character *player);
+static const u8 race_stat_base[RACE_COUNT][6];
+static void roll_character_stats(Game *g, int race, u16 stats[6]);
+static float starting_spell_points(const Character *p);
+static int character_creation_self_test(void);
 
 /* ── File path helper ── */
 
@@ -69,6 +75,75 @@ int game_save_character(Game *g, int slot) {
 
     fwrite(&g->chars[slot], 1, sizeof(Character), f);
     fclose(f);
+    return 0;
+}
+
+/* The DOS character file is intentionally never extended.  Beastiary data
+ * is stored in a small versioned sidecar named <slot>BEST.DAT instead. */
+static void make_bestiary_name(char *out, int out_sz, int slot) {
+    snprintf(out, out_sz, "%dBEST.DAT", slot);
+}
+
+static u32 read_le32(const u8 *p) {
+    return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) |
+           ((u32)p[3] << 24);
+}
+
+static void write_le32(u8 *p, u32 value) {
+    p[0] = (u8)value;
+    p[1] = (u8)(value >> 8);
+    p[2] = (u8)(value >> 16);
+    p[3] = (u8)(value >> 24);
+}
+
+int game_load_bestiary(Game *g, int slot) {
+    static const u8 magic[8] = {'M','W','B','E','S','T','0','1'};
+    enum { HEADER_SIZE = 12, RECORD_SIZE = 4 };
+    u8 data[HEADER_SIZE + BESTIARY_MONSTER_COUNT * RECORD_SIZE];
+    char name[24], path[300];
+
+    memset(g->bestiary_kills, 0, sizeof(g->bestiary_kills));
+    g->bestiary_loaded = 1;
+    g->bestiary_dirty = 0;
+    if (slot < 0 || slot >= MAX_PLAYERS) return -1;
+
+    make_bestiary_name(name, sizeof(name), slot);
+    game_make_path(g, path, sizeof(path), name);
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0; /* Existing DOS/port saves begin with an empty record. */
+    size_t got = fread(data, 1, sizeof(data), f);
+    fclose(f);
+    if (got != sizeof(data) || memcmp(data, magic, sizeof(magic)) != 0 ||
+        read_le32(data + 8) != BESTIARY_MONSTER_COUNT)
+        return -1;
+
+    for (int i = 0; i < BESTIARY_MONSTER_COUNT; i++)
+        g->bestiary_kills[i] = read_le32(data + HEADER_SIZE + i * RECORD_SIZE);
+    return 0;
+}
+
+int game_save_bestiary(Game *g) {
+    static const u8 magic[8] = {'M','W','B','E','S','T','0','1'};
+    enum { HEADER_SIZE = 12, RECORD_SIZE = 4 };
+    u8 data[HEADER_SIZE + BESTIARY_MONSTER_COUNT * RECORD_SIZE];
+    char name[24], path[300];
+
+    if (!g->bestiary_loaded || g->active_save_slot < 0 ||
+        g->active_save_slot >= MAX_PLAYERS) return 0;
+    memcpy(data, magic, sizeof(magic));
+    write_le32(data + 8, BESTIARY_MONSTER_COUNT);
+    for (int i = 0; i < BESTIARY_MONSTER_COUNT; i++)
+        write_le32(data + HEADER_SIZE + i * RECORD_SIZE,
+                   g->bestiary_kills[i]);
+
+    make_bestiary_name(name, sizeof(name), g->active_save_slot);
+    game_make_path(g, path, sizeof(path), name);
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    size_t put = fwrite(data, 1, sizeof(data), f);
+    int close_error = fclose(f);
+    if (put != sizeof(data) || close_error != 0) return -1;
+    g->bestiary_dirty = 0;
     return 0;
 }
 
@@ -243,7 +318,9 @@ int game_load_monsters(Game *g) {
  * WORLD.ASM far_1EFA4 does not index DUNG.BIN as an 80x80 room array.  The
  * file contains eighteen 512-byte packed wall templates after a 0x200-byte
  * header.  far_1EE04 selects one template for every 16x16 region using the
- * floor and player number; far_1EFA4 then extracts one two-bit edge value.
+ * floor and saved dungeon number; far_1EFA4 then extracts one two-bit edge
+ * value.  The latter is character field +0x7B2 (runtime g_C8A4), not the
+ * selected player/save-slot index.
  *
  * axis 0 is a vertical edge at x (west edge of cell x); axis 1 is a
  * horizontal edge at y (north edge of cell y).  Values used by the original:
@@ -258,14 +335,14 @@ static s16 dos_mul(s16 a, s16 b) {
     return dos16((s32)a * (s32)b);
 }
 
-static s16 dungeon_hash(int block_x, int block_y, int floor, int player,
+static s16 dungeon_hash(int block_x, int block_y, int floor, int dungeon_number,
                         int modulus) {
     if (block_x < 0 || block_y < 0) return 0;
 
     s16 x = dos16(block_x + 9);
     s16 y = dos16(block_y + 7);
     s16 f = dos16(floor + 13);
-    s16 p = dos16(player + 15);
+    s16 p = dos16(dungeon_number + 15);
     if (y == 0 || f == 0 || p == 0) return 0;
 
     s16 a = (s16)(dos_mul(x, 25) / y);
@@ -304,7 +381,8 @@ static int dungeon_edge_at(Game *g, int x, int y, int axis, int floor) {
     int shift = (x & 1) ? 4 : 0;
     if (axis != 0) shift += 2;
 
-    int which = dungeon_hash(x >> 4, y >> 4, floor, g->cur_player, 18);
+    int which = dungeon_hash(x >> 4, y >> 4, floor,
+                             g->dungeon_number, 18);
     int off = 0x200 + which * 0x200
             + (((x >> 4) & 1) << 8)
             + (((y >> 4) & 1) << 7)
@@ -333,7 +411,7 @@ static int ladder_delta(Game *g, int x, int y) {
     for (int shaft = floor - 1;
          shaft > floor - 4 && shaft >= 0; shaft--) {
         if (rock_cell_at(g, x, y, shaft)) continue;
-        if (dungeon_hash(x, y, shaft, g->cur_player, 31) != 1) continue;
+        if (dungeon_hash(x, y, shaft, g->dungeon_number, 31) != 1) continue;
 
         int landing = shaft + 1;
         while (landing <= floor && rock_cell_at(g, x, y, landing))
@@ -341,7 +419,7 @@ static int ladder_delta(Game *g, int x, int y) {
         if (landing == floor) return shaft - floor;
     }
 
-    if (dungeon_hash(x, y, floor, g->cur_player, 31) == 1) {
+    if (dungeon_hash(x, y, floor, g->dungeon_number, 31) == 1) {
         for (int landing = floor + 1;
              landing < floor + 3 && landing < 202; landing++) {
             if (!rock_cell_at(g, x, y, landing)) return landing - floor;
@@ -417,6 +495,67 @@ static void make_monster_map_name(char *out, int out_sz, int slot) {
     snprintf(out, out_sz, "%dMON.MAP", slot);
 }
 
+static int quest_boss_type(Game *g, int floor) {
+    static const int quest_floor[8] = {4, 8, 12, 16, 125, 150, 175, 200};
+    u8 flags = 0;
+    if (g->cur_player >= 0 && g->cur_player < MAX_PLAYERS)
+        flags = g->chars[g->cur_player].quest_flags;
+    for (int i = 0; i < 8; i++)
+        if (floor == quest_floor[i] && !(flags & (1u << i)))
+            return 104 + i;
+    return -1;
+}
+
+static void roll_monster_identity(Game *g, MonsterRecord *m,
+                                  int floor, int forced_type) {
+    int type = forced_type >= 0 ? forced_type :
+               combat_pick_monster_type(g, floor);
+    int level = floor + (game_rand(g) % 5) - 2;
+    if (level < 1) level = 1;
+    if (level > 255) level = 255;
+    int cap = combat_calc_monster_hp(&monster_types[type], level);
+    int hp = cap > 1 ? 1 + game_rand(g) % cap : 1;
+    monster_record_set_hp(m, hp);
+    m->type = (u8)type;
+    m->level = (u8)level;
+}
+
+/* Repair MON.MAP layers made by older port builds, which could randomly put
+   quest dragons on every floor and retain monsters outside their min/max
+   range.  Positions and dead records remain untouched. */
+static void sanitize_monster_floor(Game *g, int layer, int floor) {
+    MonsterRecord *map = g->monster_map[layer];
+    int expected_boss = quest_boss_type(g, floor);
+    int boss_index = -1;
+
+    if (expected_boss >= 0) {
+        for (int i = 0; i < MONSTERS_PER_FLOOR; i++)
+            if (monster_record_alive(g, &map[i]) &&
+                map[i].type == expected_boss) {
+                boss_index = i;
+                break;
+            }
+        if (boss_index < 0) {
+            for (int i = 0; i < MONSTERS_PER_FLOOR; i++)
+                if (monster_record_alive(g, &map[i])) {
+                    boss_index = i;
+                    roll_monster_identity(g, &map[i], floor, expected_boss);
+                    g->monster_map_dirty = 1;
+                    break;
+                }
+        }
+    }
+
+    for (int i = 0; i < MONSTERS_PER_FLOOR; i++) {
+        MonsterRecord *m = &map[i];
+        if (!monster_record_alive(g, m) || i == boss_index) continue;
+        if (m->type >= 104 || !combat_monster_type_valid(m->type, floor)) {
+            roll_monster_identity(g, m, floor, -1);
+            g->monster_map_dirty = 1;
+        }
+    }
+}
+
 static int save_monster_map(Game *g) {
     if (!g->monster_map_loaded || g->active_save_slot < 0) return 0;
     char name[24], path[300];
@@ -436,6 +575,13 @@ static void generate_monster_floor(Game *g, int layer, int floor) {
     MonsterRecord *map = g->monster_map[layer];
     for (int i = 0; i < MONSTERS_PER_FLOOR; i++) clear_monster_record(&map[i]);
 
+    /* The town/surface is a safe floor in the original game. */
+    if (floor <= 0) {
+        g->monster_floor[layer] = 0;
+        g->monster_map_dirty = 1;
+        return;
+    }
+
     int made = 0;
     for (int tries = 0; made < MONSTERS_PER_FLOOR && tries < 100000; tries++) {
         int x = game_rand(g) % MAP_W;
@@ -447,17 +593,10 @@ static void generate_monster_floor(Game *g, int layer, int floor) {
             if (map[j].x == x && map[j].y == y) { occupied = 1; break; }
         if (occupied || (x == g->cur_x && y == g->cur_y)) continue;
 
-        int type = combat_pick_monster_type(g, floor);
-        int level = (floor > 0 ? floor : 1) + (game_rand(g) % 5) - 2;
-        if (level < 1) level = 1;
-        if (level > 255) level = 255;
-        int cap = combat_calc_monster_hp(&monster_types[type], level);
-        int hp = cap > 1 ? 1 + game_rand(g) % cap : 1;
         map[made].x = (u8)x;
         map[made].y = (u8)y;
-        monster_record_set_hp(&map[made], hp);
-        map[made].type = (u8)type;
-        map[made].level = (u8)level;
+        roll_monster_identity(g, &map[made], floor,
+                              made == 0 ? quest_boss_type(g, floor) : -1);
         made++;
     }
     g->monster_floor[layer] = (u8)floor;
@@ -466,9 +605,15 @@ static void generate_monster_floor(Game *g, int layer, int floor) {
 
 static int select_monster_floor(Game *g, int floor) {
     if (!g->monster_map_loaded) return -1;
+    if (floor <= 0) {
+        g->monster_layer = -1;
+        g->monster_adjacent = 0;
+        return -1;
+    }
     for (int i = 0; i < MONSTER_MAP_LAYERS; i++) {
         if (g->monster_floor[i] == (u8)floor) {
             g->monster_layer = i;
+            sanitize_monster_floor(g, i, floor);
             return i;
         }
     }
@@ -564,6 +709,7 @@ static int load_pit_group(Game *g, int group) {
 
 int game_load_world_state(Game *g, int slot) {
     g->active_save_slot = slot;
+    game_load_bestiary(g, slot);
     g->monster_layer = 0;
     g->monster_map_loaded = 1;
     g->monster_map_dirty = 0;
@@ -594,7 +740,8 @@ int game_load_world_state(Game *g, int slot) {
 int game_save_world_state(Game *g) {
     int a = save_monster_map(g);
     int b = save_pit_group(g);
-    return (a < 0 || b < 0) ? -1 : 0;
+    int c = game_save_bestiary(g);
+    return (a < 0 || b < 0 || c < 0) ? -1 : 0;
 }
 
 int game_find_monster(Game *g, int x, int y) {
@@ -619,33 +766,34 @@ int game_find_adjacent_monster(Game *g) {
 }
 
 int game_monster_hp(Game *g, int index) {
-    if (!g->monster_map_loaded || index < 0 || index >= MONSTERS_PER_FLOOR) return 0;
+    if (!g->monster_map_loaded || g->monster_layer < 0 ||
+        index < 0 || index >= MONSTERS_PER_FLOOR) return 0;
     return monster_record_hp(&g->monster_map[g->monster_layer][index]);
 }
 
 void game_set_monster_hp(Game *g, int index, int hp) {
-    if (!g->monster_map_loaded || index < 0 || index >= MONSTERS_PER_FLOOR) return;
+    if (!g->monster_map_loaded || g->monster_layer < 0 ||
+        index < 0 || index >= MONSTERS_PER_FLOOR) return;
     monster_record_set_hp(&g->monster_map[g->monster_layer][index], hp);
     g->monster_map_dirty = 1;
 }
 
 void game_kill_monster(Game *g, int index) {
-    if (!g->monster_map_loaded || index < 0 || index >= MONSTERS_PER_FLOOR) return;
+    if (!g->monster_map_loaded || g->monster_layer < 0 ||
+        index < 0 || index >= MONSTERS_PER_FLOOR) return;
     clear_monster_record(&g->monster_map[g->monster_layer][index]);
     g->monster_map_dirty = 1;
     save_monster_map(g);
 }
 
 void game_advance_monsters(Game *g, Character *player) {
-    if (!g->monster_map_loaded) return;
-    if (player->eff_feather) player->eff_feather--;
-    if (player->eff_fast_move) player->eff_fast_move--;
-    if (player->eff_invisible) player->eff_invisible--;
-    if (player->eff_str_bonus) player->eff_str_bonus--;
-    if (player->eff_agi_bonus) player->eff_agi_bonus--;
-    if (player->eff_super_str) player->eff_super_str--;
-    if (player->eff_super_agi) player->eff_super_agi--;
-    if (player->eff_fast_move && (game_rand(g) & 1)) {
+    character_tick_effects(g, player);
+    if (!g->monster_map_loaded || g->monster_layer < 0 || g->cur_floor <= 0) {
+        g->monster_adjacent = 0;
+        return;
+    }
+    if ((player->eff_fast_move && game_rand(g) % 4 == 0) ||
+        (player->eff_invisible == 1 && game_rand(g) % 4 == 0)) {
         g->monster_adjacent = game_find_adjacent_monster(g) >= 0;
         return;
     }
@@ -697,7 +845,8 @@ int game_ladder_delta(Game *g, int x, int y) {
 }
 
 int game_trapdoor_floor(Game *g, int x, int y) {
-    int target = dungeon_hash(x, y, g->cur_floor, g->cur_player, 0x960) * 10;
+    int target = dungeon_hash(x, y, g->cur_floor,
+                              g->dungeon_number, 0x960) * 10;
     if (target < 10 || target >= 180 || target / 10 == g->cur_floor / 10)
         return -1;
     return target;
@@ -706,7 +855,7 @@ int game_trapdoor_floor(Game *g, int x, int y) {
 int game_shop_type(Game *g, int x, int y) {
     if (g->cur_floor != 0 || x <= 0 || x >= MAP_W - 1 ||
         y <= 0 || y >= MAP_H - 1) return 0;
-    int type = dungeon_hash(x, y, 0, g->cur_player, 110);
+    int type = dungeon_hash(x, y, 0, g->dungeon_number, 110);
     return type >= 1 && type <= 5 ? type : 0;
 }
 
@@ -727,7 +876,7 @@ static int pitfall_target(Game *g, int x, int y) {
     int modulus = 230 - floor / 3;
     if (modulus < 20) modulus = 20;
     int threshold = floor > 9 ? 5 : 3;
-    if (dungeon_hash(x, y, floor, g->cur_player, modulus) >= threshold)
+    if (dungeon_hash(x, y, floor, g->dungeon_number, modulus) >= threshold)
         return floor;
     for (int target = floor + 1; target <= floor + threshold && target <= 180; target++)
         if (!rock_cell_at(g, x, y, target)) return target;
@@ -810,6 +959,9 @@ int game_init(Game *g, const char *data_dir) {
     g->active_save_slot = -1;
     g->monster_layer = -1;
     g->pit_group = -1;
+    g->brick_speed = 3;
+    g->sound_enabled = 1;
+    g->map_player_visible = 1;
     strncpy(g->game_dir, data_dir, sizeof(g->game_dir) - 1);
 
     if (!SDL_WasInit(SDL_INIT_VIDEO)) {
@@ -971,8 +1123,6 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
 
             int x = mx + gx * cell_px;
             int y = my + gy * cell_px;
-            int cx = x + cell_px / 2;
-            int cy = y + cell_px / 2;
             int edge[4] = {
                 map_get_edge(g, wx,     wy,     1),
                 map_get_edge(g, wx + 1, wy,     0),
@@ -984,7 +1134,7 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
              * the original map renderer: store, temple, bank, inn, hotel. */
             int shop = game_shop_type(g, wx, wy);
             if (shop)
-                video_fill_rect(v, x + 2, y + 2, cell_px - 4, cell_px - 4,
+                video_fill_rect(v, x + 1, y + 1, cell_px - 2, cell_px - 2,
                                 (u8)(shop + 2));
 
             /* far_1F3FD calls func_1F077 once for each actual edge.  Open
@@ -1016,28 +1166,48 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
 
             int ladder = ladder_delta(g, wx, wy);
             if (ladder > 0) {
-                /* Down ladder: the original map help describes this as a
-                 * square. */
-                video_hline(v, x + 2, y + 2, 6, 4);
-                video_hline(v, x + 2, y + 7, 6, 4);
-                video_vline(v, x + 2, y + 2, 6, 4);
-                video_vline(v, x + 7, y + 2, 6, 4);
+                /* The DOS map uses opposite diagonal strokes for the two
+                 * ladder directions.  Down is a backslash. */
+                for (int p = 2; p <= 7; p++) {
+                    video_put_pixel(v, x + p, y + p, 47);
+                    video_put_pixel(v, x + p, y + p + 1, 47);
+                }
             } else if (ladder < 0) {
-                /* Up ladder: two rails and three red rungs. */
-                video_vline(v, x + 2, y + 1, 8, 46);
-                video_vline(v, x + 7, y + 1, 8, 46);
-                video_hline(v, x + 2, y + 2, 6, 10);
-                video_hline(v, x + 2, y + 5, 6, 10);
-                video_hline(v, x + 2, y + 8, 6, 10);
+                /* Up is a forward slash. */
+                for (int p = 2; p <= 7; p++) {
+                    video_put_pixel(v, x + p, y + 9 - p, 4);
+                    video_put_pixel(v, x + p, y + 8 - p, 4);
+                }
+            }
+
+            if (shop) {
+                /* The town help calls these "colored squares" and explicitly
+                 * identifies them as ladders going up to a location.  Put a
+                 * high-contrast ladder inside the authentic type+2 color. */
+                u8 shop_color = (u8)(shop + 2);
+                video_fill_rect(v, x + 1, y + 1, 8, 8, shop_color);
+                video_hline(v, x + 1, y + 1, 8, 46);
+                video_hline(v, x + 1, y + 8, 8, 46);
+                video_vline(v, x + 1, y + 1, 8, 46);
+                video_vline(v, x + 8, y + 1, 8, 46);
+                video_vline(v, x + 3, y + 2, 6, 0);
+                video_vline(v, x + 6, y + 2, 6, 0);
+                video_hline(v, x + 3, y + 3, 4, 4);
+                video_hline(v, x + 3, y + 5, 4, 4);
+                video_hline(v, x + 3, y + 7, 4, 4);
+                video_vline(v, x + 5, y + 2, 5, 4);
+                video_put_pixel(v, x + 4, y + 2, 4);
+                video_put_pixel(v, x + 6, y + 2, 4);
             }
 
             int trap = game_trapdoor_floor(g, wx, wy);
             if (!ladder && trap >= 0) {
-                video_fill_rect(v, x + 2, y + 2, 6, 6, 0);
-                video_hline(v, x + 2, y + 2, 6, 4);
-                video_hline(v, x + 2, y + 7, 6, 4);
-                video_vline(v, x + 2, y + 2, 6, 4);
-                video_vline(v, x + 7, y + 2, 6, 4);
+                /* WORLD describes a trap door with an X, not a generic
+                   unexplained square. */
+                for (int p = 2; p <= 7; p++) {
+                    video_put_pixel(v, x + p, y + p, 4);
+                    video_put_pixel(v, x + 9 - p, y + p, 4);
+                }
             } else if (!ladder && g->cur_floor > 0 &&
                        pit_bit_is_set(g, wx, wy) &&
                        pitfall_target(g, wx, wy) != g->cur_floor) {
@@ -1046,11 +1216,12 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
             }
 
             if (wx == g->cur_x && wy == g->cur_y) {
-                for (int p = 1; p < cell_px - 1; p++) {
-                    video_put_pixel(v, x + p, y + p, 4);
-                    video_put_pixel(v, x + cell_px - 1 - p, y + p, 4);
+                /* Like WORLD's map cursor, the party is a blinking square.
+                 * Its off phase exposes the feature beneath it. */
+                if (g->map_player_visible) {
+                    video_fill_rect(v, x + 3, y + 3, 4, 4, 15);
+                    video_fill_rect(v, x + 4, y + 4, 2, 2, 6);
                 }
-                video_put_pixel(v, cx, cy, 6);
             }
         }
     }
@@ -1371,6 +1542,41 @@ static void draw_side_wall(Video *v, const u8 *tex, ProjRect outer,
     textured_quad(v, tex, a, b, c, d, vx, vy, vw, vh, door);
 }
 
+/* Paint the opening before the original ladder sprite.  Up ladders disappear
+ * into a ceiling opening at the top of their projection; down ladders widen
+ * into a floor opening at the bottom. */
+static void draw_ladder_hole(Game *g, ProjRect p, int delta, float depth,
+                             int vx, int vy, int vw, int vh,
+                             const float *wall_depth) {
+    int pw = p.right - p.left + 1;
+    int ph = p.bottom - p.top + 1;
+    if (pw < 4 || ph < 4) return;
+    int cx = (p.left + p.right) / 2;
+    int y0, y1, half0, half1;
+    if (delta < 0) {
+        y0 = p.top;
+        y1 = p.top + ph / 4;
+        half0 = pw / 5;
+        half1 = pw * 2 / 5;
+    } else {
+        y0 = p.bottom - ph / 3;
+        y1 = p.bottom;
+        half0 = pw / 5;
+        half1 = pw * 2 / 5;
+    }
+    if (y1 <= y0) y1 = y0 + 1;
+
+    for (int y = y0; y <= y1; y++) {
+        int half = half0 + (half1 - half0) * (y - y0) / (y1 - y0);
+        for (int x = cx - half; x <= cx + half; x++) {
+            if (x < vx || x >= vx + vw || y < vy || y >= vy + vh) continue;
+            if (wall_depth && depth >= wall_depth[x - vx] + 0.02f) continue;
+            g->video.pixels[y * LOGICAL_W + x] = 0;
+        }
+    }
+    g->video.dirty = 1;
+}
+
 static void draw_ladder(Video *v, ProjRect p, int delta,
                         int vx, int vy, int vw, int vh) {
     int pw = p.right - p.left + 1;
@@ -1381,7 +1587,7 @@ static void draw_ladder(Video *v, ProjRect p, int delta,
     if (rail < 3) rail = 3;
 
     if (delta < 0) {
-        int top = p.top + ph / 5;
+        int top = p.top + ph / 10;
         int bottom = p.bottom - ph / 8;
         dungeon_line(v, cx - rail, top, cx - rail, bottom, 46,
                      vx, vy, vw, vh);
@@ -1393,22 +1599,18 @@ static void draw_ladder(Video *v, ProjRect p, int delta,
                          vx, vy, vw, vh);
         }
     } else {
-        /* Perspective rails descending into a dark floor opening. */
-        int far_y = p.top + ph * 55 / 100;
-        int near_y = p.bottom - 1;
-        int far_r = rail / 3 + 1;
-        for (int y = far_y; y <= near_y; y++) {
-            int half = far_r + (rail - far_r) * (y - far_y) /
-                                  ((near_y - far_y) ? (near_y - far_y) : 1);
-            video_hline(v, cx - half, y, half * 2 + 1, 0);
-        }
-        dungeon_line(v, cx - far_r, far_y, cx - rail, near_y, 46,
+        /* Perspective rails descending into the floor opening behind them. */
+        int far_y = p.top + ph / 10;
+        int near_y = p.bottom - ph / 12;
+        int near_r = pw * 2 / 5;
+        int far_r = near_r / 5 + 1;
+        dungeon_line(v, cx - far_r, far_y, cx - near_r, near_y, 46,
                      vx, vy, vw, vh);
-        dungeon_line(v, cx + far_r, far_y, cx + rail, near_y, 46,
+        dungeon_line(v, cx + far_r, far_y, cx + near_r, near_y, 46,
                      vx, vy, vw, vh);
         for (int i = 1; i < 5; i++) {
             int y = far_y + (near_y - far_y) * i / 5;
-            int half = far_r + (rail - far_r) * (y - far_y) /
+            int half = far_r + (near_r - far_r) * (y - far_y) /
                                   ((near_y - far_y) ? (near_y - far_y) : 1);
             dungeon_line(v, cx - half, y, cx + half, y, 7,
                          vx, vy, vw, vh);
@@ -1422,7 +1624,7 @@ static void draw_ladder(Video *v, ProjRect p, int delta,
 static void draw_pic_billboard(Game *g, int pic_index, int cx, int top,
                                int draw_h, float depth,
                                int vx, int vy, int vw, int vh,
-                               const float *wall_depth) {
+                               const float *wall_depth, int replace_color) {
     if (pic_index < 0 || pic_index >= g->world_pic_count || draw_h < 2) return;
     const u8 *pic = g->world_pic_data[pic_index];
     int pic_size = g->world_pic_sizes[pic_index];
@@ -1455,7 +1657,9 @@ static void draw_pic_billboard(Game *g, int pic_index, int cx, int top,
                 run = data[ptr++];
                 if (!run) run = 255;
             }
-            if (color != 0 && color != 16) {
+            if (color == 17 && replace_color >= 0)
+                color = replace_color;
+            if (color != 0 && color != 16 && color != 32) {
                 int sx0 = left + xpos * draw_w / 256;
                 int sx1 = left + (xpos + run) * draw_w / 256;
                 if (sx1 <= sx0) sx1 = sx0 + 1;
@@ -1478,7 +1682,8 @@ static void draw_pic_billboard(Game *g, int pic_index, int cx, int top,
 typedef struct ViewActor {
     float depth, lateral;
     int pic;
-    int kind;       /* 0 monster, 1 up ladder, 2 down, 3 trapdoor, 4 shop */
+    int kind;       /* 0 monster, 1 up ladder/shop, 2 down, 3 trapdoor */
+    int color;      /* original replacement color for shared monster art */
 } ViewActor;
 
 static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
@@ -1489,7 +1694,7 @@ static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
     ViewActor actors[MONSTERS_PER_FLOOR + 64];
     int count = 0;
 
-    if (g->monster_map_loaded) {
+    if (g->monster_map_loaded && g->monster_layer >= 0 && g->cur_floor > 0) {
         MonsterRecord *map = g->monster_map[g->monster_layer];
         for (int i = 0; i < MONSTERS_PER_FLOOR && count < (int)(sizeof(actors)/sizeof(actors[0])); i++) {
             if (!monster_record_alive(g, &map[i])) continue;
@@ -1501,7 +1706,8 @@ static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
                 continue;
             int pic = get_monster_pic_index_ext(map[i].type);
             if (pic < 2) pic = 2; /* keep rare text-only DOS types visible */
-            actors[count++] = (ViewActor){forward, side, pic, 0};
+            actors[count++] = (ViewActor){forward, side, pic, 0,
+                                           get_monster_color_ext(map[i].type)};
         }
     }
 
@@ -1521,13 +1727,15 @@ static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
             int ladder = ladder_delta(g, x, y);
             int trap = game_trapdoor_floor(g, x, y);
             int shop = game_shop_type(g, x, y);
-            if (ladder && count < (int)(sizeof(actors)/sizeof(actors[0])))
-                actors[count++] = (ViewActor){forward, side, ladder < 0 ? 0 : 1,
-                                               ladder < 0 ? 1 : 2};
+            if (shop && count < (int)(sizeof(actors)/sizeof(actors[0])))
+                /* Town locations look exactly like ordinary ladders up in
+                 * the viewports; their type color belongs only on the map. */
+                actors[count++] = (ViewActor){forward, side, 0, 1, -1};
+            else if (ladder && count < (int)(sizeof(actors)/sizeof(actors[0])))
+                actors[count++] = (ViewActor){forward, side, 0,
+                                               ladder < 0 ? 1 : 2, -1};
             else if (trap >= 0 && count < (int)(sizeof(actors)/sizeof(actors[0])))
-                actors[count++] = (ViewActor){forward, side, 1, 3};
-            else if (shop && count < (int)(sizeof(actors)/sizeof(actors[0])))
-                actors[count++] = (ViewActor){forward, side, shop, 4};
+                actors[count++] = (ViewActor){forward, side, 1, 3, -1};
         }
     }
 
@@ -1546,11 +1754,20 @@ static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
         int height;
         if (a->kind == 0) height = wall_h * 9 / 10;
         else if (a->kind == 3) height = wall_h / 2;
-        else if (a->kind == 4) height = wall_h / 3;
         else height = wall_h * 4 / 5;
         if (height < 6) height = 6;
         int top = bottom - height;
-        if (a->kind == 2 || a->kind == 3) top = horizon + wall_h / 8;
+        if (a->kind == 1)
+            top = horizon - wall_h * 3 / 5;
+        else if (a->kind == 2)
+            top = horizon - wall_h / 5;
+        else if (a->kind == 3)
+            top = horizon + wall_h / 8;
+        int depth_col = cx - vx;
+        if (depth_col < 0) depth_col = 0;
+        if (depth_col >= vw) depth_col = vw - 1;
+        int feature_center_visible =
+            a->depth < wall_depth[depth_col] + 0.02f;
         if (a->kind == 3) {
             int sw = height * 2;
             int hatch_h = height / 2;
@@ -1559,45 +1776,57 @@ static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
                 for (int sx = cx - sw / 2; sx <= cx + sw / 2; sx++) {
                     if (sx < vx || sx >= vx + vw) continue;
                     if (a->depth >= wall_depth[sx - vx] + 0.02f) continue;
-                    int border = sy == top || sy == top + hatch_h - 1 ||
-                                 sx == cx - sw / 2 || sx == cx + sw / 2;
-                    g->video.pixels[sy * LOGICAL_W + sx] = border ? 4 : 0;
+                    int px = sx - (cx - sw / 2);
+                    int py = sy - top;
+                    int d1 = abs(px * hatch_h - py * sw);
+                    int d2 = abs((sw - px) * hatch_h - py * sw);
+                    if (d1 <= sw || d2 <= sw)
+                        g->video.pixels[sy * LOGICAL_W + sx] = 4;
                 }
             }
             g->video.dirty = 1;
-        } else if (a->kind == 4) {
-            int sw = height * 2;
-            for (int sy = top; sy < top + height; sy++) {
-                if (sy < vy || sy >= vy + vh) continue;
-                for (int sx = cx - sw / 2; sx <= cx + sw / 2; sx++) {
-                    if (sx < vx || sx >= vx + vw) continue;
-                    if (a->depth < wall_depth[sx - vx] + 0.02f)
-                        g->video.pixels[sy * LOGICAL_W + sx] = (u8)(a->pic + 2);
-                }
-            }
-            g->video.dirty = 1;
-        } else {
+        } else if (a->kind == 0) {
             draw_pic_billboard(g, a->pic, cx, top, height, a->depth,
-                               vx, vy, vw, vh, wall_depth);
+                               vx, vy, vw, vh, wall_depth, a->color);
+        } else if (feature_center_visible) {
+            ProjRect ladder_box = {
+                .left = cx - height * 3 / 8,
+                .right = cx + height * 3 / 8,
+                .top = top,
+                .bottom = top + height - 1
+            };
+            int delta = a->kind == 1 ? -1 : 1;
+            draw_ladder_hole(g, ladder_box, delta, a->depth,
+                             vx, vy, vw, vh, wall_depth);
+            draw_pic_billboard(g, 0, cx, top, height, a->depth,
+                               vx, vy, vw, vh, wall_depth, -1);
+            draw_ladder(&g->video, ladder_box, delta, vx, vy, vw, vh);
+            if (a->kind == 1) {
+                int arrow_y = top + height / 10;
+                dungeon_line(&g->video, cx, arrow_y, cx - height / 8,
+                             arrow_y + height / 7, 4, vx, vy, vw, vh);
+                dungeon_line(&g->video, cx, arrow_y, cx + height / 8,
+                             arrow_y + height / 7, 4, vx, vy, vw, vh);
+                dungeon_line(&g->video, cx, arrow_y, cx,
+                             arrow_y + height / 3, 4, vx, vy, vw, vh);
+            } else {
+                int arrow_y = top + height * 2 / 3;
+                dungeon_line(&g->video, cx, arrow_y, cx,
+                             arrow_y + height / 4, 47, vx, vy, vw, vh);
+                dungeon_line(&g->video, cx, arrow_y + height / 4,
+                             cx - height / 8, arrow_y + height / 8,
+                             47, vx, vy, vw, vh);
+                dungeon_line(&g->video, cx, arrow_y + height / 4,
+                             cx + height / 8, arrow_y + height / 8,
+                             47, vx, vy, vw, vh);
+            }
         }
     }
 
-    /* A feature under the party is shown at the foot of every view, matching
-     * the DOS floor-plane placement rather than becoming a wall decal. */
-    int here_ladder = ladder_delta(g, g->cur_x, g->cur_y);
-    int here_trap = game_trapdoor_floor(g, g->cur_x, g->cur_y);
-    if (here_ladder > 0 || here_trap >= 0) {
-        if (here_ladder > 0) {
-            draw_pic_billboard(g, 1, vx + vw / 2, horizon + vh / 8, vh / 3,
-                               0.25f, vx, vy, vw, vh, NULL);
-        } else {
-            int hx = vx + vw / 2, hy = horizon + vh / 5;
-            video_fill_rect(&g->video, hx - vw / 6, hy, vw / 3, 3, 4);
-            video_fill_rect(&g->video, hx - vw / 6, hy + vh / 10, vw / 3, 3, 4);
-            video_vline(&g->video, hx - vw / 6, hy, vh / 10, 4);
-            video_vline(&g->video, hx + vw / 6, hy, vh / 10, 4);
-        }
-    }
+    /* Coordinate features at the party's exact position are deliberately
+     * absent from every viewport.  WORLD only draws them while approaching;
+     * once the party steps onto one, the map and command/status text carry
+     * that information instead. */
 }
 
 static void draw_3d_viewport(Game *g, int vx, int vy, int vw, int vh, int dir) {
@@ -1680,7 +1909,9 @@ static void draw_4way_view(Game *g) {
 static void draw_command_menu(Game *g) {
     Video *v = &g->video;
     const int menu_x = SX(0x48C);
-    const int spacing = SY(38);
+    /* One extra command row fits above the east viewport with the original
+       glyph proportions by tightening only the inter-row pitch slightly. */
+    const int spacing = SY(35);
     const int xsn = 7, xsd = 6;
     const int ysn = 12, ysd = 17;
     int y = 0;
@@ -1706,8 +1937,14 @@ static void draw_command_menu(Game *g) {
     video_draw_text_scaled_xy(v, menu_x, y, "WAI       XP NEEDED", 8, xsn, xsd, ysn, ysd);
     video_draw_text_scaled_xy(v, menu_x, y, "   T     E         ", 4, xsn, xsd, ysn, ysd);
     y += spacing;
-    video_draw_text_scaled_xy(v, menu_x, y, "TURN SOUND  N      ", 8, xsn, xsd, ysn, ysd);
+    video_draw_text_scaled_xy(v, menu_x, y,
+                              g->sound_enabled ? "TURN SOUND  N      "
+                                               : "TURN SOUND  FF     ",
+                              8, xsn, xsd, ysn, ysd);
     video_draw_text_scaled_xy(v, menu_x, y, "           O       ", 4, xsn, xsd, ysn, ysd);
+    y += spacing;
+    video_draw_text_scaled_xy(v, menu_x, y, "BEASTIARY ( )       ", 8, xsn, xsd, ysn, ysd);
+    video_draw_text_scaled_xy(v, menu_x, y, "           J        ", 4, xsn, xsd, ysn, ysd);
     y += spacing;
     video_draw_text_scaled_xy(v, menu_x, y, "SPELLS IN EFFECT  ", 8, xsn, xsd, ysn, ysd);
     video_draw_text_scaled_xy(v, menu_x, y, "                 1", 4, xsn, xsd, ysn, ysd);
@@ -1717,6 +1954,34 @@ static void draw_command_menu(Game *g) {
     y += spacing;
     video_draw_text_scaled_xy(v, menu_x, y, " UIT-SAVE  ELP (  )", 8, xsn, xsd, ysn, ysd);
     video_draw_text_scaled_xy(v, menu_x, y, "Q         H     F1 ", 4, xsn, xsd, ysn, ysd);
+}
+
+/* Convert a click on the command legend into the exact same command byte as
+ * its keyboard hotkey.  SDL performs the inverse logical-size transform so
+ * this remains accurate for resized and letterboxed windows. */
+static int command_menu_click_key(Game *g, int window_x, int window_y) {
+    static const int command[12][2] = {
+        {'b','m'}, {'w','v'}, {'z','c'}, {'i','x'},
+        {'a','l'}, {'f','p'}, {'t','e'}, {'o','o'},
+        {'j','j'}, {'1','1'}, {'2','2'}, {'q','h'}
+    };
+    float logical_x, logical_y;
+    SDL_RenderWindowToLogical(g->video.renderer, window_x, window_y,
+                              &logical_x, &logical_y);
+    const int menu_x = SX(0x48C);
+    const int spacing = SY(35);
+    int adv = g->video.font_advance ? g->video.font_advance
+                                    : g->video.font_char_w;
+    int scaled_advance = adv * 7 / 6;
+    int scaled_height = g->video.font_char_h * 12 / 17;
+    int menu_right = menu_x + scaled_advance * 20;
+    if (logical_x < menu_x || logical_x >= menu_right ||
+        logical_y < 0 || logical_y >= spacing * 11 + scaled_height)
+        return 0;
+    int row = (int)logical_y / spacing;
+    if (row > 11) row = 11;
+    int right_column = logical_x >= menu_x + scaled_advance * 9;
+    return command[row][right_column];
 }
 
 /* ── Drawing: Status bar (matches original format) ── */
@@ -1758,14 +2023,32 @@ static void draw_status_bar(Game *g, Character *player) {
     snprintf(line, sizeof(line), "HEALTH POINTS: %d OF %d",
              player->hp_cur, player->hp_max);
     video_draw_text_scaled_xy(v, 0, y, line, 6, xsn, xsd, ysn, ysd);
+    char action_line[64];
     const char *action = "HIT 'D' TO DIG A HOLE";
     int ladder = ladder_delta(g, g->cur_x, g->cur_y);
     int trap = game_trapdoor_floor(g, g->cur_x, g->cur_y);
     int shop = game_shop_type(g, g->cur_x, g->cur_y);
-    if (ladder < 0) action = "HIT 'U' TO GO UP";
+    if (shop) {
+        static const char *const location_names[6] = {
+            "", "STORE", "TEMPLE", "BANK", "INN", "WILDERNESS EXIT"
+        };
+        snprintf(action_line, sizeof(action_line), "HIT 'U' FOR %s",
+                 location_names[shop]);
+        action = action_line;
+    }
+    else if (ladder < 0) action = "HIT 'U' TO GO UP";
     else if (ladder > 0) action = "HIT 'D' TO GO DOWN";
-    else if (trap >= 0) action = "HIT 'K' TO USE TRAPDOOR";
-    else if (shop) action = "HIT 'D' TO ENTER SHOP";
+    else if (trap >= 0) {
+        int key_index = trap / 10;
+        if (key_index > 0 && key_index < 18 &&
+            player->trapdoor_keys[key_index])
+            action = "HIT 'K' TO USE TRAP DOOR";
+        else {
+            snprintf(action_line, sizeof(action_line),
+                     "TRAP DOOR NEEDS KEY %d", trap);
+            action = action_line;
+        }
+    }
     video_draw_text_scaled_xy(v, SX(0x2D8), south_bottom,
                               action, 48, 13, 12, ysn, ysd);
     snprintf(line, sizeof(line), "WIZ: %d  LUCK: %d",
@@ -1784,9 +2067,9 @@ static const char *weapon_names[] = {
 
 static const char *armor_names[] = {
     "SKIN", "LEATHER", "CHAIN", "SCALE", "PLATE",
-    "FIELD PLATE", "TITANIUM"
+    "FIELD PLATE", "TITANIUM", "OGRE"
 };
-#define ARMOR_COUNT 7
+#define ARMOR_COUNT 8
 
 /* ── Command: View Stats (func_0DF4A) ── */
 
@@ -1859,14 +2142,24 @@ static void cmd_view_stats(Game *g, Character *p) {
     video_draw_text(v, 8, y, line, 4);
     y += fh;
 
-    const char *arm = (p->body_armor_lv < ARMOR_COUNT) ?
-        armor_names[p->body_armor_lv] : "UNKNOWN";
+    const char *arm = (p->equipped_armor < ARMOR_COUNT) ?
+        armor_names[p->equipped_armor] : "UNKNOWN";
     snprintf(line, sizeof(line), "CURRENT ARMOR: %s", arm);
     video_draw_text(v, 8, y, line, 4);
     y += fh;
 
     snprintf(line, sizeof(line), "LEVEL: %d", p->level);
     video_draw_text(v, 8, y, line, 5);
+    y += fh;
+
+    snprintf(line, sizeof(line), "EXPERIENCE: %.0f", p->experience);
+    video_draw_text(v, 8, y, line, 5);
+    y += fh;
+
+    video_draw_text(v, 8, y,
+                    p->raise_x == 0xFFFFu ?
+                    "NO RAISE DEAD CONTRACT" : "RAISE DEAD CONTRACT IN EFFECT",
+                    p->raise_x == 0xFFFFu ? 8 : 3);
     y += fh;
 
     if (p->diseased_turns > 0) {
@@ -1884,7 +2177,7 @@ static void cmd_view_stats(Game *g, Character *p) {
 
     video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
     video_present(v);
-    input_getch(&g->input);
+    input_wait_any_key(&g->input);
 }
 
 /* ── Command: View Money (shop_finances) ── */
@@ -1926,7 +2219,7 @@ static void cmd_view_money(Game *g, Character *p) {
 
     video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
     video_present(v);
-    input_getch(&g->input);
+    input_wait_any_key(&g->input);
 }
 
 /* ── Spell name tables (extracted from WORLD.EXE pointer tables) ── */
@@ -2054,7 +2347,7 @@ static void cmd_pockets_spells(Game *g, Character *p, u8 data[4][45], int is_wan
         snprintf(line, sizeof(line), "%s PAGE %d/2 - HIT ANY KEY...", title, page + 1);
         video_draw_text_scaled(v, col_level, LOGICAL_H - fh - 2, line, 15, 3, 4);
         video_present(v);
-        input_getch(&g->input);
+        input_wait_any_key(&g->input);
     }
 }
 
@@ -2107,14 +2400,14 @@ static void cmd_pockets_misc(Game *g, Character *p) {
     video_draw_text(v, 8, y, line, 7); y += fh;
     snprintf(line, sizeof(line), "14) ANTI MAGIC RING, PLUS %d", p->antimagic_ring);
     video_draw_text(v, 8, y, line, 7); y += fh;
-    snprintf(line, sizeof(line), "15) BODY ARMOR, LEVEL %d", p->body_armor_lv);
+    snprintf(line, sizeof(line), "15) BODY ARMOR, LEVEL %d", p->body_armor_plus);
     video_draw_text(v, 8, y, line, 7); y += fh;
     snprintf(line, sizeof(line), "16) GAUNTLET, PLUS %d", p->gauntlet);
     video_draw_text(v, 8, y, line, 7);
 
     video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
     video_present(v);
-    input_getch(&g->input);
+    input_wait_any_key(&g->input);
 }
 
 /* ── Command: Pockets main menu (func_0DDAA) ── */
@@ -2165,6 +2458,21 @@ static void cmd_exp_needed(Game *g, Character *p) {
     video_draw_text(v, 8, y, line, 7);
     y += fh;
 
+    snprintf(line, sizeof(line), "CURRENT EXPERIENCE: %.0f", p->experience);
+    video_draw_text(v, 8, y, line, 7);
+    y += fh;
+
+    double target = experience_for_level((int)p->level + 1);
+    snprintf(line, sizeof(line), "EXPERIENCE REQUIRED: %.0f", target);
+    video_draw_text(v, 8, y, line, 7);
+    y += fh;
+
+    double needed = target - p->experience;
+    if (needed < 0.0) needed = 0.0;
+    snprintf(line, sizeof(line), "EXPERIENCE STILL NEEDED: %.0f", needed);
+    video_draw_text(v, 8, y, line, needed <= 0.0 ? 10 : 7);
+    y += fh;
+
     snprintf(line, sizeof(line), "HEALTH POINTS: %d OF %d",
              p->hp_cur, p->hp_max);
     video_draw_text(v, 8, y, line, 7);
@@ -2176,7 +2484,952 @@ static void cmd_exp_needed(Game *g, Character *p) {
 
     video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
     video_present(v);
-    input_getch(&g->input);
+    input_wait_any_key(&g->input);
+}
+
+/* ── Town locations and post-battle treasure ────────────────────────────
+ *
+ * Floor zero locations are not conventional dungeon rooms.  In the DOS
+ * game each colored square is a ladder up to one service.  Type five is the
+ * roof/wilderness exit (H.BIN screen 34), despite several old annotations
+ * calling it a hotel. */
+
+static void town_pane_begin(Game *g, Character *p) {
+    game_draw_exploration(g, p);
+    video_fill_rect(&g->video, 0, 0, SX(0x2D3), SY(0x1AE), 0);
+}
+
+static int town_pane_text(Game *g, int y, const char *text, u8 color) {
+    enum { MAX_CHARS = 32 };
+    const int row_h = SY(38);
+    const int bottom = SY(0x1AE);
+    const char *p = text;
+    char line[MAX_CHARS + 1];
+
+    if (!p || !*p) return y;
+    while (*p && y + row_h <= bottom) {
+        while (*p == ' ') p++;
+        int remaining = (int)strlen(p);
+        int take = remaining < MAX_CHARS ? remaining : MAX_CHARS;
+        if (remaining > MAX_CHARS) {
+            int split = take;
+            while (split > 0 && p[split] != ' ') split--;
+            if (split > 0) take = split;
+        }
+        memcpy(line, p, (size_t)take);
+        line[take] = '\0';
+        while (take > 0 && line[take - 1] == ' ') line[--take] = '\0';
+        video_draw_text_scaled_xy(&g->video, 0, y, line, color,
+                                  7, 6, 12, 17);
+        y += row_h;
+        p += take;
+        while (*p == ' ') p++;
+    }
+    return y;
+}
+
+static void town_message(Game *g, Character *p, const char *title, const char *line1,
+                         const char *line2, u8 color) {
+    Video *v = &g->video;
+    int y = 0;
+    town_pane_begin(g, p);
+    y = town_pane_text(g, y, title, color);
+    if (line1 && *line1) y = town_pane_text(g, y, line1, 7);
+    if (line2 && *line2) y = town_pane_text(g, y, line2, 7);
+    town_pane_text(g, y, "HIT ANY KEY...", 15);
+    video_present(v);
+    input_wait_any_key(&g->input);
+}
+
+static int town_menu(Game *g, Character *p, const char *title, const char *subtitle,
+                     const char *const *items, int item_count, u8 color,
+                     u32 money) {
+    Video *v = &g->video;
+    char line[128];
+    int y = 0;
+    town_pane_begin(g, p);
+    y = town_pane_text(g, y, title, color);
+    if (subtitle && *subtitle) y = town_pane_text(g, y, subtitle, 7);
+    if (money != UINT32_MAX) {
+        snprintf(line, sizeof(line), "MONEY ON HAND: %u JP", money);
+        y = town_pane_text(g, y, line, 8);
+    }
+    for (int i = 0; i < item_count; i++) {
+        snprintf(line, sizeof(line), "%d) %s", i + 1, items[i]);
+        y = town_pane_text(g, y, line,
+                           (u8)(i == item_count - 1 ? 8 : 7));
+    }
+    town_pane_text(g, y, "SELECT OPTION (ESC LEAVES)", 15);
+    video_present(v);
+    for (;;) {
+        int key = input_getch(&g->input);
+        if (input_poll_quit(&g->input) || key == 0x1B) return -1;
+        if (key >= '1' && key < '1' + item_count) return key - '1';
+    }
+}
+
+static u32 town_prompt_amount(Game *g, Character *p, const char *title,
+                              u32 available) {
+    Video *v = &g->video;
+    char digits[11] = "";
+    int used = 0;
+    for (;;) {
+        char line[96];
+        int y = 0;
+        town_pane_begin(g, p);
+        y = town_pane_text(g, y, title, 14);
+        snprintf(line, sizeof(line), "MONEY AVAILABLE: %u JP", available);
+        y = town_pane_text(g, y, line, 7);
+        y = town_pane_text(g, y,
+                           "PLEASE TYPE THE AMOUNT AND HIT ENTER:", 7);
+        y = town_pane_text(g, y, used ? digits : "0", 15);
+        town_pane_text(g, y, "ESC CANCELS", 8);
+        video_present(v);
+
+        int key = input_getch(&g->input);
+        if (input_poll_quit(&g->input) || key == 0x1B) return 0;
+        if (key == '\r' || key == '\n') {
+            unsigned long long value = used ? strtoull(digits, NULL, 10) : 0;
+            if (value > available) value = available;
+            return (u32)value;
+        }
+        if (key == 8) {
+            if (used > 0) digits[--used] = 0;
+        } else if (key >= '0' && key <= '9' && used < 10) {
+            digits[used++] = (char)key;
+            digits[used] = 0;
+        }
+    }
+}
+
+static int spend_jewels(Game *g, Character *p, u32 price) {
+    if (p->jewels_pocket < price) {
+        town_message(g, p, "SORRY, CAN'T BUY ON CREDIT HERE.",
+                     "YOU DO NOT HAVE ENOUGH JEWEL PIECES.", "", 12);
+        return 0;
+    }
+    p->jewels_pocket -= price;
+    return 1;
+}
+
+/* Original L command (func_0C366): discard armor, weapons, or one complete
+ * denomination of carried money.  Negative enchant bytes are cursed items;
+ * when equipped they cannot be removed or dropped. */
+static void cmd_drop_item(Game *g, Character *p) {
+    static const char *const categories[] = {
+        "ARMOR", "WEAPON", "MONEY", "RETURN TO GAME"
+    };
+    int category = town_menu(g, p, "WHICH TYPE OF ITEM WOULD YOU LIKE TO DROP?",
+                             "", categories, 4, 14, UINT32_MAX);
+    if (category < 0 || category == 3) return;
+
+    if (category == 0 || category == 1) {
+        char labels[8][64];
+        const char *items[8];
+        for (int i = 0; i < 8; i++) {
+            int count = category == 0 ? p->armor_inventory[i]
+                                      : p->weapon_inventory[i];
+            int enchant = category == 0 ? (s8)p->armor_enchant[i]
+                                        : (s8)p->eq_wep_enchant[i];
+            const char *name = category == 0 ? armor_names[i] : weapon_names[i];
+            if (i == 0)
+                snprintf(labels[i], sizeof(labels[i]), "%-14s (IMPLICIT)", name);
+            else if (count)
+                snprintf(labels[i], sizeof(labels[i]), "%-14s X%d %+d",
+                         name, count, enchant);
+            else
+                snprintf(labels[i], sizeof(labels[i]), "--------");
+            items[i] = labels[i];
+        }
+        int selected = town_menu(g, p,
+                                 category == 0 ? "SELECT ARMOR TO DROP"
+                                               : "SELECT WEAPON TO DROP",
+                                 "", items, 8, category == 0 ? 5 : 4,
+                                 UINT32_MAX);
+        if (selected <= 0) return; /* Skin and fists are never inventory. */
+
+        u8 *inventory = category == 0 ? p->armor_inventory
+                                      : p->weapon_inventory;
+        u8 *enchant = category == 0 ? p->armor_enchant
+                                    : p->eq_wep_enchant;
+        int equipped = category == 0 ? p->equipped_armor
+                                     : p->equipped_weapon;
+        if (!inventory[selected]) return;
+        if (equipped == selected && (s8)enchant[selected] < 0) {
+            town_message(g, p, "OWE! IT JUST WON'T COME OFF!",
+                         "THE ITEM IS CURSED.", "", 4);
+            return;
+        }
+
+        inventory[selected]--;
+        if (equipped == selected && !inventory[selected]) {
+            if (category == 0) p->equipped_armor = 0;
+            else p->equipped_weapon = 0;
+        }
+        char line[96];
+        snprintf(line, sizeof(line), "YOU DROP THE %s.",
+                 category == 0 ? armor_names[selected] : weapon_names[selected]);
+        town_message(g, p, "ITEM DROPPED", line, "", 8);
+        return;
+    }
+
+    static const char *const money_items[] = {
+        "COPPER STONES", "SILVER STONES", "IVORY STONES",
+        "GOLD STONES", "PLATINUM STONES", "JEWEL STONES",
+        "JEWEL PIECES", "RETURN TO GAME"
+    };
+    u32 *money[] = {
+        &p->copper_stones, &p->silver_stones, &p->ivory_stones,
+        &p->gold_stones, &p->platinum_stones, &p->jewel_stones,
+        &p->jewels_pocket
+    };
+    int selected = town_menu(g, p, "WHICH MONEY DO YOU WISH TO DROP?", "",
+                             money_items, 8, 8, UINT32_MAX);
+    if (selected < 0 || selected >= 7 || !*money[selected]) return;
+    u32 amount = *money[selected];
+    *money[selected] = 0;
+    char line[96];
+    snprintf(line, sizeof(line), "YOU DROP %u %s.", amount,
+             money_items[selected]);
+    town_message(g, p, "MONEY DROPPED", line, "", 8);
+}
+
+static int dig_hole_target(Game *g) {
+    int last = g->cur_floor + 40;
+    if (last > 180) last = 180;
+    for (int floor = g->cur_floor + 1; floor <= last; floor++)
+        if (!rock_cell_at(g, g->cur_x, g->cur_y, floor)) return floor;
+    return -1;
+}
+
+/* Original D command (func_0EDAD).  Digging is deliberately slow in game
+ * turns, records the shaft in the same persistent .DUN bit grid as used
+ * pitfalls, and retains the original solid-rock cutoff below level 120. */
+static int cmd_dig_hole(Game *g, Character *p) {
+    if (g->cur_floor <= 0 || g->cur_floor > 120 ||
+        game_trapdoor_floor(g, g->cur_x, g->cur_y) >= 0) {
+        town_message(g, p, "THE FLOOR SEEMS TO BE MADE OF SOLID ROCK.",
+                     "IT IS NOT POSSIBLE TO DIG HERE.",
+                     "A LITTLE MOUSE SUGGESTS A LADDER OR SPELL.", 4);
+        return 0;
+    }
+
+    static const char *const choices[] = {
+        "DIG A HOLE IN THE FLOOR", "FORGET THE HOLE IDEA"
+    };
+    if (town_menu(g, p, "DO YOU WISH TO DIG A HOLE IN THE FLOOR?",
+                  "IT MAY TAKE SOME TIME.", choices, 2, 14,
+                  UINT32_MAX) != 0)
+        return 0;
+
+    int target = dig_hole_target(g);
+    if (target < 0) {
+        town_message(g, p, "DIGGING... DIGGING...",
+                     "THE ROCK BELOW WILL NOT GIVE WAY.", "", 4);
+        return 0;
+    }
+
+    int old_x = g->cur_x, old_y = g->cur_y;
+    set_pit_bit(g, old_x, old_y);
+    for (int turn = 0; turn < 4 && p->hp_cur > 0; turn++)
+        game_advance_monsters(g, p);
+    if (p->hp_cur == 0) return 1;
+
+    char line[96];
+    snprintf(line, sizeof(line), "THE HOLE OPENS ON LEVEL %d.", target);
+    game_change_floor(g, p, target);
+    /* Normally the shaft lands at the same coordinate.  game_change_floor()
+     * may relocate if a cached monster occupies that landing; preserve that
+     * safety relocation instead of putting the player inside an actor. */
+    p->x_pos = (u16)g->cur_x;
+    p->y_pos = (u16)g->cur_y;
+    town_message(g, p, "DIGGING... DIGGING...", line,
+                 "YOUR HANDS ARE RAW AND BLISTERED.", 4);
+    return 1;
+}
+
+static void town_store(Game *g, Character *p) {
+    static const char *const main_items[] = {
+        "WEAPONS", "ARMOR", "EXIT STORE"
+    };
+    static const char *const weapon_items[] = {
+        "STICK..........1 JP", "CLUB..........15 JP",
+        "MACE.........300 JP", "KNIFE.........30 JP",
+        "SHORTSWORD...250 JP", "LONG SWORD...450 JP",
+        "RETURN TO STORE"
+    };
+    static const u32 weapon_price[6] = {1, 15, 300, 30, 250, 450};
+    static const char *const armor_items[] = {
+        "ROBES (USELESS).1 JP", "LEATHER........50 JP",
+        "CHAIN.........300 JP", "SCALE........1500 JP",
+        "PLATE........4000 JP", "FIELD PLATE..9900 JP",
+        "RETURN TO STORE"
+    };
+    static const u32 armor_price[6] = {1, 50, 300, 1500, 4000, 9900};
+
+    for (;;) {
+        int choice = town_menu(g, p, "YOU HAVE ENTERED A STORE",
+                               "WHAT WOULD YOU LIKE TO BUY?",
+                               main_items, 3, 3, p->jewels_pocket);
+        if (choice < 0 || choice == 2) return;
+        if (choice == 0) {
+            int w = town_menu(g, p, "PLEASE SELECT A WEAPON:", "",
+                              weapon_items, 7, 3, p->jewels_pocket);
+            if (w >= 0 && w < 6 && spend_jewels(g, p, weapon_price[w])) {
+                int slot = w + 1; /* Fist is slot zero and is never sold. */
+                if (p->weapon_inventory[slot] != 0xFF)
+                    p->weapon_inventory[slot]++;
+                town_message(g, p, "PURCHASE COMPLETE!", weapon_names[slot],
+                             "HIT 'W' IN THE DUNGEON TO EQUIP IT.", 3);
+            }
+        } else {
+            int a = town_menu(g, p, "PLEASE SELECT ARMOR:", "",
+                              armor_items, 7, 3, p->jewels_pocket);
+            if (a >= 0 && a < 6 && spend_jewels(g, p, armor_price[a])) {
+                if (p->armor_inventory[a] != 0xFF) p->armor_inventory[a]++;
+                town_message(g, p, "PURCHASE COMPLETE!", a == 0 ? "ROBES" : armor_names[a],
+                             "HIT 'A' IN THE DUNGEON TO WEAR IT.", 3);
+            }
+        }
+    }
+}
+
+static u32 temple_contract_price(Game *g, Character *p) {
+    unsigned long long price = (unsigned long long)p->level * 500u +
+                               (u32)(game_rand(g) % 20);
+    if (price < 100000u) price = 100000u;
+    if (price > 500000u) price = 500000u;
+    return (u32)price;
+}
+
+static void town_temple(Game *g, Character *p) {
+    for (;;) {
+        char contract[64];
+        const char *items[7] = {
+            "CURE WOUNDS..........30 JP",
+            "CURE SERIOUS WOUNDS.200 JP",
+            "HEAL ALL WOUNDS....2500 JP",
+            "CURE POISON.........300 JP",
+            "CURE DISEASE........500 JP",
+            contract,
+            "LEAVE TEMPLE"
+        };
+        u32 contract_price = temple_contract_price(g, p);
+        snprintf(contract, sizeof(contract), "RAISE CONTRACT...%u JP", contract_price);
+        int choice = town_menu(g, p, "YOU ARE IN A TEMPLE",
+                               "PLEASE SELECT A SPELL", items, 7, 4,
+                               p->jewels_pocket);
+        if (choice < 0 || choice == 6) return;
+        static const u32 prices[5] = {30, 200, 2500, 300, 500};
+        u32 price = choice == 5 ? contract_price : prices[choice];
+        if (!spend_jewels(g, p, price)) continue;
+
+        char result[96];
+        if (choice == 0) {
+            int heal = 1 + game_rand(g) % 10;
+            p->hp_cur = (u16)((p->hp_cur + heal > p->hp_max) ?
+                              p->hp_max : p->hp_cur + heal);
+            snprintf(result, sizeof(result), "THE TEMPLE RESTORES %d HEALTH POINTS.", heal);
+        } else if (choice == 1) {
+            int heal = 10;
+            for (int i = 0; i < 5; i++) heal += game_rand(g) % 15;
+            p->hp_cur = (u16)((p->hp_cur + heal > p->hp_max) ?
+                              p->hp_max : p->hp_cur + heal);
+            snprintf(result, sizeof(result), "THE TEMPLE RESTORES %d HEALTH POINTS.", heal);
+        } else if (choice == 2) {
+            p->hp_cur = p->hp_max;
+            snprintf(result, sizeof(result), "ALL OF YOUR WOUNDS ARE HEALED.");
+        } else if (choice == 3) {
+            p->poisoned_turns = 0;
+            snprintf(result, sizeof(result), "THE POISON HAS BEEN CURED.");
+        } else if (choice == 4) {
+            p->diseased_turns = 0;
+            snprintf(result, sizeof(result), "THE DISEASE HAS BEEN CURED.");
+        } else {
+            p->raise_floor = (u16)g->cur_floor;
+            p->raise_x = (u16)g->cur_x;
+            p->raise_y = (u16)g->cur_y;
+            snprintf(result, sizeof(result), "YOUR RAISE DEAD CONTRACT IS IN EFFECT.");
+        }
+        town_message(g, p, "TEMPLE SERVICE COMPLETE", result, "", 4);
+    }
+}
+
+static void add_u32_sat(u32 *value, unsigned long long add) {
+    unsigned long long total = (unsigned long long)*value + add;
+    *value = total > UINT32_MAX ? UINT32_MAX : (u32)total;
+}
+
+static unsigned long long town_convert_stones(Character *p) {
+    unsigned long long converted = (unsigned long long)p->platinum_stones * 5u +
+        p->jewel_stones + p->gold_stones / 2u + p->ivory_stones / 4u +
+        p->silver_stones / 12u + p->copper_stones / 200u;
+    p->copper_stones = p->silver_stones = p->ivory_stones = 0;
+    p->gold_stones = p->platinum_stones = p->jewel_stones = 0;
+    add_u32_sat(&p->jewels_pocket, converted);
+    return converted;
+}
+
+static void town_view_money(Game *g, Character *p) {
+    char line[96];
+    int y = 0;
+    town_pane_begin(g, p);
+    y = town_pane_text(g, y, "YOUR FINANCIAL STATEMENT:", 4);
+#define TOWN_MONEY_LINE(label, value) do { \
+        snprintf(line, sizeof(line), label "%u", (unsigned)(value)); \
+        y = town_pane_text(g, y, line, 7); \
+    } while (0)
+    TOWN_MONEY_LINE("COPPER STONES: ", p->copper_stones);
+    TOWN_MONEY_LINE("SILVER STONES: ", p->silver_stones);
+    TOWN_MONEY_LINE("IVORY STONES: ", p->ivory_stones);
+    TOWN_MONEY_LINE("GOLD STONES: ", p->gold_stones);
+    TOWN_MONEY_LINE("PLATINUM STONES: ", p->platinum_stones);
+    TOWN_MONEY_LINE("JEWEL STONES: ", p->jewel_stones);
+    TOWN_MONEY_LINE("JEWELS IN POCKET: ", p->jewels_pocket);
+    TOWN_MONEY_LINE("JEWELS IN BANK: ", p->jewels_bank);
+#undef TOWN_MONEY_LINE
+    town_pane_text(g, y, "HIT ANY KEY...", 15);
+    video_present(&g->video);
+    input_wait_any_key(&g->input);
+}
+
+static void town_bank(Game *g, Character *p) {
+    static const char *const items[] = {
+        "CONVERT TO JEWEL PIECES", "DEPOSIT MONEY", "WITHDRAW MONEY",
+        "ROB BANK", "LEAVE BANK"
+    };
+    for (;;) {
+        int choice = town_menu(g, p, "WELCOME TO MORAFF'S FIRST NATIONAL BANK.",
+                               "OPTIONS:", items, 5, 5, p->jewels_pocket);
+        if (choice < 0 || choice == 4) return;
+        if (choice == 0) {
+            unsigned long long converted = town_convert_stones(p);
+            char line[96];
+            snprintf(line, sizeof(line), "THE BANK CONVERTS YOUR STONES INTO %llu JP.", converted);
+            town_message(g, p, "STONE CONVERSION COMPLETE", line, "", 5);
+        } else if (choice == 1) {
+            u32 amount = town_prompt_amount(g, p, "DEPOSIT MONEY", p->jewels_pocket);
+            p->jewels_pocket -= amount;
+            add_u32_sat(&p->jewels_bank, amount);
+            town_view_money(g, p);
+        } else if (choice == 2) {
+            u32 amount = town_prompt_amount(g, p, "WITHDRAW MONEY", p->jewels_bank);
+            p->jewels_bank -= amount;
+            add_u32_sat(&p->jewels_pocket, amount);
+            town_view_money(g, p);
+        } else {
+            town_message(g, p, "COME ON! DO YOU REALLY THINK I'D LET YOU",
+                         "ROB MY OWN BANK?", "", 12);
+        }
+    }
+}
+
+static double experience_for_level(int level) {
+    /* The original curve is fifth-power and is stored/compared as a double. */
+    double n = (double)(level < 1 ? 1 : level);
+    return n * n * n * n * n;
+}
+
+static int inn_apply_levels(Game *g, Character *p) {
+    int gained = 0;
+    if (!isfinite(p->experience) || p->experience < 0.0) p->experience = 0.0;
+    while (p->level < 1000 &&
+           p->experience >= experience_for_level((int)p->level + 1)) {
+        int hp_gain = 1 + p->stat_con / 5 +
+                      game_rand(g) % (p->stat_con / 4 + 1);
+        unsigned hp = (unsigned)p->hp_max + (unsigned)hp_gain;
+        p->hp_max = (u16)(hp > 0xFFFFu ? 0xFFFFu : hp);
+        if (p->class_id != CLASS_FIGHTER) {
+            float sp_gain = (float)(1 + (p->stat_int + p->stat_wis) / 10);
+            p->sp_max += sp_gain;
+        }
+        p->level++;
+        gained++;
+    }
+    return gained;
+}
+
+static void town_inn(Game *g, Character *p) {
+    static const char *const items[] = {
+        "STAY FOR THE NIGHT", "RUN FOR YOUR LIFE"
+    };
+    int choice = town_menu(g, p, "WELCOME TO THE FLEA BAG INN",
+                           "ROOMS COST 10 JEWEL PIECES PER NIGHT.",
+                           items, 2, 6, p->jewels_pocket);
+    if (choice != 0) return;
+    if (!spend_jewels(g, p, 10)) {
+        town_message(g, p, "THREE BIG THUGS BEAT YOU UP AND THROW YOU OUT",
+                     "BECAUSE YOU CAN'T PAY YOUR BILL.", "", 12);
+        return;
+    }
+    p->age += 8u * 3600u;
+    character_clear_town_effects(p);
+    int gained = inn_apply_levels(g, p);
+    p->hp_cur = p->hp_max;
+    p->sp_cur = p->sp_max;
+    if (gained) {
+        char line[96];
+        snprintf(line, sizeof(line), "YOU GAINED %d LEVEL%s AND ARE NOW LEVEL %u.",
+                 gained, gained == 1 ? "" : "S", p->level);
+        town_message(g, p, "CONGRATULATIONS! YOU HAVE BECOME MORE POWERFUL.",
+                     line, "YOUR HEALTH AND SPELL POINTS ARE RESTORED.", 6);
+    } else {
+        town_message(g, p, "YOU REST FOR THE NIGHT.",
+                     "YOUR HEALTH AND SPELL POINTS ARE RESTORED.",
+                     "NO NEW LEVEL HAS BEEN EARNED YET.", 6);
+    }
+}
+
+static void town_wilderness_exit(Game *g, Character *p) {
+    static const char *const items[] = {
+        "EXPLORE THE WILDERNESS", "RETURN TO THE DUNGEON"
+    };
+    int choice = town_menu(g, p, "YOU ARE STANDING ON TOP OF THE TOWN.",
+                           "NOTE: WILDERNESS EXPLORATION REQUIRES A FAST COMPUTER!",
+                           items, 2, 7, UINT32_MAX);
+    if (choice == 0)
+        town_message(g, p, "WILDERNESS EXPLORATION",
+                     "THE WILDERNESS EXIT IS READY.",
+                     "EXPLORATION ITSELF IS NOT IMPLEMENTED YET.", 7);
+}
+
+static void enter_town_location(Game *g, Character *p, int type) {
+    switch (type) {
+    case 1: town_store(g, p); break;
+    case 2: town_temple(g, p); break;
+    case 3: town_bank(g, p); break;
+    case 4: town_inn(g, p); break;
+    case 5: town_wilderness_exit(g, p); break;
+    }
+}
+
+static void inc_u8_sat(u8 *value, int amount) {
+    int total = (int)*value + amount;
+    *value = (u8)(total > 255 ? 255 : total);
+}
+
+static void grant_quest_reward(Character *p, const CombatState *cs,
+                               char *out, size_t out_size) {
+    static const int floor_needed[8] = {4, 8, 12, 16, 125, 150, 175, 200};
+    int step = cs->monster_type_idx - 104;
+    if (step < 0 || step >= 8 || cs->monster_level < 1 ||
+        (int)p->floor_depth != floor_needed[step] ||
+        (p->quest_flags & (1u << step))) return;
+    p->quest_flags |= (u8)(1u << step);
+    switch (step) {
+    case 0: p->body_armor_plus = 9; snprintf(out, out_size, "QUEST: PLUS 9 BODY ARMOR!"); break;
+    case 1: p->gauntlet = 12; snprintf(out, out_size, "QUEST: PLUS 12 GAUNTLET!"); break;
+    case 2: p->ring_prot_plus = 15; snprintf(out, out_size, "QUEST: PLUS 15 RING OF PROTECTION!"); break;
+    case 3:
+        p->eq_wep_enchant[p->equipped_weapon < 12 ? p->equipped_weapon : 0] = 25;
+        snprintf(out, out_size, "QUEST: YOUR EQUIPPED WEAPON IS NOW PLUS 25!");
+        break;
+    case 4: p->body_armor_plus = 25; snprintf(out, out_size, "QUEST: PLUS 25 BODY ARMOR!"); break;
+    case 5: p->gauntlet = 50; snprintf(out, out_size, "QUEST: PLUS 50 GAUNTLET!"); break;
+    case 6: p->ring_prot_plus = 50; snprintf(out, out_size, "QUEST: PLUS 50 RING OF PROTECTION!"); break;
+    case 7:
+        p->eq_wep_enchant[p->equipped_weapon < 12 ? p->equipped_weapon : 0] = 100;
+        snprintf(out, out_size, "QUEST: YOUR EQUIPPED WEAPON IS NOW PLUS 100!");
+        break;
+    }
+}
+
+static int award_random_loot(Game *g, Character *p, int depth,
+                             char *loot, size_t loot_size) {
+    int kind = game_rand(g) % 7;
+    if (kind < 3) {
+        int max_spell_level = 1 + depth / 20;
+        if (max_spell_level > 10) max_spell_level = 10;
+        int cat = game_rand(g) % 4;
+        int spell = game_rand(g) % (max_spell_level * 3);
+        if (spell > 29) spell = 29;
+        if (kind == 0) {
+            inc_u8_sat(&p->scrolls[cat][spell], 1);
+            snprintf(loot, loot_size, "YOU FIND A SCROLL OF %s!",
+                     spell_type_names[cat][spell]);
+        } else if (kind == 1) {
+            int charges = 2 + game_rand(g) % 5;
+            inc_u8_sat(&p->wands[cat][spell], charges);
+            snprintf(loot, loot_size, "YOU FIND A %d-CHARGE WAND OF %s!",
+                     charges, spell_type_names[cat][spell]);
+        } else {
+            inc_u8_sat(&p->papers[cat][spell], 1);
+            snprintf(loot, loot_size, "YOU FIND A PAPER OF %s!",
+                     spell_type_names[cat][spell]);
+        }
+    } else if (kind == 3) {
+        switch (game_rand(g) % 12) {
+        case 0: inc_u8_sat(&p->holy_grenade, 1); snprintf(loot,loot_size,"YOU FIND A HOLY HAND GRENADE!"); break;
+        case 1: inc_u8_sat(&p->stone_teleport, 1); snprintf(loot,loot_size,"YOU FIND A STONE OF TELEPORTATION!"); break;
+        case 2: inc_u8_sat(&p->stone_see, 1); snprintf(loot,loot_size,"YOU FIND A STONE OF SEEING!"); break;
+        case 3: if (!p->floor_slosher) p->floor_slosher=1; snprintf(loot,loot_size,"YOU FIND A FLOOR SLOSHER!"); break;
+        case 4: inc_u8_sat(&p->potion_heal, 1); snprintf(loot,loot_size,"YOU FIND A POTION OF HEALING!"); break;
+        case 5: inc_u8_sat(&p->ring_regen, 1); snprintf(loot,loot_size,"YOU FIND A RING OF REGENERATION!"); break;
+        case 6: p->stat_str++; snprintf(loot,loot_size,"YOU FIND A BOOK OF STRENGTH!"); break;
+        case 7: p->stat_int++; snprintf(loot,loot_size,"YOU FIND A BOOK OF INTELLIGENCE!"); break;
+        case 8: p->stat_wis++; snprintf(loot,loot_size,"YOU FIND A BOOK OF WISDOM!"); break;
+        case 9: p->stat_con++; snprintf(loot,loot_size,"YOU FIND A BOOK OF CONSTITUTION!"); break;
+        case 10:p->stat_agi++; snprintf(loot,loot_size,"YOU FIND A BOOK OF AGILITY!"); break;
+        default:p->stat_luck++;snprintf(loot,loot_size,"YOU FIND A BOOK OF LUCK!"); break;
+        }
+    } else if (kind == 4) {
+        u8 *pills[6] = {&p->green_pill,&p->orange_pill,&p->yellow_pill,
+                        &p->red_pill,&p->blue_pill,&p->white_pill};
+        static const char *pill_names[6] = {"GREEN","ORANGE","YELLOW","RED","BLUE","WHITE"};
+        int pill = game_rand(g) % 6;
+        inc_u8_sat(pills[pill], 1);
+        snprintf(loot, loot_size, "YOU FIND A %s PILL!", pill_names[pill]);
+    } else if (kind == 5) {
+        int max_weapon = 1 + depth / 25;
+        if (max_weapon > 7) max_weapon = 7;
+        int weapon = 1 + game_rand(g) % max_weapon;
+        inc_u8_sat(&p->weapon_inventory[weapon], 1);
+        snprintf(loot, loot_size, "YOU FIND AND TAKE A %s!", weapon_names[weapon]);
+    } else {
+        int max_armor = 1 + depth / 35;
+        if (max_armor > 6) max_armor = 6;
+        int armor = 1 + game_rand(g) % max_armor;
+        inc_u8_sat(&p->armor_inventory[armor], 1);
+        snprintf(loot, loot_size, "YOU FIND AND TAKE %s ARMOR!", armor_names[armor]);
+    }
+    return kind;
+}
+
+static void grant_battle_rewards(Game *g, Character *p, const CombatState *cs) {
+    const MonsterType *mt = &monster_types[cs->monster_type_idx];
+    int xp = cs->monster_level * mt->hpF + mt->atk + mt->def;
+    if (xp < 1) xp = 1;
+    if (!isfinite(p->experience) || p->experience < 0.0) p->experience = 0.0;
+    p->experience += (double)xp;
+
+    int depth = g->cur_floor > cs->monster_level ? g->cur_floor : cs->monster_level;
+    int amount = 1 + game_rand(g) % (depth / 2 + mt->hpF / 2 + 2);
+    const char *stone_name;
+    if (depth < 10) { add_u32_sat(&p->copper_stones, amount); stone_name = "COPPER STONES"; }
+    else if (depth < 30) { add_u32_sat(&p->silver_stones, amount); stone_name = "SILVER STONES"; }
+    else if (depth < 65) { add_u32_sat(&p->ivory_stones, amount); stone_name = "IVORY STONES"; }
+    else if (depth < 110) { add_u32_sat(&p->gold_stones, amount); stone_name = "GOLD STONES"; }
+    else if (depth < 170) { add_u32_sat(&p->platinum_stones, amount); stone_name = "PLATINUM STONES"; }
+    else { add_u32_sat(&p->jewel_stones, amount); stone_name = "JEWEL STONES"; }
+
+    char loot[128] = "NO EXTRA TREASURE THIS TIME.";
+    int key_index = g->cur_floor / 10;
+    if (combat_monster_drain_amount(cs->monster_type_idx) > 0 &&
+        g->cur_floor >= 10 && g->cur_floor < 180 &&
+        key_index > 0 && key_index < 18 && !p->trapdoor_keys[key_index]) {
+        p->trapdoor_keys[key_index] = 1;
+        snprintf(loot, sizeof(loot),
+                 "YOU FOUND THE KEY LABELED %d!", key_index * 10);
+    } else {
+        int chance = 12 + (depth > 100 ? 50 : depth / 2);
+        if (chance > 70) chance = 70;
+        if (game_rand(g) % 100 < chance)
+            award_random_loot(g, p, depth, loot, sizeof(loot));
+    }
+
+    char quest[128] = "";
+    p->floor_depth = (u16)g->cur_floor;
+    grant_quest_reward(p, cs, quest, sizeof(quest));
+
+    char line[128];
+    int y = 0;
+    town_pane_begin(g, p);
+    y = town_pane_text(g, y, "YOU KILLED IT!", 8);
+    snprintf(line, sizeof(line), "YOU GAIN %d EXPERIENCE POINTS.", xp);
+    y = town_pane_text(g, y, line, 7);
+    snprintf(line, sizeof(line), "YOU TAKE %d %s.", amount, stone_name);
+    y = town_pane_text(g, y, line, 7);
+    y = town_pane_text(g, y, loot, 14);
+    if (*quest) y = town_pane_text(g, y, quest, 10);
+    town_pane_text(g, y, "HIT ANY KEY...", 15);
+    video_present(&g->video);
+    input_wait_any_key(&g->input);
+}
+
+int game_economy_self_test(void) {
+    int failures = 0;
+    Character p = {0};
+    p.copper_stones = 400;
+    p.silver_stones = 24;
+    p.ivory_stones = 8;
+    p.gold_stones = 4;
+    p.platinum_stones = 2;
+    p.jewel_stones = 3;
+    unsigned long long converted = town_convert_stones(&p);
+    if (converted != 21 || p.jewels_pocket != 21 || p.copper_stones ||
+        p.silver_stones || p.ivory_stones || p.gold_stones ||
+        p.platinum_stones || p.jewel_stones) failures++;
+
+    u32 saturated = UINT32_MAX - 2;
+    add_u32_sat(&saturated, 10);
+    if (saturated != UINT32_MAX) failures++;
+
+    Game g = {0};
+    game_srand(&g, 1);
+    int seen = 0;
+    char loot[128];
+    for (int i = 0; i < 4096 && seen != 0x7F; i++)
+        seen |= 1 << award_random_loot(&g, &p, 200, loot, sizeof(loot));
+    if (seen != 0x7F) failures++;
+
+    Character leveler = {0};
+    leveler.level = 1;
+    leveler.experience = 32.0;
+    leveler.hp_max = 10;
+    leveler.stat_con = leveler.stat_int = leveler.stat_wis = 10;
+    if (inn_apply_levels(&g, &leveler) != 1 || leveler.level != 2 ||
+        experience_for_level(3) != 243.0) failures++;
+
+    for (int race = 0; race < RACE_COUNT; race++) {
+        u16 stats[6];
+        int bonus = 0;
+        roll_character_stats(&g, race, stats);
+        for (int i = 0; i < 6; i++)
+            bonus += (int)stats[i] - race_stat_base[race][i];
+        if (bonus != 60) failures++;
+    }
+
+    Character novice = {0};
+    novice.stat_int = 24;
+    novice.stat_wis = 18;
+    novice.class_id = CLASS_FIGHTER;
+    if (starting_spell_points(&novice) != 0.0f) failures++;
+    novice.class_id = CLASS_WIZARD;
+    if (starting_spell_points(&novice) != 9.0f) failures++;
+    novice.class_id = CLASS_MONK;
+    if (starting_spell_points(&novice) != 3.0f) failures++;
+    failures += character_creation_self_test();
+
+    printf("Economy/reward/creation self-test: %s (%d failure%s)\n",
+           failures ? "FAIL" : "PASS", failures,
+           failures == 1 ? "" : "s");
+    return failures ? 1 : 0;
+}
+
+/* ── Beastiary ───────────────────────────────────────────────────────
+ *
+ * J was unused by the DOS command set (and reads naturally as monster
+ * journal), so it opens a persistent record of all 112 definitions. */
+
+static void bestiary_floor_text(int type, char *out, size_t out_size) {
+    static const int quest_floor[8] = {4, 8, 12, 16, 125, 150, 175, 200};
+    const MonsterType *mt = &monster_types[type];
+    if (type >= 104) {
+        snprintf(out, out_size, "FLOOR: %d (QUEST)", quest_floor[type - 104]);
+        return;
+    }
+    int min_floor = mt->minL < 1 ? 1 : mt->minL;
+    int max_floor = mt->maxL > 120 ? 200 : mt->maxL;
+    if (min_floor > max_floor)
+        snprintf(out, out_size, "FLOORS: NOT IN RANDOM SPAWNS");
+    else if (min_floor == max_floor)
+        snprintf(out, out_size, "FLOOR: %d", min_floor);
+    else
+        snprintf(out, out_size, "FLOORS: %d-%d", min_floor, max_floor);
+}
+
+static void draw_bestiary_fullscreen(Game *g, int type) {
+    Video *v = &g->video;
+    const MonsterType *mt = &monster_types[type];
+    int adv = v->font_advance ? v->font_advance : v->font_char_w;
+    int title_x = (LOGICAL_W - (int)strlen(mt->name) * adv) / 2;
+    int pic = get_monster_pic_index_ext(type);
+    int substitute = pic < 2;
+    if (substitute) pic = 2;
+
+    video_clear(v, 0);
+    video_draw_text(v, title_x > 4 ? title_x : 4, 5, mt->name, 14);
+    draw_pic_billboard(g, pic, LOGICAL_W / 2,
+                       42, LOGICAL_H - 104, 0.0f,
+                       0, 0, LOGICAL_W, LOGICAL_H, NULL,
+                       get_monster_color_ext(type));
+    if (substitute)
+        video_draw_text_scaled(v, 12, LOGICAL_H - 62,
+                               "SUBSTITUTE ART - SOURCE SLOT IS ABSENT IN 1024X768 WORLD.PIC",
+                               8, 3, 4);
+    video_draw_text_scaled(v, 12, LOGICAL_H - 36,
+                           "FULLSCREEN MONSTER VIEW - PRESS ANY KEY", 15,
+                           3, 4);
+    video_present(v);
+    input_wait_any_key(&g->input);
+}
+
+static void draw_bestiary_page(Game *g, int selected) {
+    enum { ROWS_PER_PAGE = 18, LIST_RIGHT = 408 };
+    Video *v = &g->video;
+    int page = selected / ROWS_PER_PAGE;
+    int first = page * ROWS_PER_PAGE;
+    int discovered = 0;
+    char line[160];
+
+    for (int i = 0; i < MONSTER_TYPE_COUNT; i++)
+        if (g->bestiary_kills[i]) discovered++;
+
+    video_clear(v, 0);
+    video_draw_text(v, 10, 4, "BEASTIARY", 4);
+    snprintf(line, sizeof(line), "DISCOVERED: %d OF %d    PAGE %d OF %d",
+             discovered, MONSTER_TYPE_COUNT, page + 1,
+             (MONSTER_TYPE_COUNT + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE);
+    video_draw_text_scaled(v, 205, 9, line, 8, 3, 4);
+    video_hline(v, 4, 41, LOGICAL_W - 8, 8);
+    video_vline(v, LIST_RIGHT, 42, LOGICAL_H - 84, 8);
+
+    for (int row = 0; row < ROWS_PER_PAGE; row++) {
+        int type = first + row;
+        if (type >= MONSTER_TYPE_COUNT) break;
+        int y = 53 + row * 35;
+        int unlocked = g->bestiary_kills[type] != 0;
+        if (type == selected)
+            video_fill_rect(v, 7, y - 3, LIST_RIGHT - 15, 31, 1);
+        if (unlocked)
+            snprintf(line, sizeof(line), "%03d  %s", type + 1,
+                     monster_types[type].name);
+        else
+            snprintf(line, sizeof(line), "%03d  ????", type + 1);
+        video_draw_text_scaled(v, 13, y, line,
+                               type == selected ? 15 : (unlocked ? 7 : 8),
+                               3, 4);
+    }
+
+    int unlocked = g->bestiary_kills[selected] != 0;
+    if (!unlocked) {
+        video_draw_text(v, 610, 110, "????", 8);
+        video_draw_text_scaled(v, 470, 190,
+                               "THIS MONSTER HAS NOT BEEN DEFEATED.", 7, 3, 4);
+        video_draw_text_scaled(v, 470, 225,
+                               "ITS IMAGE, NAME AND STATISTICS", 7, 3, 4);
+        video_draw_text_scaled(v, 470, 260,
+                               "WILL BE REVEALED AFTER YOUR FIRST KILL.", 7,
+                               3, 4);
+    } else {
+        const MonsterType *mt = &monster_types[selected];
+        int pic = get_monster_pic_index_ext(selected);
+        int substitute = pic < 2;
+        if (substitute) pic = 2;
+        video_draw_text(v, 430, 48, mt->name, 14);
+        draw_pic_billboard(g, pic, 720, 80, 300, 0.0f,
+                           LIST_RIGHT + 1, 42, LOGICAL_W - LIST_RIGHT - 1,
+                           350, NULL, get_monster_color_ext(selected));
+        if (substitute)
+            video_draw_text_scaled(v, 430, 353,
+                                   "SUBSTITUTE ART (SOURCE SLOT NOT IN THIS PIC SET)",
+                                   8, 3, 4);
+
+        int y = 390;
+        bestiary_floor_text(selected, line, sizeof(line));
+        video_draw_text_scaled(v, 430, y, line, 10, 3, 4); y += 32;
+        snprintf(line, sizeof(line), "KILLED: %u", g->bestiary_kills[selected]);
+        video_draw_text_scaled(v, 430, y, line, 15, 3, 4); y += 32;
+        snprintf(line, sizeof(line), "DEFENSE: %d       ATTACK: %d",
+                 mt->def, mt->atk);
+        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += 32;
+        snprintf(line, sizeof(line), "DAMAGE: %d        AGILITY: %d",
+                 mt->dmg, mt->agi);
+        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += 32;
+        snprintf(line, sizeof(line), "DEFENSE MOD: %d   HP FACTOR: %d",
+                 mt->defMod, mt->hpF);
+        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += 32;
+        snprintf(line, sizeof(line), "IMMUNITY: %u      SAVES: %u / %u",
+                 mt->imm, mt->saveA, mt->saveB);
+        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += 32;
+        snprintf(line, sizeof(line), "BOSS: %s", mt->boss ? "YES" : "NO");
+        video_draw_text_scaled(v, 430, y, line, mt->boss ? 12 : 7, 3, 4);
+        video_draw_text_scaled(v, 430, 636,
+                               "HP: 1 TO (HP FACTOR X MONSTER LEVEL)", 8,
+                               3, 4);
+        if (mt->boss)
+            video_draw_text_scaled(v, 430, 663,
+                                   "BOSS BONUS: +20 HP X MONSTER LEVEL", 8,
+                                   3, 4);
+    }
+
+    video_hline(v, 4, LOGICAL_H - 42, LOGICAL_W - 8, 8);
+    video_draw_text_scaled(v, 10, LOGICAL_H - 34,
+                           "UP/DOWN SELECT  LEFT/RIGHT OR PGUP/PGDN PAGE  F FULLSCREEN  ESC RETURN",
+                           15, 3, 4);
+}
+
+void game_draw_bestiary_test(Game *g, int selected) {
+    if (selected < 0) selected = 0;
+    if (selected >= MONSTER_TYPE_COUNT) selected = MONSTER_TYPE_COUNT - 1;
+    draw_bestiary_page(g, selected);
+}
+
+static int bestiary_move_selection(int selected, int scan) {
+    switch (scan) {
+    case 0x48:
+        return selected > 0 ? selected - 1 : MONSTER_TYPE_COUNT - 1;
+    case 0x50:
+        return selected + 1 < MONSTER_TYPE_COUNT ? selected + 1 : 0;
+    case 0x49:
+    case 0x4B:
+        return selected >= 18 ? selected - 18 : MONSTER_TYPE_COUNT - 1;
+    case 0x51:
+    case 0x4D:
+        return selected + 18 < MONSTER_TYPE_COUNT ? selected + 18 : 0;
+    case 0x47:
+        return 0;
+    case 0x4F:
+        return MONSTER_TYPE_COUNT - 1;
+    default:
+        return selected;
+    }
+}
+
+int game_ui_self_test(Game *g) {
+    static const int expected[12][2] = {
+        {'b','m'}, {'w','v'}, {'z','c'}, {'i','x'},
+        {'a','l'}, {'f','p'}, {'t','e'}, {'o','o'},
+        {'j','j'}, {'1','1'}, {'2','2'}, {'q','h'}
+    };
+    int failures = 0;
+    if (bestiary_move_selection(0, 0x48) != MONSTER_TYPE_COUNT - 1) failures++;
+    if (bestiary_move_selection(MONSTER_TYPE_COUNT - 1, 0x50) != 0) failures++;
+    if (bestiary_move_selection(0, 0x49) != MONSTER_TYPE_COUNT - 1) failures++;
+    if (bestiary_move_selection(MONSTER_TYPE_COUNT - 1, 0x51) != 0) failures++;
+    if (bestiary_move_selection(18, 0x49) != 0) failures++;
+    if (bestiary_move_selection(0, 0x51) != 18) failures++;
+    if (input_sdl_to_dos(SDLK_PAGEUP, KMOD_NONE) != -0x49) failures++;
+    if (input_sdl_to_dos(SDLK_PAGEDOWN, KMOD_NONE) != -0x51) failures++;
+    if (input_sdl_to_dos(SDLK_KP_9, KMOD_NONE) != -0x49) failures++;
+    if (input_sdl_to_dos(SDLK_KP_3, KMOD_NONE) != -0x51) failures++;
+
+    const int menu_x = SX(0x48C);
+    const int spacing = SY(35);
+    int adv = g->video.font_advance ? g->video.font_advance
+                                    : g->video.font_char_w;
+    int scaled_advance = adv * 7 / 6;
+    for (int row = 0; row < 12; row++) {
+        for (int col = 0; col < 2; col++) {
+            float logical_x = (float)(menu_x + scaled_advance *
+                                      (col ? 12 : 2));
+            float logical_y = (float)(row * spacing + 4);
+            int window_x, window_y;
+            SDL_RenderLogicalToWindow(g->video.renderer, logical_x, logical_y,
+                                      &window_x, &window_y);
+            if (command_menu_click_key(g, window_x, window_y) !=
+                expected[row][col])
+                failures++;
+        }
+    }
+    return failures;
+}
+
+static void cmd_bestiary(Game *g) {
+    int selected = 0;
+    for (;;) {
+        draw_bestiary_page(g, selected);
+        video_present(&g->video);
+        int key = input_getch(&g->input);
+        if (input_poll_quit(&g->input) || key == 0x1B) return;
+        if ((key == 'f' || key == 'F') && g->bestiary_kills[selected]) {
+            draw_bestiary_fullscreen(g, selected);
+            continue;
+        }
+        if (key != 0) continue;
+        int scan = input_getch(&g->input);
+        selected = bestiary_move_selection(selected, scan);
+    }
 }
 
 /* ── Command: Help screen (matches original func_26DE1 help menu) ── */
@@ -2194,9 +3447,9 @@ static void cmd_help(Game *g) {
     y += fh + 4;
 
     video_draw_text(v, 8, y, "A-ARMOR (SELECT TYPE)", 8); y += fh;
-    video_draw_text(v, 8, y, "B-BRICKS (BUY FROM A SHOP)", 8); y += fh;
+    video_draw_text(v, 8, y, "B-BRICK SPEED CHANGE (4 SETTINGS)", 8); y += fh;
     video_draw_text(v, 8, y, "C-CAST SPELL OR GET HELP ON SPELLS", 8); y += fh;
-    video_draw_text(v, 8, y, "D-DOOR (DIG A HOLE IN THE FLOOR)", 8); y += fh;
+    video_draw_text(v, 8, y, "D-GO DOWN LADDER OR DIG HOLE", 8); y += fh;
     video_draw_text(v, 8, y, "E-EXPERIENCE NEEDED TO GAIN LEVEL", 8); y += fh;
     video_draw_text(v, 8, y, "F-FIGHT A MONSTER", 8); y += fh;
     video_draw_text(v, 8, y, "H-THIS HELP SCREEN", 8); y += fh;
@@ -2206,6 +3459,8 @@ static void cmd_help(Game *g) {
     video_draw_text(v, 8, y, "O-TOGGLE SOUND ON AND OFF", 8); y += fh;
     video_draw_text(v, 8, y, "P-VIEW CONTENTS OF POCKETS", 8); y += fh;
     video_draw_text(v, 8, y, "Q-QUIT AND SAVE GAME", 8); y += fh;
+    video_draw_text(v, 8, y, "J-BEASTIARY (MONSTER JOURNAL)", 8); y += fh;
+    video_draw_text(v, 8, y, "S-SAVE AND CONTINUE PLAYING", 8); y += fh;
     video_draw_text(v, 8, y, "T-WAIT (SKIP A TURN)", 8); y += fh;
     video_draw_text(v, 8, y, "V-VIEW STATS", 8); y += fh;
     video_draw_text(v, 8, y, "W-WEAPONS (SELECT TYPE)", 8); y += fh;
@@ -2213,16 +3468,16 @@ static void cmd_help(Game *g) {
     video_draw_text(v, 8, y, "Z-ZOOM (TOGGLE MAP SIZE)", 8); y += fh;
     y += 4;
     video_draw_text(v, 8, y, "ARROWS-MOVE AND TURN", 8); y += fh;
-    video_draw_text(v, 8, y, "1,2-SWITCH ACTIVE PLAYER", 8); y += fh;
+    video_draw_text(v, 8, y, "1,2-SHOW SPELL EFFECT PAGES", 8); y += fh;
 
     video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
     video_present(v);
-    input_getch(&g->input);
+    input_wait_any_key(&g->input);
 }
 
 /* ── Command: Expand Map (dungeon map viewer) ── */
 
-static void cmd_expand_map(Game *g) {
+static void draw_expanded_map_frame(Game *g) {
     Video *v = &g->video;
     int cs = 5;
     int ox = 8, oy = 20;
@@ -2247,13 +3502,70 @@ static void cmd_expand_map(Game *g) {
             if (w != 3) video_vline(v, px, py, cs, w == 1 ? 4 : 15);
             if (e != 3) video_vline(v, px + cs - 1, py, cs, e == 1 ? 4 : 15);
 
-            if (x == g->cur_x && y == g->cur_y) {
-                video_fill_rect(v, px + 1, py + 1, cs - 3, cs - 3, 15);
+            int shop = game_shop_type(g, x, y);
+            int ladder = game_ladder_delta(g, x, y);
+            int trap = game_trapdoor_floor(g, x, y);
+            if (shop) {
+                video_fill_rect(v, px + 1, py + 1, cs - 2, cs - 2,
+                                (u8)(shop + 2));
+            } else if (ladder < 0) {
+                for (int p = 1; p < cs - 1; p++)
+                    video_put_pixel(v, px + p, py + cs - 1 - p, 4);
+            } else if (ladder > 0) {
+                for (int p = 1; p < cs - 1; p++)
+                    video_put_pixel(v, px + p, py + p, 47);
+            } else if (trap >= 0) {
+                for (int p = 1; p < cs - 1; p++) {
+                    video_put_pixel(v, px + p, py + p, 4);
+                    video_put_pixel(v, px + cs - 1 - p, py + p, 4);
+                }
+            } else if (g->cur_floor > 0 && pit_bit_is_set(g, x, y) &&
+                       pitfall_target(g, x, y) != g->cur_floor) {
+                video_fill_rect(v, px + 1, py + 1, cs - 2, cs - 2, 3);
+            }
+
+            if (x == g->cur_x && y == g->cur_y &&
+                g->map_player_visible) {
+                video_fill_rect(v, px + 1, py + 1, 3, 3, 15);
+                video_put_pixel(v, px + 2, py + 2, 6);
             }
         }
     }
-    video_present(v);
-    input_getch(&g->input);
+
+    int lx = 430;
+    int ly = 30;
+    int step = v->font_char_h + 5;
+    video_draw_text(v, lx, ly, "MAP KEY", 15); ly += step * 2;
+    video_draw_text(v, lx, ly, "STORE LADDER", 3); ly += step;
+    video_draw_text(v, lx, ly, "TEMPLE LADDER", 4); ly += step;
+    video_draw_text(v, lx, ly, "BANK LADDER", 5); ly += step;
+    video_draw_text(v, lx, ly, "INN LADDER", 6); ly += step;
+    video_draw_text(v, lx, ly, "WILDERNESS EXIT", 7); ly += step * 2;
+    video_draw_text(v, lx, ly, "YELLOW /: UP", 4); ly += step;
+    video_draw_text(v, lx, ly, "CYAN \\: DOWN", 47); ly += step;
+    video_draw_text(v, lx, ly, "ORANGE X: TRAPDOOR", 4); ly += step;
+    video_draw_text(v, lx, ly, "MAGENTA BOX: USED PIT", 3);
+}
+
+static void cmd_expand_map(Game *g) {
+    u32 next_blink = SDL_GetTicks() + 350;
+    g->map_player_visible = 1;
+    draw_expanded_map_frame(g);
+    video_present(&g->video);
+
+    while (!input_poll_quit(&g->input) && !input_kbhit(&g->input)) {
+        u32 now = SDL_GetTicks();
+        if (SDL_TICKS_PASSED(now, next_blink)) {
+            g->map_player_visible = !g->map_player_visible;
+            next_blink = now + 350;
+            draw_expanded_map_frame(g);
+            video_present(&g->video);
+        }
+        SDL_Delay(10);
+    }
+    if (!input_poll_quit(&g->input))
+        input_wait_any_key(&g->input);
+    g->map_player_visible = 1;
 }
 
 /* ── Spells in effect display (keys '1' and '2', matches func_0C031) ── */
@@ -2286,10 +3598,16 @@ static void cmd_spells_in_effect(Game *g, Character *p, int page) {
         video_draw_text(v, 8, y, line, p->eff_fast_move > 0 ? 15 : 8); y += fh;
         snprintf(line, sizeof(line), "PROTECTION:      %d (LV %d)", p->eff_protect_turns, p->eff_protect_lv);
         video_draw_text(v, 8, y, line, p->eff_protect_turns > 0 ? 15 : 8); y += fh;
+        snprintf(line, sizeof(line), "BATTLE STRENGTH: %d", p->eff_battle_str);
+        video_draw_text(v, 8, y, line, p->eff_battle_str > 0 ? 15 : 8); y += fh;
+        snprintf(line, sizeof(line), "BATTLE SPEED:    %d", p->eff_battle_spd);
+        video_draw_text(v, 8, y, line, p->eff_battle_spd > 0 ? 15 : 8); y += fh;
+        snprintf(line, sizeof(line), "SLOW MONSTER:    %d", p->eff_slow_mon);
+        video_draw_text(v, 8, y, line, p->eff_slow_mon > 0 ? 15 : 8); y += fh;
     } else {
-        snprintf(line, sizeof(line), "DISEASE:         %s", p->diseased_turns > 0 ? "DISEASED" : "HEALTHY");
+        snprintf(line, sizeof(line), "DISEASE:         %d", p->diseased_turns);
         video_draw_text(v, 8, y, line, p->diseased_turns > 0 ? 6 : 15); y += fh;
-        snprintf(line, sizeof(line), "POISON:          %s", p->poisoned_turns > 0 ? "POISONED" : "CLEAN");
+        snprintf(line, sizeof(line), "POISON:          %d", p->poisoned_turns);
         video_draw_text(v, 8, y, line, p->poisoned_turns > 0 ? 6 : 15); y += fh;
         snprintf(line, sizeof(line), "RESIST POISON:   %d", p->eff_resist_poison);
         video_draw_text(v, 8, y, line, p->eff_resist_poison > 0 ? 15 : 8); y += fh;
@@ -2303,12 +3621,16 @@ static void cmd_spells_in_effect(Game *g, Character *p, int page) {
         video_draw_text(v, 8, y, line, p->eff_resist_drain > 0 ? 15 : 8); y += fh;
         snprintf(line, sizeof(line), "POWER WEAPON:    %d (%d TURNS)", p->eff_pwr_weapon, p->eff_pwr_wpn_turns);
         video_draw_text(v, 8, y, line, p->eff_pwr_weapon > 0 ? 15 : 8); y += fh;
+        snprintf(line, sizeof(line), "HOLD MONSTER:    %d", p->eff_hold_monster);
+        video_draw_text(v, 8, y, line, p->eff_hold_monster > 0 ? 15 : 8); y += fh;
+        snprintf(line, sizeof(line), "STOP MONSTER:    %d", p->eff_stop_monster);
+        video_draw_text(v, 8, y, line, p->eff_stop_monster > 0 ? 15 : 8); y += fh;
     }
 
     y += fh;
     video_draw_text(v, 8, y, "PRESS ANY KEY...", 7);
     video_present(v);
-    input_getch(&g->input);
+    input_wait_any_key(&g->input);
 }
 
 /* ── Player selection screen ── */
@@ -2317,27 +3639,41 @@ static int player_select_screen(Game *g) {
     Video *v = &g->video;
 
     video_clear(v, 0);
-    video_draw_text(v, 16, 16, "PLEASE SELECT A PLAYER:", 15);
-    video_draw_text(v, 16, 40, "NUM  NAME                 SEX     RACE        CLASS", 14);
+    video_draw_text(v, SX(0), SY(0), "PLEASE SELECT A PLAYER:", 4);
+    video_draw_text(v, SX(0), SY(100),
+                    "NUMBER     NAME    SEX   RACE       CLASS", 5);
 
-    char line[80];
+    char line[96];
     for (int i = 0; i < MAX_PLAYERS; i++) {
-        int y = 64 + i * (v->font_char_h + 4);
         if (g->char_exists[i]) {
             Character *ch = &g->chars[i];
-            const char *sex_str = (ch->sex == 0) ? "MALE  " : "FEMALE";
             const char *race_str = (ch->race < RACE_COUNT) ? race_names[ch->race] : "???";
             const char *class_str = (ch->class_id < CLASS_COUNT) ? class_names[ch->class_id] : "???";
-            snprintf(line, sizeof(line), " %d)  %-20.20s %s  %-11s %s",
-                     i, ch->name, sex_str, race_str, class_str);
+            /* WORLD right-aligns the name, race and class by copying them
+               over fixed runs of 13, 7 and 10 spaces. */
+            memset(line, ' ', 41);
+            line[41] = 0;
+            line[0] = (char)('0' + i);
+            line[1] = ')';
+            size_t full_name = 0;
+            while (full_name < sizeof(ch->name) && ch->name[full_name]) full_name++;
+            size_t n = full_name;
+            if (n > 13) n = 13; /* Avoid reproducing the DOS buffer underflow. */
+            memcpy(line + 15 - n, ch->name + full_name - n, n);
+            if (ch->sex) memcpy(line + 15, " FEMALE", 7);
+            else memcpy(line + 15, "  MALE ", 7);
+            n = strlen(race_str); if (n > 7) n = 7;
+            memcpy(line + 29 - n, race_str, n);
+            n = strlen(class_str); if (n > 10) n = 10;
+            memcpy(line + 41 - n, class_str, n);
+            video_draw_text(v, SX(0), SY(155 + 55 * i), line, 6);
         } else {
-            snprintf(line, sizeof(line), " %d)  SELECT TO CREATE A NEW CHARACTER", i);
+            snprintf(line, sizeof(line), "%d) SELECT TO CREATE A NEW CHARACTER", i);
+            video_draw_text(v, SX(0), SY(165 + 55 * i), line, 14);
         }
-        video_draw_text(v, 16, y, line, g->char_exists[i] ? 7 : 8);
     }
 
-    video_draw_text(v, 16, 64 + MAX_PLAYERS * (v->font_char_h + 4) + 16,
-                    "SELECT PLAYER (0-9):", 15);
+    video_draw_text(v, SX(0), SY(1100), "HIT ESCAPE TO QUIT", 5);
     video_present(v);
 
     while (1) {
@@ -2348,6 +3684,428 @@ static int player_select_screen(Game *g) {
         }
         if (key == 0x1B) return -1;
     }
+}
+
+/* ── Original character roller (ROLL.TXT / WORLD.ASM far_19115) ── */
+
+#define CREATION_TEXT_LINES 40
+#define MW_AGE_YEAR_UNITS   0x80520u /* 525,600 minutes per year */
+
+typedef struct {
+    char line[CREATION_TEXT_LINES][96];
+    int count;
+} CreationText;
+
+typedef struct {
+    u16 height;
+    u16 weight;
+    u16 lifespan;
+} RaceBodyBase;
+
+static const u8 race_stat_base[RACE_COUNT][6] = {
+    /* STR INT WIS CON AGI LUCK; the original roller adds 60 points. */
+    {12,12,12,12,12,12}, /* Human */
+    { 8,13,12, 9,13,11}, /* Elf */
+    {14, 7, 9,15,13, 8}, /* Dwarf */
+    { 9, 8, 8,13,16,13}, /* Hobbit */
+    { 6,14,12, 9,14,11}, /* Gnome */
+    {17, 5, 6,15, 7,10}, /* Ogre */
+    { 4,15, 9, 6,15,18}, /* Sprite */
+    { 4,18,16,10, 7,11}, /* Imp */
+};
+
+/* Height, weight and lifespan are the final six bytes of each fourteen-byte
+ * race record at DS:0150 in WORLD.EXE. */
+static const RaceBodyBase race_body_base[RACE_COUNT] = {
+    { 70, 130,  65}, { 54,  80, 190}, { 48, 100, 130}, { 42,  60,  70},
+    { 38,  60, 130}, {100, 400,  54}, { 24,  20, 150}, { 78, 100, 230}
+};
+
+static int creation_rand_scaled(Game *g, int range) {
+    if (range <= 0) return 0;
+    return (int)(((u32)game_rand(g) * (u32)range) / 0x8000u);
+}
+
+static void roll_character_stats(Game *g, int race, u16 stats[6]) {
+    for (int i = 0; i < 6; i++) stats[i] = race_stat_base[race][i];
+    for (int point = 0; point < 60; point++)
+        stats[creation_rand_scaled(g, 6)]++;
+}
+
+static void roll_character_profile(Game *g, int race, int *sex,
+                                   u16 *height, u16 *weight, u32 *age,
+                                   u16 stats[6]) {
+    const RaceBodyBase *body = &race_body_base[race];
+    int years = ((int)body->lifespan * (25 + creation_rand_scaled(g, 10))) / 100;
+    *age = (u32)years * MW_AGE_YEAR_UNITS;
+    *weight = (u16)((int)body->weight + creation_rand_scaled(g, body->weight / 5)
+                    - body->weight / 10);
+    *height = (u16)((int)body->height + creation_rand_scaled(g, body->height / 5)
+                    - body->height / 10);
+    *sex = creation_rand_scaled(g, 2);
+    roll_character_stats(g, race, stats);
+}
+
+static int load_creation_text(Game *g, CreationText *text) {
+    char path[260];
+    game_make_path(g, path, sizeof(path), "ROLL.TXT");
+    FILE *f = fopen(path, "rt");
+    if (!f) {
+        game_make_path(g, path, sizeof(path), "roll.txt");
+        f = fopen(path, "rt");
+    }
+    memset(text, 0, sizeof(*text));
+    if (!f) return 0;
+    while (text->count < CREATION_TEXT_LINES &&
+           fgets(text->line[text->count], sizeof(text->line[0]), f)) {
+        char *line = text->line[text->count];
+        line[strcspn(line, "\r\n")] = 0;
+        text->count++;
+    }
+    fclose(f);
+    return text->count >= CREATION_TEXT_LINES;
+}
+
+static void creation_draw(Game *g, int x, int y, const char *line, u8 color) {
+    video_draw_text(&g->video, SX(x), SY(y), line, color);
+}
+
+/* WORLD's far_277E7 distributes glyphs between two logical X coordinates.
+ * Its name editor uses the same operation with eighteen fixed character
+ * positions, while ordinary fitted text uses the string length. */
+static void creation_draw_distributed(Game *g, int x0, int x1, int y,
+                                      const char *line, int positions,
+                                      u8 color, int sn, int sd) {
+    int length = line ? (int)strlen(line) : 0;
+    if (length <= 0 || positions <= 0) return;
+    for (int i = 0; i < length; i++) {
+        int x = x0 + (x1 - x0) * i / positions;
+        video_draw_char_scaled(&g->video, SX(x), SY(y), line[i],
+                               color, sn, sd);
+    }
+}
+
+static void creation_draw_fitted(Game *g, int x0, int x1, int y,
+                                 const char *line, u8 color, int sn, int sd) {
+    creation_draw_distributed(g, x0, x1, y, line,
+                              line ? (int)strlen(line) : 0,
+                              color, sn, sd);
+}
+
+static int creation_key(Game *g) {
+    int key = input_getch(&g->input);
+    if (key == 0) {
+        (void)input_getch(&g->input);
+        return 0;
+    }
+    if (key >= 'a' && key <= 'z') key -= 'a' - 'A';
+    return key;
+}
+
+static int show_creation_intro(Game *g, const CreationText *text) {
+    static const int y[12] = {0,120,220,320,420,520,620,720,820,920,1020,1150};
+    static const u8 color[12] = {3,5,5,5,5,5,5,5,8,8,8,4};
+    video_clear(&g->video, 0);
+    for (int i = 0; i < 12; i++) creation_draw(g, 0, y[i], text->line[i], color[i]);
+    video_present(&g->video);
+    input_wait_any_key(&g->input);
+    return !input_poll_quit(&g->input);
+}
+
+static int select_character_race(Game *g, const CreationText *text) {
+    static const int y[12] = {0,100,150,220,320,420,520,620,720,820,920,1020};
+    static const u8 color[12] = {3,4,4,5,8,8,8,8,8,8,8,8};
+    video_clear(&g->video, 0);
+    for (int i = 0; i < 12; i++) creation_draw(g, 0, y[i], text->line[12 + i], color[i]);
+    video_present(&g->video);
+    for (;;) {
+        int key = creation_key(g);
+        if (input_poll_quit(&g->input) || key == 0x1B) return -1;
+        if (key >= '1' && key <= '8') return key - '1';
+    }
+}
+
+static void draw_character_card(Game *g, int race, int sex,
+                                const u16 stats[6], u16 height, u16 weight,
+                                u32 age, int show_choices) {
+    static const char *const labels[6] = {
+        "STRENGTH:", "INTELLIGENCE:", "WISDOM:",
+        "CONSTITUTION:", "AGILITY:", "LUCK:"
+    };
+    char line[96];
+    video_clear(&g->video, 0);
+    creation_draw(g, 0, 0, "RACE:", 5);
+    creation_draw(g, 330, 0, race_names[race], 5);
+    creation_draw(g, sex ? 750 : 900, 0,
+                  sex ? "SEX: FEMALE" : "SEX: MALE", 15);
+    for (int i = 0; i < 6; i++) {
+        creation_draw(g, 0, 100 + i * 60, labels[i], 6);
+        snprintf(line, sizeof(line), "%u", stats[i]);
+        creation_draw(g, 530, 100 + i * 60, line, 6);
+    }
+    creation_draw(g, 750, 100, "HEIGHT:      INCHES", 8);
+    snprintf(line, sizeof(line), "%u", height);
+    creation_draw(g, 1080, 100, line, 8);
+    creation_draw(g, 750, 170, "WEIGHT:      POUNDS", 8);
+    snprintf(line, sizeof(line), "%u", weight);
+    creation_draw(g, 1080, 170, line, 8);
+    creation_draw(g, 750, 240, "AGE:         YEARS", 8);
+    snprintf(line, sizeof(line), "%u", (unsigned)(age / MW_AGE_YEAR_UNITS));
+    creation_draw(g, 1080, 240, line, 8);
+    if (show_choices) {
+        creation_draw(g, 190, 700, "Y) KEEP THIS CHARACTER", 4);
+        creation_draw(g, 190, 770, "N) ROLL A NEW CHARACTER", 4);
+        creation_draw(g, 190, 840, "D) DESIGN YOUR OWN CHARACTER", 4);
+        creation_draw(g, 190, 1100, "PLEASE SELECT ONE OF THE ABOVE", 4);
+    }
+}
+
+static int design_character_stats(Game *g, int race, int sex, u16 stats[6],
+                                  u16 height, u16 weight, u32 age) {
+    u16 rolled[6];
+    memcpy(rolled, stats, sizeof(rolled));
+    for (int i = 0; i < 6; i++) stats[i] -= 4;
+    int left = 24;
+    while (left > 0 && !input_poll_quit(&g->input)) {
+        char line[96];
+        draw_character_card(g, race, sex, stats, height, weight, age, 0);
+        creation_draw(g, 150, 550, "ESC-CANCEL THIS CHARACTER", 4);
+        creation_draw(g, 0, 700, "YOU MAY ASSIGN 24 ADDITIONAL POINTS", 3);
+        creation_draw(g, 200, 770, "TO THE ABOVE CHARACTERISTICS.", 3);
+        snprintf(line, sizeof(line), "CHARACTERISTIC POINTS LEFT: %d", left);
+        creation_draw(g, 0, 840, line, 6);
+        creation_draw(g, 0, 930, "PRESS 'S', 'I', 'W', 'C', 'D', OR 'L' FOR", 4);
+        creation_draw(g, 120, 1000, "STRENGTH, INTELLIGENCE, WIZDOM", 4);
+        creation_draw(g, 120, 1070, "CONSTITUTION, AGILITY OR LUCK", 4);
+        video_present(&g->video);
+        int key = creation_key(g);
+        int which = -1;
+        if (key == 0x1B) {
+            memcpy(stats, rolled, sizeof(rolled));
+            return 0;
+        }
+        if (key == 'S') which = 0;
+        else if (key == 'I') which = 1;
+        else if (key == 'W') which = 2;
+        else if (key == 'C') which = 3;
+        else if (key == 'A' || key == 'D') which = 4;
+        else if (key == 'L') which = 5;
+        if (which >= 0) { stats[which]++; left--; }
+    }
+    return left == 0;
+}
+
+static int read_character_name(Game *g, int race, int sex, const u16 stats[6],
+                               u16 height, u16 weight, u32 age, char name[20]) {
+    int used = 0;
+    name[0] = 0;
+    for (;;) {
+        draw_character_card(g, race, sex, stats, height, weight, age, 0);
+        video_fill_rect(&g->video, 0, SY(530), LOGICAL_W, LOGICAL_H - SY(530), 0);
+        creation_draw(g, 0, 700, "PLEASE TYPE YOUR NAME:", 7);
+        if (used)
+            creation_draw_distributed(g, 0, 1100, 1000, name, 18, 4, 1, 1);
+        video_present(&g->video);
+        int key = input_getch(&g->input);
+        if (input_poll_quit(&g->input) || key == 0x1B) return 0;
+        if (key == '\r' || key == '\n') {
+            if (used) return 1;
+        } else if (key == 8) {
+            if (used) name[--used] = 0;
+        } else if (key >= 32 && key <= 126 && used < 18) {
+            name[used++] = (char)key;
+            name[used] = 0;
+        } else if (key == 0) {
+            (void)input_getch(&g->input);
+        }
+    }
+}
+
+static int select_character_class(Game *g, const CreationText *text, const char *name) {
+    static const int x0[16] = {
+        0,0,90,0,90,0,90,0,90,0,90,0,90,90,0,90
+    };
+    static const int y[16] = {
+        480,550,590,640,680,730,770,820,860,910,950,1000,1040,1080,1125,1165
+    };
+    static const u8 color[16] = {2,3,3,4,4,5,5,6,6,8,8,7,7,7,2,2};
+    video_fill_rect(&g->video, 0, SY(670), LOGICAL_W, LOGICAL_H - SY(670), 0);
+    creation_draw_fitted(g, 700, 880, 310, "NAME:", 8, 1, 1);
+    creation_draw_fitted(g, 910, 910 + (int)strlen(name) * 36, 310,
+                         name, 8, 1, 1);
+    for (int i = 0; i < 16; i++) {
+        /* The heading uses font 1; the explanatory rows use the smaller
+           font 0 in the DOS executable. */
+        int sn = i == 0 ? 1 : 3;
+        int sd = i == 0 ? 1 : 4;
+        creation_draw_fitted(g, x0[i], i == 0 ? 1500 : 1600, y[i],
+                             text->line[24 + i], color[i], sn, sd);
+    }
+    video_present(&g->video);
+    for (;;) {
+        int key = creation_key(g);
+        if (input_poll_quit(&g->input) || key == 0x1B) return -1;
+        if (key >= '1' && key <= '7') return key - '1';
+    }
+}
+
+static float starting_spell_points(const Character *p) {
+    int intelligence = p->stat_int, wisdom = p->stat_wis;
+    switch (p->class_id) {
+    case CLASS_FIGHTER: return 0.0f;
+    case CLASS_WORSHIPPER: return (float)((wisdom * 2 + intelligence) / 4);
+    case CLASS_MONK: return (float)((wisdom + intelligence) / 17 + 1);
+    case CLASS_WIZARD: return (float)((intelligence * 2 + wisdom) / 7);
+    case CLASS_PRIEST: return (float)((wisdom * 2 + intelligence) / 8);
+    case CLASS_SAGE: return (float)((wisdom + intelligence) / 18);
+    default: return (float)((intelligence * 2 + wisdom) / 12);
+    }
+}
+
+static void grant_starting_spells(Character *p) {
+    if (p->class_id == CLASS_MONK) {
+        memset(p->spells, 1, sizeof(p->spells));
+        return;
+    }
+    if (p->class_id == CLASS_FIGHTER) return;
+    p->spells[SPELL_CAT_PREPARATION][2] = 1; /* Little Cure */
+    if (p->class_id == CLASS_WIZARD || p->class_id == CLASS_SAGE ||
+        p->class_id == CLASS_MAGE)
+        p->spells[SPELL_CAT_WIZARD][1] = 1; /* Magic Zap */
+    if (p->class_id == CLASS_WORSHIPPER || p->class_id == CLASS_PRIEST ||
+        p->class_id == CLASS_SAGE)
+        p->spells[SPELL_CAT_PRIEST][2] = 1; /* Strength */
+}
+
+static int character_creation_self_test(void) {
+    int failures = 0;
+    static Game g;
+    memset(&g, 0, sizeof(g));
+    game_srand(&g, 0x19115u);
+
+    for (int race = 0; race < RACE_COUNT; race++) {
+        const RaceBodyBase *body = &race_body_base[race];
+        int min_height = body->height - body->height / 10;
+        int max_height = body->height + body->height / 5 - 1 - body->height / 10;
+        int min_weight = body->weight - body->weight / 10;
+        int max_weight = body->weight + body->weight / 5 - 1 - body->weight / 10;
+        int min_years = body->lifespan * 25 / 100;
+        int max_years = body->lifespan * 34 / 100;
+        for (int roll = 0; roll < 64; roll++) {
+            int sex;
+            u16 height, weight, stats[6];
+            u32 age;
+            roll_character_profile(&g, race, &sex, &height, &weight, &age, stats);
+            int bonus = 0;
+            for (int i = 0; i < 6; i++)
+                bonus += (int)stats[i] - race_stat_base[race][i];
+            int years = (int)(age / MW_AGE_YEAR_UNITS);
+            if (bonus != 60 || sex < 0 || sex > 1 ||
+                age % MW_AGE_YEAR_UNITS != 0 ||
+                height < min_height || height > max_height ||
+                weight < min_weight || weight > max_weight ||
+                years < min_years || years > max_years) {
+                failures++;
+                break;
+            }
+        }
+    }
+
+    static const int expected_spells[CLASS_COUNT] = {0, 2, 180, 2, 2, 3, 2};
+    for (int class_id = 0; class_id < CLASS_COUNT; class_id++) {
+        Character p = {0};
+        p.class_id = (u8)class_id;
+        grant_starting_spells(&p);
+        int known = 0;
+        for (int category = 0; category < 4; category++)
+            for (int spell = 0; spell < SPELLS_PER_TYPE; spell++)
+                known += p.spells[category][spell] != 0;
+        if (known != expected_spells[class_id]) failures++;
+    }
+    return failures;
+}
+
+static int create_character(Game *g, Character *p) {
+    CreationText text;
+    if (!load_creation_text(g, &text)) {
+        video_clear(&g->video, 0);
+        creation_draw(g, 0, 0,
+                      "I CAN'T FIND THE FILE ROLL.TXT. TRY TO FIND A COMPLETE COPY.", 4);
+        video_present(&g->video);
+        input_wait_any_key(&g->input);
+        return 0;
+    }
+    if (!show_creation_intro(g, &text)) return 0;
+    int race = select_character_race(g, &text);
+    if (race < 0) return 0;
+    int sex;
+    u16 height, weight;
+    u32 age;
+    u16 stats[6];
+    roll_character_profile(g, race, &sex, &height, &weight, &age, stats);
+    for (;;) {
+        draw_character_card(g, race, sex, stats, height, weight, age, 1);
+        video_present(&g->video);
+        int key = creation_key(g);
+        if (key == 'Y') break;
+        if (key == 'N')
+            roll_character_profile(g, race, &sex, &height, &weight, &age, stats);
+        else if (key == 'D') {
+            if (design_character_stats(g, race, sex, stats, height, weight, age)) break;
+        }
+        else if (key == 0x1B || input_poll_quit(&g->input)) return 0;
+    }
+
+    char name[20];
+    if (!read_character_name(g, race, sex, stats, height, weight, age, name)) return 0;
+    int class_id = select_character_class(g, &text, name);
+    if (class_id < 0) return 0;
+
+    memset(p, 0, sizeof(*p));
+    memcpy(p->name, name, strlen(name) + 1);
+    p->race = (u8)race;
+    p->sex = (u8)sex;
+    p->class_id = (u8)class_id;
+    p->stat_str = stats[0]; p->stat_int = stats[1]; p->stat_wis = stats[2];
+    p->stat_con = stats[3]; p->stat_agi = stats[4]; p->stat_luck = stats[5];
+    p->height_inches = height;
+    p->weight_pounds = weight;
+    p->hp_max = p->hp_cur = (u16)(p->stat_con + p->stat_luck);
+    p->sp_max = p->sp_cur = starting_spell_points(p);
+    p->level = 0;
+    p->experience = 0.0;
+    p->age = age;
+    p->weapon_inventory[0] = 1;
+    p->armor_inventory[0] = 1;
+    p->jewels_pocket = (u32)(creation_rand_scaled(g, p->stat_luck * 2) +
+                              p->stat_luck * 2);
+    p->x_pos = 0x38;
+    p->y_pos = 0x3C;
+    p->floor_depth = 0;
+    p->_pad_7B4[0] = 8;
+    p->_pad_7B4[1] = 11;
+    p->_pad_7F8[0] = 0x62; p->_pad_7F8[1] = 0x08;
+    p->_pad_7F8[2] = 0x97; p->_pad_7F8[3] = 0x05;
+    p->raise_floor = 0;
+    p->raise_x = 0x38;
+    p->raise_y = 0x3C;
+    p->_pad_80A[0] = 0x2C;
+    p->_pad_80A[1] = 0x01;
+    grant_starting_spells(p);
+
+    draw_character_card(g, race, sex, stats, height, weight, age, 0);
+    creation_draw_fitted(g, 700, 880, 310, "NAME:", 8, 1, 1);
+    creation_draw_fitted(g, 910, 910 + (int)strlen(name) * 36, 310,
+                         name, 8, 1, 1);
+    creation_draw_fitted(g, 700, 920, 380, "CLASS:", 8, 1, 1);
+    creation_draw(g, 980, 380, class_names[class_id], 8);
+    char summary[96];
+    snprintf(summary, sizeof(summary), "SPELL POINTS: %.0f    HEALTH POINTS: %u",
+             p->sp_max, p->hp_max);
+    creation_draw(g, 0, 460, summary, 4);
+    video_present(&g->video);
+    input_wait_any_key(&g->input);
+    return 1;
 }
 
 /* ── Find a valid starting position ── */
@@ -2370,53 +4128,47 @@ static void find_start_pos(Game *g) {
 
 /* ── Monster encounter check ── */
 
+static void record_bestiary_kill(Game *g, int monster_type) {
+    if (monster_type < 0 || monster_type >= MONSTER_TYPE_COUNT) return;
+    if (g->bestiary_kills[monster_type] != UINT32_MAX)
+        g->bestiary_kills[monster_type]++;
+    g->bestiary_dirty = 1;
+    /* A crash after the reward screen must not erase a first discovery. */
+    game_save_bestiary(g);
+}
+
 static void fight_monster(Game *g, Character *player, int index) {
     if (index < 0) return;
     CombatState cs;
     combat_init_entity(g, &cs, index);
     combat_run(g, &cs, player);
-    if (cs.monster_hp <= 0 || cs.fled)
+    if (cs.monster_hp <= 0) {
+        record_bestiary_kill(g, cs.monster_type_idx);
         game_kill_monster(g, index);
-    else
+        grant_battle_rewards(g, player, &cs);
+    } else if (cs.fled) {
+        game_kill_monster(g, index);
+    } else {
         game_set_monster_hp(g, index, cs.monster_hp);
+    }
     g->monster_adjacent = game_find_adjacent_monster(g) >= 0;
 }
 
 /* ── Cast spell from exploration (handles battle vs prep) ── */
 
-static void cmd_cast_spell(Game *g, Character *player) {
-    Video *v = &g->video;
-    int fh = v->font_char_h + 2;
-
-    video_clear(v, 0);
-    video_draw_text(v, 8, 4, "CAST WHICH TYPE OF SPELL?", 14);
-    video_draw_text(v, 8, 4 + fh * 2, "1) PREPARATION SPELL", 7);
-    video_draw_text(v, 8, 4 + fh * 3, "2) WIZARD BATTLE SPELL (COMBAT ONLY)", 8);
-    video_draw_text(v, 8, 4 + fh * 4, "3) PRIEST BATTLE SPELL (COMBAT ONLY)", 8);
-    video_draw_text(v, 8, 4 + fh * 6, "ESC TO CANCEL", 8);
-    video_present(v);
-
-    int key = input_getch(&g->input);
-    if (key == '1') {
-        cmd_cast_prep_spell(g, player);
-    } else if (key == '2' || key == '3') {
-        video_clear(v, 0);
-        video_draw_text(v, 8, 4, "BATTLE SPELLS CAN ONLY BE CAST IN COMBAT!", 12);
-        video_draw_text(v, 8, 4 + fh, "ENGAGE A MONSTER FIRST (PRESS F TO FIGHT).", 7);
-        video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
-        video_present(v);
-        input_getch(&g->input);
-    }
+static int cmd_cast_spell(Game *g, Character *player) {
+    return cmd_cast_spell_menu(g, player, NULL);
 }
 
 /* ── Main game loop ── */
 
-void game_draw_exploration(Game *g, Character *player) {
+static void game_draw_exploration_base(Game *g, Character *player) {
     video_clear(&g->video, 0);
     draw_4way_view(g);
     draw_minimap(g, 0, SY(0x1AE), SX(0x11B), 38 * 10);
     draw_command_menu(g);
     draw_status_bar(g, player);
+    draw_trapdoor_notice(g, player);
 }
 
 /* Draw a line into the original upper-left combat message window.  The DOS
@@ -2451,6 +4203,50 @@ static int draw_combat_message(Video *v, int y, int bottom,
     return y;
 }
 
+static void draw_trapdoor_notice(Game *g, Character *player) {
+    int target = game_trapdoor_floor(g, g->cur_x, g->cur_y);
+    if (target < 0) return;
+
+    const int message_w = SX(0x2D3);
+    const int message_bottom = SY(0x1AE);
+    char line[64];
+    int y = 0;
+    int key_index = target / 10;
+    int has_key = key_index > 0 && key_index < 18 &&
+                  player->trapdoor_keys[key_index] != 0;
+
+    video_fill_rect(&g->video, 0, 0, message_w, message_bottom, 0);
+    y = draw_combat_message(&g->video, y, message_bottom,
+                            "YOU HAVE FOUND A TRAP DOOR", 12);
+    snprintf(line, sizeof(line), "WITH A KEYHOLE LABELED %d.", target);
+    y = draw_combat_message(&g->video, y, message_bottom, line, 12);
+    if (has_key) {
+        y = draw_combat_message(&g->video, y, message_bottom,
+                                "TO USE THE KEY YOU FOUND", 15);
+        y = draw_combat_message(&g->video, y, message_bottom,
+                                "EARLIER, HIT 'K' TO USE", 15);
+        draw_combat_message(&g->video, y, message_bottom, "DOOR...", 15);
+    } else {
+        y = draw_combat_message(&g->video, y, message_bottom,
+                                "UNFORTUNATELY, YOU DO NOT HAVE THE CORRECT KEY.", 15);
+        y = draw_combat_message(&g->video, y, message_bottom,
+                                "THIS KEY CAN ONLY BE FOUND BY KILLING A LEVEL DRAINER", 15);
+        draw_combat_message(&g->video, y, message_bottom,
+                            "NEAR THE LEVEL THIS TRAP DOOR LEADS TO.", 15);
+    }
+}
+
+void game_draw_exploration(Game *g, Character *player) {
+    int adjacent = game_find_adjacent_monster(g);
+    if (adjacent >= 0 && g->monster_layer >= 0) {
+        MonsterRecord *m = &g->monster_map[g->monster_layer][adjacent];
+        game_draw_combat_overlay(g, player, adjacent, m->type, m->level,
+                                 game_monster_hp(g, adjacent), "", "", "");
+        return;
+    }
+    game_draw_exploration_base(g, player);
+}
+
 /* Original combat never changes to a separate full-screen scene.  The normal
  * four-view exploration frame stays in place, the engaged monster grows in
  * its compass pane, and messages occupy the otherwise-black upper-left pane. */
@@ -2469,7 +4265,8 @@ void game_draw_combat_overlay(Game *g, Character *player,
     MonsterRecord *engaged = NULL;
 
     if (dir < 0 || dir > 3) dir = 0;
-    if (g->monster_map_loaded && entity_index >= 0 &&
+    if (g->monster_map_loaded && g->monster_layer >= 0 &&
+        entity_index >= 0 &&
         entity_index < MONSTERS_PER_FLOOR) {
         engaged = &g->monster_map[g->monster_layer][entity_index];
         int dx = (int)engaged->x - g->cur_x;
@@ -2487,7 +4284,7 @@ void game_draw_combat_overlay(Game *g, Character *player,
         engaged->y = 100;
     }
 
-    game_draw_exploration(g, player);
+    game_draw_exploration_base(g, player);
     if (engaged) *engaged = saved;
 
     const ViewRect *vr = pane[dir];
@@ -2497,7 +4294,8 @@ void game_draw_combat_overlay(Game *g, Character *player,
         int sprite_h = vr->h * 17 / 20;
         int top = vr->y + vr->h - sprite_h - 2;
         draw_pic_billboard(g, pic, vr->x + vr->w / 2, top, sprite_h,
-                           0.20f, vr->x, vr->y, vr->w, vr->h, NULL);
+                           0.20f, vr->x, vr->y, vr->w, vr->h, NULL,
+                           get_monster_color_ext(monster_type));
     }
 
     /* LEV/HP strip belongs to the active viewport, not to a separate UI. */
@@ -2539,50 +4337,39 @@ void game_run(Game *g) {
     video_draw_text(v, 130, 140, "Native Port - Work In Progress", 7);
     video_draw_text(v, 160, 200, "Press any key to continue...", 15);
     video_present(v);
-    input_getch(&g->input);
+    input_wait_any_key(&g->input);
     if (input_poll_quit(&g->input)) return;
 
-    /* Player selection */
-    int slot = player_select_screen(g);
-    if (slot < 0) return;
-
-    g->player_slot[0] = slot;
-    Character *player = &g->chars[slot];
-
-    if (!g->char_exists[slot]) {
-        video_clear(v, 0);
-        video_draw_text(v, 16, 16, "CHARACTER CREATION", 15);
-        video_draw_text(v, 16, 48, "Not yet implemented - creating default character", 14);
-        video_present(v);
-
-        memset(player, 0, sizeof(*player));
-        strncpy(player->name, "ADVENTURER", 20);
-        player->race = RACE_HUMAN;
-        player->sex = 0;
-        player->class_id = CLASS_WIZARD;
-        player->hp_cur = 20;
-        player->hp_max = 20;
-        player->sp_cur = 10.0f;
-        player->sp_max = 10.0f;
-        player->level = 1;
-        player->stat_str = 12;
-        player->stat_int = 12;
-        player->stat_wis = 12;
-        player->stat_con = 12;
-        player->stat_agi = 12;
-        player->stat_luck = 12;
-        player->x_pos = 0;
-        player->y_pos = 0;
-        player->floor_depth = 0;
-        g->char_exists[slot] = 1;
-
-        SDL_Delay(1500);
+    /* Player selection.  Cancelling a partially designed character returns
+     * to the slot list without creating or overwriting a save. */
+    int slot;
+    Character *player;
+    for (;;) {
+        slot = player_select_screen(g);
+        if (slot < 0) return;
+        player = &g->chars[slot];
+        if (g->char_exists[slot]) break;
+        if (create_character(g, player)) {
+            g->char_exists[slot] = 1;
+            game_save_character(g, slot);
+            /* Reusing an empty slot starts a genuinely new monster record,
+               even if an orphaned sidecar from an older character remains. */
+            memset(g->bestiary_kills, 0, sizeof(g->bestiary_kills));
+            g->active_save_slot = slot;
+            g->bestiary_loaded = 1;
+            g->bestiary_dirty = 1;
+            game_save_bestiary(g);
+            break;
+        }
+        if (input_poll_quit(&g->input)) return;
     }
+    g->player_slot[0] = slot;
 
     g->cur_x = player->x_pos;
     g->cur_y = player->y_pos;
     g->cur_floor = player->floor_depth;
-    g->last_move_dir = 0;
+    g->dungeon_number = player->dungeon_number;
+    g->last_move_dir = player->facing_dir <= 3 ? player->facing_dir : 0;
     g->view_mode = 0;
     g->monster_adjacent = 0;
     memset(g->visited, 0, sizeof(g->visited));
@@ -2601,13 +4388,35 @@ void game_run(Game *g) {
         SDL_Delay(900);
     }
 
+    g->map_player_visible = 1;
+    u32 next_map_blink = SDL_GetTicks() + 350;
     while (!input_poll_quit(&g->input)) {
         game_draw_exploration(g, player);
 
         video_present(v);
 
-        int key = input_getch(&g->input);
+        /* WORLD keeps polling while the exploration screen is idle.  Doing
+         * the same here lets its square map cursor blink without requiring
+         * movement or another keypress. */
+        while (!input_poll_quit(&g->input) && !input_kbhit(&g->input)) {
+            u32 now = SDL_GetTicks();
+            if (SDL_TICKS_PASSED(now, next_map_blink)) {
+                g->map_player_visible = !g->map_player_visible;
+                next_map_blink = now + 350;
+                draw_minimap(g, 0, SY(0x1AE), SX(0x11B), 38 * 10);
+                video_present(v);
+            }
+            SDL_Delay(10);
+        }
         if (input_poll_quit(&g->input)) break;
+        int key = input_getch(&g->input);
+
+        if (key == INPUT_MOUSE_CLICK) {
+            int mouse_x, mouse_y;
+            input_last_mouse_click(&g->input, &mouse_x, &mouse_y);
+            key = command_menu_click_key(g, mouse_x, mouse_y);
+            if (!key) continue;
+        }
 
         if (key == 0x1B) {
             break;
@@ -2621,6 +4430,8 @@ void game_run(Game *g) {
             cmd_exp_needed(g, player);
         } else if (key == 'h' || key == 'H') {
             cmd_help(g);
+        } else if (key == 'j' || key == 'J') {
+            cmd_bestiary(g);
         } else if (key == 'x' || key == 'X') {
             cmd_expand_map(g);
         } else if (key == 'f' || key == 'F') {
@@ -2635,12 +4446,28 @@ void game_run(Game *g) {
                 SDL_Delay(800);
             }
         } else if (key == 'c' || key == 'C') {
-            cmd_cast_spell(g, player);
-            game_advance_monsters(g, player);
+            if (cmd_cast_spell(g, player) != 0)
+                game_advance_monsters(g, player);
+        } else if (key == 'i' || key == 'I') {
+            if (cmd_use_item(g, player, NULL) != 0)
+                game_advance_monsters(g, player);
+        } else if (key == 'l' || key == 'L') {
+            cmd_drop_item(g, player);
         } else if (key == 'w' || key == 'W') {
             cmd_weapons(g, player);
         } else if (key == 'a' || key == 'A') {
             cmd_armor(g, player);
+        } else if (key == 'b' || key == 'B') {
+            g->brick_speed = (g->brick_speed + 1) & 3;
+            char line[64];
+            snprintf(line, sizeof(line), "BRICK SPEED SETTING %d OF 4",
+                     g->brick_speed + 1);
+            video_fill_rect(v, 0, 0, SX(0x2D3), SY(42), 0);
+            video_draw_text(v, 8, 8, line, 4);
+            video_present(v);
+            SDL_Delay(450);
+        } else if (key == 'o' || key == 'O') {
+            g->sound_enabled = !g->sound_enabled;
         } else if (key == 'z' || key == 'Z') {
             g->view_mode = (g->view_mode + 1) % 3;
         } else if (key == '1') {
@@ -2651,27 +4478,21 @@ void game_run(Game *g) {
             game_advance_monsters(g, player);
         } else if (key == 'u' || key == 'U') {
             int delta = ladder_delta(g, g->cur_x, g->cur_y);
-            if (delta < 0) game_change_floor(g, player, g->cur_floor + delta);
+            int shop = game_shop_type(g, g->cur_x, g->cur_y);
+            if (shop) enter_town_location(g, player, shop);
+            else if (delta < 0) game_change_floor(g, player, g->cur_floor + delta);
         } else if (key == 'd' || key == 'D') {
             int delta = ladder_delta(g, g->cur_x, g->cur_y);
-            int shop = game_shop_type(g, g->cur_x, g->cur_y);
             if (delta > 0) {
                 game_change_floor(g, player, g->cur_floor + delta);
-            } else if (shop) {
-                static const char *shop_names[6] = {
-                    "", "GENERAL STORE", "TEMPLE", "BANK", "INN", "HOTEL"
-                };
-                video_clear(v, 0);
-                video_draw_text(v, 220, LOGICAL_H / 2 - 20, shop_names[shop],
-                                (u8)(shop + 2));
-                video_draw_text(v, 260, LOGICAL_H / 2 + 20,
-                                "WELCOME, ADVENTURER!", 15);
-                video_present(v);
-                input_getch(&g->input);
+            } else if (cmd_dig_hole(g, player) && player->hp_cur <= 0) {
+                goto game_over;
             }
         } else if (key == 'k' || key == 'K') {
             int target = game_trapdoor_floor(g, g->cur_x, g->cur_y);
-            if (target >= 0) {
+            int key_index = target >= 0 ? target / 10 : -1;
+            if (target >= 0 && key_index > 0 && key_index < 18 &&
+                player->trapdoor_keys[key_index]) {
                 game_change_floor(g, player, target);
                 game_relocate(g, player);
                 video_clear(v, 0);
@@ -2680,10 +4501,24 @@ void game_run(Game *g) {
                 video_present(v);
                 SDL_Delay(800);
             }
+        } else if (key == 's' || key == 'S') {
+            player->x_pos = (u16)g->cur_x;
+            player->y_pos = (u16)g->cur_y;
+            player->floor_depth = (u16)g->cur_floor;
+            player->facing_dir = (u16)(g->last_move_dir & 3);
+            player->dungeon_number = (u16)g->dungeon_number;
+            game_save_character(g, slot);
+            game_save_world_state(g);
+            video_fill_rect(v, 0, 0, SX(0x2D3), SY(42), 0);
+            video_draw_text(v, 8, 8, "GAME SAVED - CONTINUING.", 15);
+            video_present(v);
+            SDL_Delay(600);
         } else if (key == 'q' || key == 'Q') {
             player->x_pos = (u16)g->cur_x;
             player->y_pos = (u16)g->cur_y;
             player->floor_depth = (u16)g->cur_floor;
+            player->facing_dir = (u16)(g->last_move_dir & 3);
+            player->dungeon_number = (u16)g->dungeon_number;
             game_save_character(g, slot);
             game_save_world_state(g);
             video_clear(v, 0);
@@ -2719,8 +4554,12 @@ void game_run(Game *g) {
                 break;
             }
             if (moved && game_can_move(g, g->cur_x, g->cur_y, nx, ny)) {
-                if (game_find_monster(g, nx, ny) >= 0) {
-                    g->monster_adjacent = 1;
+                int monster = game_find_monster(g, nx, ny);
+                if (monster >= 0) {
+                    /* Walking toward an adjacent monster is the same direct
+                       engagement as F, including the rear/south pane. */
+                    fight_monster(g, player, monster);
+                    if (player->hp_cur <= 0) goto game_over;
                 } else {
                     g->cur_x = nx;
                     g->cur_y = ny;
@@ -2746,24 +4585,41 @@ void game_run(Game *g) {
         player->x_pos = g->cur_x;
         player->y_pos = g->cur_y;
         player->floor_depth = (u16)g->cur_floor;
+        player->facing_dir = (u16)(g->last_move_dir & 3);
+        player->dungeon_number = (u16)g->dungeon_number;
     }
 
 game_over:
     if (player->hp_cur <= 0) {
         video_clear(v, 0);
         video_draw_text(v, 160, 180, "YOU HAVE DIED!", 12);
-        video_draw_text(v, 100, 220, "YOUR ADVENTURE IS OVER...", 7);
-        if (player->raise_contract) {
+        if (player->raise_x != 0xFFFFu) {
             video_draw_text(v, 80, 260, "YOUR RAISE CONTRACT SAVES YOU!", 10);
-            player->hp_cur = player->hp_max / 2;
-            if (player->hp_cur < 1) player->hp_cur = 1;
-            player->raise_contract = 0;
+            int return_floor = player->raise_floor < MAX_DUNGEON_FLOORS ?
+                               player->raise_floor : 0;
+            int return_x = player->raise_x < MAP_W ? player->raise_x : MAP_W / 2;
+            int return_y = player->raise_y < MAP_H ? player->raise_y : MAP_H / 2;
+            player->raise_x = 0xFFFFu;
+            if (player->stat_con > 1) player->stat_con--;
+            character_clear_battle_effects(player);
+            game_change_floor(g, player, return_floor);
+            g->cur_x = return_x;
+            g->cur_y = return_y;
+            player->x_pos = (u16)return_x;
+            player->y_pos = (u16)return_y;
+            player->floor_depth = (u16)return_floor;
+            player->hp_cur = player->hp_max;
+            player->sp_cur = player->sp_max;
+        } else {
+            video_draw_text(v, 100, 220, "YOUR ADVENTURE IS OVER...", 7);
         }
         video_draw_text(v, 160, 300, "PRESS ANY KEY...", 15);
         video_present(v);
-        input_getch(&g->input);
+        input_wait_any_key(&g->input);
     }
 
+    player->facing_dir = (u16)(g->last_move_dir & 3);
+    player->dungeon_number = (u16)g->dungeon_number;
     game_save_character(g, slot);
     game_save_world_state(g);
 }

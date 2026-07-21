@@ -31,7 +31,7 @@ typedef struct {
 
 #define MONSTER_TYPE_COUNT 112
 #define WEAPON_STAT_COUNT  12
-#define ARMOR_STAT_COUNT   7
+#define ARMOR_STAT_COUNT   8
 
 extern const MonsterType monster_types[MONSTER_TYPE_COUNT];
 extern const WeaponStats weapon_stats[WEAPON_STAT_COUNT];
@@ -49,6 +49,8 @@ typedef struct {
     int monster_stopped;
     int fled;
     int player_fled;
+    int special_used;
+    char special_message[96];
 } CombatState;
 
 /* ── Spell definitions ── */
@@ -77,11 +79,15 @@ int  cmd_use_item(Game *g, Character *player, CombatState *combat);
 void character_tick_effects(Game *g, Character *player);
 void character_clear_town_effects(Character *player);
 void character_clear_battle_effects(Character *player);
+int  combat_self_test(void);
 
 /* Monster utilities */
 int  combat_calc_monster_hp(const MonsterType *mt, int level);
+int  combat_monster_type_valid(int type_idx, int floor_depth);
 int  combat_pick_monster_type(Game *g, int floor_depth);
+int  combat_monster_drain_amount(int type_idx);
 int  get_monster_pic_index_ext(int type_idx);
+int  get_monster_color_ext(int type_idx);
 
 /* Equipment selection commands (non-combat) */
 void cmd_weapons(Game *g, Character *player);

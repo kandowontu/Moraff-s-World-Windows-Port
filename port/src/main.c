@@ -208,6 +208,35 @@ static int run_test_sprite(const char *data_dir, int monster_type, int asset_tes
     return 0;
 }
 
+static int run_test_bestiary(const char *data_dir, int selected) {
+    Game game;
+    if (game_init(&game, data_dir) < 0) return 1;
+    int failures = 0;
+    int seen_pic[256] = {0};
+    for (int i = 0; i < MONSTER_TYPE_COUNT; i++) {
+        int pic = get_monster_pic_index_ext(i);
+        if (pic >= game.world_pic_count || (pic >= 0 && pic < 2)) failures++;
+        if (pic >= 0 && pic < 256) seen_pic[pic] = 1;
+        if (get_monster_color_ext(i) < 0) failures++;
+        game.bestiary_kills[i] = (u32)(i + 1);
+    }
+    for (int pic = 2; pic < game.world_pic_count; pic++)
+        if (!seen_pic[pic]) failures++;
+    failures += game_ui_self_test(&game);
+    if (selected < 0) selected = 0;
+    if (selected >= MONSTER_TYPE_COUNT) selected = MONSTER_TYPE_COUNT - 1;
+    game_draw_bestiary_test(&game, selected);
+    char bmp_path[300];
+    snprintf(bmp_path, sizeof(bmp_path), "%s/test_bestiary_%d.bmp",
+             data_dir, selected);
+    int rc = save_framebuffer_bmp(&game.video, bmp_path);
+    printf("Beastiary picture/color coverage: %s (%d failures)\n",
+           failures ? "FAIL" : "PASS", failures);
+    if (rc == 0) printf("Saved: %s\n", bmp_path);
+    game_shutdown(&game);
+    return (failures || rc < 0) ? 1 : 0;
+}
+
 static int run_test_frame(const char *data_dir, int test_x, int test_y,
                           int test_floor, int test_slot, int combat_overlay) {
     Game game;
@@ -231,6 +260,9 @@ static int run_test_frame(const char *data_dir, int test_x, int test_y,
     dummy.level = 181;
 
     int auto_actor = test_x == -2;
+    int auto_shop = test_x == -3;
+    int auto_ladder = test_x == -4 ? 1 : (test_x == -5 ? -1 : 0);
+    int auto_trap = test_x == -6;
     int actor_index = -1;
     if (test_x < 0) test_x = 0;
     if (test_x >= MAP_W) test_x = MAP_W - 1;
@@ -239,7 +271,49 @@ static int run_test_frame(const char *data_dir, int test_x, int test_y,
     game.cur_x = test_x;
     game.cur_y = test_y;
     game.cur_floor = test_floor;
+    if (test_slot >= 0 && test_slot < MAX_PLAYERS &&
+        game.char_exists[test_slot])
+        game.dungeon_number = game.chars[test_slot].dungeon_number;
     game.view_mode = 0;
+    if (auto_shop) {
+        for (int y = 1; y < MAP_H - 1; y++) {
+            for (int x = 1; x < MAP_W - 1; x++) {
+                if (game_shop_type(&game, x, y) && !map_is_wall(&game, x, y)) {
+                    game.cur_x = x;
+                    game.cur_y = y;
+                    y = MAP_H;
+                    break;
+                }
+            }
+        }
+    }
+    if (auto_ladder) {
+        for (int y = 1; y < MAP_H - 1; y++) {
+            for (int x = 1; x < MAP_W - 1; x++) {
+                int delta = game_ladder_delta(&game, x, y);
+                if ((auto_ladder > 0 && delta > 0) ||
+                    (auto_ladder < 0 && delta < 0)) {
+                    game.cur_x = x;
+                    game.cur_y = y;
+                    y = MAP_H;
+                    break;
+                }
+            }
+        }
+    }
+    if (auto_trap) {
+        for (int y = 1; y < MAP_H - 1; y++) {
+            for (int x = 1; x < MAP_W - 1; x++) {
+                if (game_trapdoor_floor(&game, x, y) >= 0 &&
+                    !map_is_wall(&game, x, y)) {
+                    game.cur_x = x;
+                    game.cur_y = y;
+                    y = MAP_H;
+                    break;
+                }
+            }
+        }
+    }
     if (test_slot >= 0) {
         game_load_world_state(&game, test_slot);
         int alive = 0;
@@ -247,8 +321,8 @@ static int run_test_frame(const char *data_dir, int test_x, int test_y,
             if (game_monster_hp(&game, i) > 0 &&
                 game.monster_map[game.monster_layer][i].x < MAP_W &&
                 game.monster_map[game.monster_layer][i].y < MAP_H) alive++;
-        printf("Loaded save slot %d world state: layer=%d monsters=%d\n",
-               test_slot, game.monster_layer, alive);
+        printf("Loaded save slot %d world state: dungeon=%d layer=%d monsters=%d\n",
+               test_slot, game.dungeon_number, game.monster_layer, alive);
         if (auto_actor) {
             static const int dx[4] = {0, 0, -1, 1};
             static const int dy[4] = {-1, 1, 0, 0};
@@ -286,6 +360,10 @@ static int run_test_frame(const char *data_dir, int test_x, int test_y,
                          game.cur_x, game.cur_y + 1),
            game_can_move(&game, game.cur_x, game.cur_y,
                          game.cur_x - 1, game.cur_y));
+    printf("Features ladder=%d shop=%d trapdoor=%d\n",
+           game_ladder_delta(&game, game.cur_x, game.cur_y),
+           game_shop_type(&game, game.cur_x, game.cur_y),
+           game_trapdoor_floor(&game, game.cur_x, game.cur_y));
 
     game_update_visibility(&game);
 
@@ -393,6 +471,9 @@ int main(int argc, char *argv[]) {
     int test_combat_mode = 0;
     int test_slot = -1;
     int test_state_mode = 0;
+    int test_magic_mode = 0;
+    int test_economy_mode = 0;
+    int test_bestiary_mode = 0;
     int test_x = 19, test_y = 20, test_floor = 787;
     int test_monster_type = 57; /* default: ball */
 
@@ -435,6 +516,13 @@ int main(int argc, char *argv[]) {
             if (i + 1 < argc) test_slot = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--test-state-roundtrip") == 0) {
             test_state_mode = 1;
+        } else if (strcmp(argv[i], "--test-magic") == 0) {
+            test_magic_mode = 1;
+        } else if (strcmp(argv[i], "--test-economy") == 0) {
+            test_economy_mode = 1;
+        } else if (strcmp(argv[i], "--test-bestiary") == 0) {
+            test_bestiary_mode = 1;
+            if (i + 1 < argc) test_monster_type = atoi(argv[++i]);
         } else if (!data_arg) {
             strncpy(data_dir, argv[i], sizeof(data_dir) - 1);
             data_dir[sizeof(data_dir) - 1] = '\0';
@@ -462,6 +550,12 @@ int main(int argc, char *argv[]) {
         return rc;
     }
 
+    if (test_bestiary_mode) {
+        int rc = run_test_bestiary(data_dir, test_monster_type);
+        SDL_Quit();
+        return rc;
+    }
+
     if (test_frame_mode) {
         int rc = run_test_frame(data_dir, test_x, test_y, test_floor,
                                 test_slot, test_combat_mode);
@@ -473,6 +567,18 @@ int main(int argc, char *argv[]) {
         int rc = run_test_state_roundtrip(data_dir,
                                           test_slot >= 0 ? test_slot : 4,
                                           test_floor);
+        SDL_Quit();
+        return rc;
+    }
+
+    if (test_magic_mode) {
+        int rc = combat_self_test();
+        SDL_Quit();
+        return rc;
+    }
+
+    if (test_economy_mode) {
+        int rc = game_economy_self_test();
         SDL_Quit();
         return rc;
     }
