@@ -4,10 +4,11 @@
 #include "mw_types.h"
 #include <SDL.h>
 
-/* The original supported 7 VGA modes. We render to a logical framebuffer
- * at 640x480 (the most common mode) and let SDL scale to the window. */
-#define LOGICAL_W  640
-#define LOGICAL_H  480
+/* Native match for the original game's 1024x768x256 SVGA mode.  SDL only
+ * expands the indexed pixels to ARGB for presentation; all game drawing is
+ * still performed against an 8-bit, 256-entry logical framebuffer. */
+#define LOGICAL_W  1024
+#define LOGICAL_H  768
 
 /* VGA 256-color palette */
 typedef struct {
@@ -20,6 +21,7 @@ typedef struct {
     SDL_Texture  *framebuffer;
 
     u8  pixels[LOGICAL_W * LOGICAL_H];  /* 8-bit indexed framebuffer */
+    u32 *argb_pixels;                    /* presentation conversion buffer */
     PaletteEntry palette[256];
     int dirty;                          /* needs redraw */
 
@@ -52,11 +54,19 @@ void video_vline(Video *v, int x, int y, int h, u8 color);
 void video_blit(Video *v, int dx, int dy, int w, int h,
                 const u8 *src, int src_stride);
 
+/* PIC sprite rendering (scanline-table format from WORLD.PIC) */
+void video_blit_pic_sprite(Video *v, int cx, int cy, int draw_h,
+                           const u8 *pic_data, int pic_size, u8 transparent);
+
 /* Text rendering */
 int  video_load_font(Video *v, const char *path);
 void video_draw_char(Video *v, int x, int y, char ch, u8 color);
 void video_draw_text(Video *v, int x, int y, const char *str, u8 color);
 void video_draw_char_scaled(Video *v, int x, int y, char ch, u8 color, int sn, int sd);
 void video_draw_text_scaled(Video *v, int x, int y, const char *str, u8 color, int sn, int sd);
+void video_draw_char_scaled_xy(Video *v, int x, int y, char ch, u8 color,
+                               int xsn, int xsd, int ysn, int ysd);
+void video_draw_text_scaled_xy(Video *v, int x, int y, const char *str, u8 color,
+                               int xsn, int xsd, int ysn, int ysd);
 
 #endif /* MW_VIDEO_H */

@@ -3,27 +3,102 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Standard VGA 256-color palette (first 16 colors = CGA/EGA compatible) */
-static const PaletteEntry vga_default_palette[256] = {
-    {0x00,0x00,0x00}, {0x00,0x00,0xAA}, {0x00,0xAA,0x00}, {0x00,0xAA,0xAA},
-    {0xAA,0x00,0x00}, {0xAA,0x00,0xAA}, {0xAA,0x55,0x00}, {0xAA,0xAA,0xAA},
-    {0x55,0x55,0x55}, {0x55,0x55,0xFF}, {0x55,0xFF,0x55}, {0x55,0xFF,0xFF},
-    {0xFF,0x55,0x55}, {0xFF,0x55,0xFF}, {0xFF,0xFF,0x55}, {0xFF,0xFF,0xFF},
-    /* 16-31: grayscale ramp */
-    {0x00,0x00,0x00}, {0x14,0x14,0x14}, {0x20,0x20,0x20}, {0x2C,0x2C,0x2C},
-    {0x38,0x38,0x38}, {0x45,0x45,0x45}, {0x51,0x51,0x51}, {0x61,0x61,0x61},
-    {0x71,0x71,0x71}, {0x82,0x82,0x82}, {0x92,0x92,0x92}, {0xA2,0xA2,0xA2},
-    {0xB6,0xB6,0xB6}, {0xCB,0xCB,0xCB}, {0xE3,0xE3,0xE3}, {0xFF,0xFF,0xFF},
-    /* 32-255: standard VGA color cube + ramps */
-    {0x00,0x00,0xFF}, {0x41,0x00,0xFF}, {0x7D,0x00,0xFF}, {0xBE,0x00,0xFF},
-    {0xFF,0x00,0xFF}, {0xFF,0x00,0xBE}, {0xFF,0x00,0x7D}, {0xFF,0x00,0x41},
-    {0xFF,0x00,0x00}, {0xFF,0x41,0x00}, {0xFF,0x7D,0x00}, {0xFF,0xBE,0x00},
-    {0xFF,0xFF,0x00}, {0xBE,0xFF,0x00}, {0x7D,0xFF,0x00}, {0x41,0xFF,0x00},
-    {0x00,0xFF,0x00}, {0x00,0xFF,0x41}, {0x00,0xFF,0x7D}, {0x00,0xFF,0xBE},
-    {0x00,0xFF,0xFF}, {0x00,0xBE,0xFF}, {0x00,0x7D,0xFF}, {0x00,0x41,0xFF},
-    /* Fill rest with grayscale ramp for now — real palette loaded from game */
-    [56 ... 255] = {0x80, 0x80, 0x80}
-};
+static u8 vga6_to_8(int v) {
+    return (u8)((v * 255 + 31) / 63);
+}
+
+static void build_vga_palette(PaletteEntry pal[256]) {
+    u8 pal6[256][3];
+
+    /* Step 1: Base algorithm from sub_2473D (ASM line 70893).
+     * Generates a warm-toned gradient for colors 1-255. */
+    pal6[0][0] = 0; pal6[0][1] = 0; pal6[0][2] = 0;
+    for (int cx = 1; cx < 256; cx++) {
+        int val = (cx * 3) / 4;
+        pal6[cx][0] = (u8)(63 - (val % 63));
+        pal6[cx][1] = (u8)(cx / 4);
+        pal6[cx][2] = 0;
+    }
+
+    /* Step 2: Explicit color overrides from far_2478E (ASM line 70934).
+     * Colors 1-15 are set to specific values matching the game's UI. */
+    static const u8 fixed_colors[16][3] = {
+        { 0,  0,  0},  /*  0: black */
+        { 0,  0, 38},  /*  1: dark blue */
+        { 0,  0, 63},  /*  2: bright blue */
+        {20,  0, 63},  /*  3: purple */
+        {63, 63, 20},  /*  4: yellow */
+        {53, 20, 10},  /*  5: brown */
+        {63,  0, 10},  /*  6: red */
+        {63, 45,  0},  /*  7: orange */
+        { 0, 63,  0},  /*  8: green */
+        { 0,  0,  0},  /*  9: black (variable) */
+        {28,  0,  0},  /* 10: dark red */
+        { 0, 28,  0},  /* 11: dark green */
+        {16,  0,  0},  /* 12: very dark red */
+        {13, 13, 13},  /* 13: dark gray */
+        {42, 42, 42},  /* 14: medium gray */
+        {63, 63, 63},  /* 15: white */
+    };
+    for (int i = 0; i < 16; i++) {
+        pal6[i][0] = fixed_colors[i][0];
+        pal6[i][1] = fixed_colors[i][1];
+        pal6[i][2] = fixed_colors[i][2];
+    }
+
+    /* Step 3: Player-specific color ramp for colors 16-31.
+     * Default: player 0, variation 0 — grayscale pairs. */
+    for (int i = 0; i < 8; i++) {
+        u8 v = (u8)(i * 8);
+        u8 iv = (u8)(60 - v);
+        pal6[16 + i * 2][0] = v;
+        pal6[16 + i * 2][1] = v;
+        pal6[16 + i * 2][2] = v;
+        pal6[17 + i * 2][0] = iv;
+        pal6[17 + i * 2][1] = iv;
+        pal6[17 + i * 2][2] = iv;
+    }
+
+    /* Convert from VGA 6-bit (0-63) to 8-bit (0-255) */
+    for (int i = 0; i < 256; i++) {
+        pal[i].r = vga6_to_8(pal6[i][0]);
+        pal[i].g = vga6_to_8(pal6[i][1]);
+        pal[i].b = vga6_to_8(pal6[i][2]);
+    }
+
+    /* DOSBox expands the original 6-bit DAC channels by shifting, so the
+     * brightest UI values in a captured mode-8 frame are FC rather than FF. */
+    pal[4]  = (PaletteEntry){252, 252,  80};
+    pal[6]  = (PaletteEntry){252,   0,  40};
+    pal[8]  = (PaletteEntry){  0, 252,   0};
+    pal[10] = (PaletteEntry){112,   0,   0};
+
+    /* The banked 1024x768 driver replaces part of the generated ramp while
+     * drawing the dungeon.  These are the DAC values visible in an original
+     * mode-8 capture and are reserved by the native renderer for the same
+     * ceiling, floor, wall, and status roles. */
+    static const PaletteEntry svga_render_colors[] = {
+        {224, 224, 224}, /* 32: cracked wall face */
+        {192, 192, 192}, /* 33: wall highlight */
+        {  0,   0, 192}, /* 34: blue cracks/mortar */
+        { 32,  32,  92}, /* 35: ceiling navy 1 */
+        { 28,  28, 100}, /* 36: ceiling navy 2 */
+        { 80,  80,  44}, /* 37: dungeon olive 1 */
+        { 76,  76,  52}, /* 38: dungeon olive 2 */
+        { 68,  68,  56}, /* 39: dungeon olive 3 */
+        { 40,  40,  88}, /* 40: ceiling navy 3 */
+        { 92,  92,  32}, /* 41: floor olive 1 */
+        {100, 100,  28}, /* 42: floor olive 2 */
+        {104, 104,  20}, /* 43: floor olive 3 */
+        {112, 112,  16}, /* 44: floor olive 4 */
+        {116, 116,   8}, /* 45: floor olive 5 */
+        {252, 252, 252}, /* 46: map white */
+        { 81, 202, 255}, /* 47: status cyan */
+        {174,  60,   0}, /* 48: bottom prompt orange */
+    };
+    for (int i = 0; i < (int)(sizeof(svga_render_colors) / sizeof(svga_render_colors[0])); i++)
+        pal[32 + i] = svga_render_colors[i];
+}
 
 int video_init(Video *v, const char *title, int scale) {
     memset(v, 0, sizeof(*v));
@@ -64,6 +139,12 @@ int video_init(Video *v, const char *title, int scale) {
         return -1;
     }
 
+    v->argb_pixels = malloc((size_t)LOGICAL_W * LOGICAL_H * sizeof(u32));
+    if (!v->argb_pixels) {
+        fprintf(stderr, "Cannot allocate presentation buffer\n");
+        return -1;
+    }
+
     video_load_vga_default_palette(v);
     v->dirty = 1;
     return 0;
@@ -71,6 +152,7 @@ int video_init(Video *v, const char *title, int scale) {
 
 void video_shutdown(Video *v) {
     free(v->font_data);
+    free(v->argb_pixels);
     if (v->framebuffer) SDL_DestroyTexture(v->framebuffer);
     if (v->renderer) SDL_DestroyRenderer(v->renderer);
     if (v->window) SDL_DestroyWindow(v->window);
@@ -80,13 +162,12 @@ void video_shutdown(Video *v) {
 void video_present(Video *v) {
     if (!v->dirty) return;
 
-    u32 argb_buf[LOGICAL_W * LOGICAL_H];
     for (int i = 0; i < LOGICAL_W * LOGICAL_H; i++) {
         PaletteEntry *c = &v->palette[v->pixels[i]];
-        argb_buf[i] = 0xFF000000 | ((u32)c->r << 16) | ((u32)c->g << 8) | c->b;
+        v->argb_pixels[i] = 0xFF000000 | ((u32)c->r << 16) | ((u32)c->g << 8) | c->b;
     }
 
-    SDL_UpdateTexture(v->framebuffer, NULL, argb_buf, LOGICAL_W * sizeof(u32));
+    SDL_UpdateTexture(v->framebuffer, NULL, v->argb_pixels, LOGICAL_W * sizeof(u32));
     SDL_RenderClear(v->renderer);
     SDL_RenderCopy(v->renderer, v->framebuffer, NULL, NULL);
     SDL_RenderPresent(v->renderer);
@@ -102,7 +183,7 @@ void video_set_palette(Video *v, int index, u8 r, u8 g, u8 b) {
 }
 
 void video_load_vga_default_palette(Video *v) {
-    memcpy(v->palette, vga_default_palette, sizeof(vga_default_palette));
+    build_vga_palette(v->palette);
     v->dirty = 1;
 }
 
@@ -153,6 +234,75 @@ void video_blit(Video *v, int dx, int dy, int w, int h,
             int sx = dx + col;
             if (sx < 0 || sx >= LOGICAL_W) continue;
             v->pixels[sy * LOGICAL_W + sx] = src[row * src_stride + col];
+        }
+    }
+    v->dirty = 1;
+}
+
+void video_blit_pic_sprite(Video *v, int cx, int cy, int draw_h,
+                           const u8 *pic_data, int pic_size, u8 transparent) {
+    if (!pic_data || pic_size < 0x192) return;
+    (void)transparent;
+
+    const int PIC_ROWS = 200;
+    const int TABLE_SIZE = 0x190;
+
+    u16 scanline[200];
+    for (int i = 0; i < PIC_ROWS; i++)
+        scanline[i] = (u16)(pic_data[i * 2] | (pic_data[i * 2 + 1] << 8));
+
+    const u8 *pixdata = pic_data + TABLE_SIZE;
+    int pixdata_len = pic_size - TABLE_SIZE;
+
+    int draw_w = draw_h * 3 / 4;
+    int left_x = cx - draw_w / 2;
+    int top_y = cy;
+
+    for (int row = 0; row < PIC_ROWS; row++) {
+        int data_start = scanline[row];
+        int data_end = pixdata_len;
+        for (int j = row + 1; j < PIC_ROWS; j++) {
+            if (scanline[j] != data_start) { data_end = scanline[j]; break; }
+        }
+        if (data_start >= pixdata_len || data_start == data_end) continue;
+
+        int screen_y = top_y + row * draw_h / PIC_ROWS;
+        int screen_y_end = top_y + (row + 1) * draw_h / PIC_ROWS;
+        if (screen_y >= LOGICAL_H) break;
+        if (screen_y_end <= 0) continue;
+
+        int ptr = data_start;
+        int x_pos = pixdata[ptr++];
+
+        while (ptr < data_end && ptr < pixdata_len) {
+            int cmd = pixdata[ptr++];
+            int run_len, color;
+
+            if (cmd >= 0x20) {
+                run_len = cmd >> 5;
+                color = cmd & 0x1F;
+            } else {
+                color = cmd;
+                if (ptr >= pixdata_len) break;
+                int n = pixdata[ptr++];
+                run_len = (n == 0) ? 255 : n;
+            }
+
+            if (color != 0 && color != 16) {
+                int x_start = left_x + x_pos * draw_w / 256;
+                int x_end = left_x + (x_pos + run_len) * draw_w / 256;
+                if (x_end <= x_start) x_end = x_start + 1;
+
+                for (int sy = screen_y; sy < screen_y_end && sy < LOGICAL_H; sy++) {
+                    if (sy < 0) continue;
+                    for (int sx = x_start; sx < x_end; sx++) {
+                        if (sx >= 0 && sx < LOGICAL_W)
+                            v->pixels[sy * LOGICAL_W + sx] = (u8)color;
+                    }
+                }
+            }
+
+            x_pos += run_len;
         }
     }
     v->dirty = 1;
@@ -355,6 +505,54 @@ void video_draw_text_scaled(Video *v, int x, int y, const char *str, u8 color, i
             cx += sadv;
         } else {
             video_draw_char_scaled(v, cx, y, *str, color, sn, sd);
+            cx += sadv;
+        }
+        str++;
+    }
+}
+
+void video_draw_char_scaled_xy(Video *v, int x, int y, char ch, u8 color,
+                               int xsn, int xsd, int ysn, int ysd) {
+    if (!v->font_data || xsn <= 0 || xsd <= 0 || ysn <= 0 || ysd <= 0) return;
+    int idx = v->font_remap[(u8)ch & 0x7F];
+    if (idx < 0 || idx >= v->font_slots) return;
+
+    int glyph_off = idx * v->font_char_h * 16;
+    int sh = v->font_char_h * ysn / ysd;
+    int sw = v->font_char_w * xsn / xsd;
+
+    for (int row = 0; row < sh; row++) {
+        int py = y + row;
+        if (py < 0 || py >= LOGICAL_H) continue;
+        int src_row = row * ysd / ysn;
+        if (src_row >= v->font_char_h) src_row = v->font_char_h - 1;
+        for (int col = 0; col < sw; col++) {
+            int px = x + col;
+            if (px < 0 || px >= LOGICAL_W) continue;
+            int src_col = col * xsd / xsn;
+            if (src_col >= 16) src_col = 15;
+            if (v->font_data[glyph_off + src_row * 16 + src_col])
+                v->pixels[py * LOGICAL_W + px] = color;
+        }
+    }
+    v->dirty = 1;
+}
+
+void video_draw_text_scaled_xy(Video *v, int x, int y, const char *str, u8 color,
+                               int xsn, int xsd, int ysn, int ysd) {
+    if (!str || xsn <= 0 || xsd <= 0 || ysn <= 0 || ysd <= 0) return;
+    int adv = v->font_advance ? v->font_advance : v->font_char_w;
+    int sadv = adv * xsn / xsd;
+    int sfh = v->font_char_h * ysn / ysd;
+    int cx = x;
+    while (*str) {
+        if (*str == '\n') {
+            cx = x;
+            y += sfh;
+        } else if (*str == ' ') {
+            cx += sadv;
+        } else {
+            video_draw_char_scaled_xy(v, cx, y, *str, color, xsn, xsd, ysn, ysd);
             cx += sadv;
         }
         str++;

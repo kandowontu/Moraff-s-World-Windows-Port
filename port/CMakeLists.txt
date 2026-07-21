@@ -22,6 +22,7 @@ set(SOURCES
     src/mw_video.c
     src/mw_input.c
     src/mw_game.c
+    src/mw_combat.c
 )
 
 add_executable(moraffs_world ${SOURCES})

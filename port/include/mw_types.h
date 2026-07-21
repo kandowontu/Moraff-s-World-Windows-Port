@@ -19,13 +19,23 @@ typedef struct {
     char _pad_014[20];              /* 0x014 */
     u8   race;                      /* 0x028 - 0=Human,1=Dwarf,2=Hobbit,3=Elf,4=Gnome,5=Half-Elf,6=Half-Orc */
     u8   sex;                       /* 0x029 - 0=Male, 1=Female */
-    u8   class_id;                  /* 0x02A - 0=Worshipper,1=Monk,2=Wizard,3=Priest,4=Sage,5=Mage */
+    u8   class_id;                  /* 0x02A - 0=Fighter,1=Worshipper,2=Monk,3=Wizard,4=Priest,5=Sage,6=Mage */
     char _pad_02B[6];               /* 0x02B */
     u16  hp_cur;                    /* 0x031 */
     u16  hp_max;                    /* 0x033 */
     float sp_cur;                   /* 0x035 - spell points (float32) */
     float sp_max;                   /* 0x039 */
-    char _pad_03D[288];             /* 0x03D */
+    char _pad_03D[68];              /* 0x03D - 0x080 */
+    u8   weapon_inventory[8];       /* 0x081 - owned mundane weapons (Fist is implicit) */
+    char _pad_089[5];               /* 0x089 - 0x08D */
+    u8   eq_wep_enchant[12];        /* 0x08E - permanent weapon enchant per weapon slot */
+    char _pad_09A[1];               /* 0x09A */
+    u8   equipped_weapon;           /* 0x09B - index into weapon table (0-11) */
+    char _pad_09C[20];              /* 0x09C - 0x0AF */
+    u8   armor_inventory[8];        /* 0x0B0 - owned armor (Skin is implicit) */
+    u8   armor_enchant[8];          /* 0x0B8 - permanent enchant per armor */
+    u8   equipped_armor;            /* 0x0C0 - index into armor table */
+    char _pad_0C1[156];             /* 0x0C1 - 0x15C */
     u8   orange_pill;               /* 0x15D */
     u8   green_pill;                /* 0x15E */
     u8   blue_pill;                 /* 0x15F */
@@ -61,14 +71,15 @@ typedef struct {
     u16  floor_depth;               /* 0x7B0 */
     char _pad_7B2[20];              /* 0x7B2 */
     u8   ring_regen;                /* 0x7C6 */
-    char _pad_7C7[1];               /* 0x7C7 */
+    u8   combat_bonus;              /* 0x7C7 - mystery byte: adds to both attack and defense */
     u8   holy_grenade;              /* 0x7C8 */
     u8   stone_see;                 /* 0x7C9 */
     u16  diseased_turns;            /* 0x7CA */
     u16  poisoned_turns;            /* 0x7CC */
-    u8   weapon_plus;               /* 0x7CE */
+    u8   enchant_wpn_spell;          /* 0x7CE - temp Enchant Weapon spell buff (clears at inn) */
+    /* NOTE: permanent weapon enchant is eq_wep_enchant[weapon_id] at 0x08E */
     u8   armor_plus;                /* 0x7CF */
-    u8   body_armor_lv;             /* 0x7D0 */
+    u8   body_armor_plus;           /* 0x7D0 - permanent Body Armor spell bonus */
     u8   ring_prot_plus;            /* 0x7D1 */
     u8   antimagic_ring;            /* 0x7D2 */
     u8   eff_feather;               /* 0x7D3 */
@@ -124,7 +135,7 @@ enum {
 
 /* Class IDs */
 enum {
-    CLASS_WORSHIPPER = 0, CLASS_MONK, CLASS_WIZARD,
+    CLASS_FIGHTER = 0, CLASS_WORSHIPPER, CLASS_MONK, CLASS_WIZARD,
     CLASS_PRIEST, CLASS_SAGE, CLASS_MAGE, CLASS_COUNT
 };
 
@@ -133,7 +144,7 @@ static const char *race_names[] = {
 };
 
 static const char *class_names[] = {
-    "WORSHIPPER", "MONK", "WIZARD", "PRIEST", "SAGE", "MAGE"
+    "FIGHTER", "WORSHIPPER", "MONK", "WIZARD", "PRIEST", "SAGE", "MAGE"
 };
 
 /* Max players/save slots */
