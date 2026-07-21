@@ -1845,7 +1845,7 @@ static void spell_help_text(int category, int index, char *out, size_t size) {
         else if (index == 1 || index == 4 || index == 7 || index == 26)
             append_text(out, size, "RAISES BOTH CURRENT AND MAXIMUM HEALTH; THE BONUS IS 1, 3, 5, OR 25 HP. ");
         else if (index == 24)
-            append_text(out, size, "SETS PERMANENT FEATHER (VALUE 100): WEIGHTLESS MOVEMENT AND PIT PROTECTION. ");
+            append_text(out, size, "SETS PERMANENT FEATHER (VALUE 100): THE CASTER REMAINS WEIGHTLESS. ");
         else if (index == 27)
             append_text(out, size, "SETS PERMANENT INVISIBILITY (VALUE 100), REDUCING ENCOUNTERS. ");
         else if (index == 28)

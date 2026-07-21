@@ -72,7 +72,8 @@ typedef struct Game {
     int   monster_map_dirty;
 
     /* Exact sparse <slot><floor/32>.DUN bit grid.  The game uses these bits
-     * to remember squares whose one-shot pitfall has already fired. */
+     * to remember explored squares so discovered chutes/shafts can be marked
+     * when their floor is visited again.  A known chute still triggers. */
     u8    pit_used[PIT_GROUP_FLOORS][MAP_H][PIT_ROW_BYTES];
     u8    pit_row_mask[PIT_GROUP_FLOORS][16];
     u32   pit_floor_mask;
@@ -156,6 +157,7 @@ int  game_ladder_delta(Game *g, int x, int y);
 int  game_trapdoor_floor(Game *g, int x, int y);
 int  game_shop_type(Game *g, int x, int y);
 int  game_apply_pitfall(Game *g, Character *player);
+int  game_is_known_pitfall(Game *g, int x, int y);
 
 /* RNG — matches original LCG */
 int  game_rand(Game *g);

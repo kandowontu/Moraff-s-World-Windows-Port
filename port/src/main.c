@@ -5,9 +5,10 @@
 
 #ifdef _WIN32
 #include <direct.h>
-#define getcwd _getcwd
+#define change_dir _chdir
 #else
 #include <unistd.h>
+#define change_dir chdir
 #endif
 
 static int file_exists(const char *path) {
@@ -17,51 +18,29 @@ static int file_exists(const char *path) {
 }
 
 static int has_game_data(const char *dir) {
+    static const char *required[] = {
+        "DUNG.BIN", "WORLDMAP.BIN", "H.BIN", "WORLD.PIC", "WALL.PIC",
+        "360X480.FNT", "320X200.FNT", "ROLL.TXT"
+    };
     char test[300];
-    snprintf(test, sizeof(test), "%s/DUNG.BIN", dir);
-    if (file_exists(test)) return 1;
-    snprintf(test, sizeof(test), "%s/dung.bin", dir);
-    return file_exists(test);
+    for (int i = 0; i < (int)(sizeof(required) / sizeof(required[0])); i++) {
+        snprintf(test, sizeof(test), "%s/%s", dir, required[i]);
+        if (!file_exists(test)) return 0;
+    }
+    return 1;
 }
 
-static void find_data_dir(char *out, int out_sz, const char *argv0) {
-    /* 1) Check CWD */
-    if (getcwd(out, out_sz) && has_game_data(out)) return;
-
-    /* 2) Check exe directory and ancestors (handles port/build/ layout) */
-    char exe_dir[260];
-    const char *base = SDL_GetBasePath();
+static void use_local_game_directory(char *out, int out_sz) {
+    /* The native port is self-contained: resources and saves live beside the
+     * executable.  Change there once, then keep every game file reference
+     * local and relative (./DUNG.BIN, ./WORLD.PIC, save slots, and so on). */
+    char *base = SDL_GetBasePath();
     if (base) {
-        strncpy(exe_dir, base, sizeof(exe_dir) - 1);
-        exe_dir[sizeof(exe_dir) - 1] = '\0';
-        SDL_free((void *)base);
-
-        /* Strip trailing separator */
-        int len = (int)strlen(exe_dir);
-        if (len > 0 && (exe_dir[len-1] == '/' || exe_dir[len-1] == '\\'))
-            exe_dir[--len] = '\0';
-
-        /* Check exe dir itself */
-        if (has_game_data(exe_dir)) {
-            strncpy(out, exe_dir, out_sz);
-            return;
-        }
-
-        /* Walk up directory tree (up to 3 levels for port/build/) */
-        for (int i = 0; i < 3; i++) {
-            char *sep = strrchr(exe_dir, '\\');
-            if (!sep) sep = strrchr(exe_dir, '/');
-            if (!sep) break;
-            *sep = '\0';
-            if (has_game_data(exe_dir)) {
-                strncpy(out, exe_dir, out_sz);
-                return;
-            }
-        }
+        if (change_dir(base) != 0)
+            fprintf(stderr, "WARNING: Could not select the executable directory.\n");
+        SDL_free(base);
     }
-
-    /* 3) Fallback to CWD */
-    if (!getcwd(out, out_sz)) strcpy(out, ".");
+    snprintf(out, out_sz, ".");
 }
 
 static int save_framebuffer_bmp(Video *v, const char *path) {
@@ -478,7 +457,6 @@ int main(int argc, char *argv[]) {
     int test_monster_type = 57; /* default: ball */
 
     /* Parse args */
-    int data_arg = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--test-sprite") == 0) {
             test_sprite_mode = 1;
@@ -523,23 +501,17 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--test-bestiary") == 0) {
             test_bestiary_mode = 1;
             if (i + 1 < argc) test_monster_type = atoi(argv[++i]);
-        } else if (!data_arg) {
-            strncpy(data_dir, argv[i], sizeof(data_dir) - 1);
-            data_dir[sizeof(data_dir) - 1] = '\0';
-            data_arg = 1;
         }
     }
 
-    if (!data_arg) {
-        find_data_dir(data_dir, sizeof(data_dir), argv[0]);
-    }
+    use_local_game_directory(data_dir, sizeof(data_dir));
 
     printf("Moraff's World - Native Port\n");
     printf("Data directory: %s\n", data_dir);
 
     if (!has_game_data(data_dir)) {
         fprintf(stderr, "ERROR: Game data not found in '%s'\n", data_dir);
-        fprintf(stderr, "Place the executable in the game directory or pass the path as an argument.\n");
+        fprintf(stderr, "Place the required Moraff's World files beside the executable.\n");
         SDL_Quit();
         return 1;
     }

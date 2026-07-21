@@ -34,7 +34,35 @@ if(WIN32)
     target_link_libraries(moraffs_world PRIVATE winmm imm32 setupapi version)
 endif()
 
-# Copy game data files to build dir for convenience
+# Keep the native build self-contained.  The original game data directory is
+# two levels above this source tree; the running program opens only local,
+# relative filenames beside its executable.
+set(MORAFF_DATA_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+set(MORAFF_RUNTIME_FILES
+    DUNG.BIN
+    WORLDMAP.BIN
+    H.BIN
+    WORLD.PIC
+    WALL.PIC
+    360X480.FNT
+    320X200.FNT
+    ROLL.TXT
+)
+
+foreach(MORAFF_DATA_FILE IN LISTS MORAFF_RUNTIME_FILES)
+    if(EXISTS "${MORAFF_DATA_SOURCE_DIR}/${MORAFF_DATA_FILE}")
+        add_custom_command(TARGET moraffs_world POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${MORAFF_DATA_SOURCE_DIR}/${MORAFF_DATA_FILE}"
+                "$<TARGET_FILE_DIR:moraffs_world>/${MORAFF_DATA_FILE}"
+            VERBATIM
+        )
+    else()
+        message(WARNING "Missing Moraff runtime file: ${MORAFF_DATA_FILE}")
+    endif()
+endforeach()
+
 add_custom_command(TARGET moraffs_world POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo "Build complete. Run from the game data directory."
+    COMMAND ${CMAKE_COMMAND} -E echo
+        "Build complete. Run moraffs_world with its local game data files."
 )
