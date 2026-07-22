@@ -1,6 +1,12 @@
 #include "mw_input.h"
 #include <string.h>
 
+/* MW_PLATFORM_REPLACEMENT: SDL events replace WORLD check_key (0x26AF2),
+ * func_26B38 and the DOS keyboard/INT 33h mouse layer. DOS two-byte extended-key
+ * semantics are preserved because func_0F6E5 command dispatch depends on
+ * them. The original INT 33h mouse hot-spot layer is only partly represented
+ * by SDL click/hover handling; there is no original two-player branch. */
+
 void input_init(Input *inp) {
     memset(inp, 0, sizeof(*inp));
 }
@@ -34,9 +40,26 @@ void input_pump(Input *inp) {
             break;
         }
         case SDL_MOUSEBUTTONDOWN:
+            inp->mouse_x = ev.button.x;
+            inp->mouse_y = ev.button.y;
             if (ev.button.button == SDL_BUTTON_LEFT)
                 input_push(inp, INPUT_MOUSE_CLICK, ev.button.x, ev.button.y);
             break;
+        case SDL_MOUSEMOTION:
+            inp->mouse_x = ev.motion.x;
+            inp->mouse_y = ev.motion.y;
+            inp->mouse_motion_serial++;
+            break;
+        case SDL_MOUSEWHEEL: {
+            int amount = ev.wheel.y;
+            if (ev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
+                amount = -amount;
+            if (amount > 0)
+                input_push(inp, INPUT_MOUSE_WHEEL_UP, inp->mouse_x, inp->mouse_y);
+            else if (amount < 0)
+                input_push(inp, INPUT_MOUSE_WHEEL_DOWN, inp->mouse_x, inp->mouse_y);
+            break;
+        }
         default:
             break;
         }
@@ -84,10 +107,27 @@ void input_last_mouse_click(Input *inp, int *x, int *y) {
     if (y) *y = inp->last_mouse_y;
 }
 
+void input_mouse_position(Input *inp, int *x, int *y, unsigned *serial) {
+    if (x) *x = inp->mouse_x;
+    if (y) *y = inp->mouse_y;
+    if (serial) *serial = inp->mouse_motion_serial;
+}
+
 /* Map SDL keys to what the original DOS game expects.
  * Returns: >0 for ASCII, <0 for extended scancode (caller pushes 0 then -ret),
  *          0 for keys we don't map. */
 int input_sdl_to_dos(SDL_Keycode sym, SDL_Keymod mod) {
+    /* Native-only diagnostic shortcuts use otherwise unused function-key
+     * chords, leaving every original WORLD key byte unchanged. */
+    if (sym == SDLK_F5 && (mod & KMOD_CTRL)) return INPUT_MODEL_VIEWER;
+    if (sym == SDLK_F6 && (mod & KMOD_CTRL)) return INPUT_DUNGEON_REROLL;
+    if (sym == SDLK_F7 && (mod & KMOD_CTRL)) return INPUT_OPEN_FLOOR_TOGGLE;
+    if (sym == SDLK_F8 && (mod & KMOD_CTRL)) return INPUT_TOWN_TELEPORT;
+    if (sym == SDLK_F9 && (mod & KMOD_CTRL)) return INPUT_GOD_TOGGLE;
+    if (sym == SDLK_F10 && (mod & KMOD_CTRL)) return INPUT_NOCLIP_TOGGLE;
+    if (sym == SDLK_F11 && (mod & KMOD_CTRL)) return INPUT_WILDERNESS_TEST;
+    if (sym == SDLK_F12 && (mod & KMOD_CTRL)) return INPUT_TRAINER;
+
     /* Standard ASCII range */
     if (sym >= SDLK_SPACE && sym <= SDLK_z) {
         int ch = (int)sym;

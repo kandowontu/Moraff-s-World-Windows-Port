@@ -11,6 +11,36 @@ typedef int8_t   s8;
 typedef int16_t  s16;
 typedef int32_t  s32;
 
+/* Native extensions stored in the otherwise-unused tail of the original
+ * character record.  WORLD.EXE only knew byte-sized enchantments; the port
+ * uses signed 16-bit values so positive bonuses can pass +127 while old
+ * cursed equipment remains representable. */
+#define MW_NATIVE_CHARACTER_MAGIC   0x3243574Du /* "MWC2" */
+#define MW_NATIVE_CHARACTER_VERSION 2u
+
+#define MW_EXPERIENCE_ENHANCED 0u
+#define MW_EXPERIENCE_CLASSIC  1u
+
+#pragma pack(push, 1)
+typedef struct NativeCharacterExtension {
+    u32 magic;
+    u16 version;
+    u16 quest_flags;
+    s16 weapon_enchant[12];
+    s16 armor_enchant[8];
+    s16 enchant_wpn_spell;
+    s16 armor_plus;
+    s16 body_armor_plus;
+    s16 ring_prot_plus;
+    s16 gauntlet;
+    u8  experience_mode;
+    u8  reserved[21];
+} NativeCharacterExtension;
+#pragma pack(pop)
+
+_Static_assert(sizeof(NativeCharacterExtension) == 80,
+               "native character extension layout changed");
+
 /* Character data structure - 2344 bytes total (0x928)
  * Layout reverse-engineered from WORLD.EXE disassembly.
  * Save files are a raw dump of this struct. */
@@ -131,7 +161,10 @@ typedef struct {
     u8   gauntlet;                  /* 0x846 */
     char _pad_847[17];              /* 0x847 */
     double experience;              /* 0x858 - original 64-bit XP value */
-    char _pad_860[200];             /* 0x860 - pad to 0x928 */
+    union {
+        char _pad_860[200];         /* original unused tail, 0x860 - 0x927 */
+        NativeCharacterExtension native;
+    };
 } Character;
 #pragma pack(pop)
 
@@ -151,6 +184,113 @@ _Static_assert(offsetof(Character, raise_x) == 0x806, "raise X offset");
 _Static_assert(offsetof(Character, trapdoor_keys) == 0x81E, "trapdoor key offset");
 _Static_assert(offsetof(Character, quest_flags) == 0x845, "quest flags offset");
 _Static_assert(offsetof(Character, experience) == 0x858, "experience offset");
+_Static_assert(offsetof(Character, native) == 0x860, "native extension offset");
+
+static inline int mw_character_native_valid(const Character *p) {
+    return p && p->native.magic == MW_NATIVE_CHARACTER_MAGIC &&
+           p->native.version == MW_NATIVE_CHARACTER_VERSION;
+}
+
+/* Import the byte-sized original values once.  This also converts legacy
+ * saves automatically the first time the native port loads/saves them. */
+static inline void mw_character_native_ensure(Character *p) {
+    if (!p || mw_character_native_valid(p)) return;
+    NativeCharacterExtension ext = {0};
+    ext.magic = MW_NATIVE_CHARACTER_MAGIC;
+    ext.version = MW_NATIVE_CHARACTER_VERSION;
+    ext.quest_flags = p->quest_flags;
+    for (int i = 0; i < 12; i++)
+        ext.weapon_enchant[i] = (s8)p->eq_wep_enchant[i];
+    for (int i = 0; i < 8; i++)
+        ext.armor_enchant[i] = (s8)p->armor_enchant[i];
+    ext.enchant_wpn_spell = p->enchant_wpn_spell;
+    ext.armor_plus = p->armor_plus;
+    ext.body_armor_plus = p->body_armor_plus;
+    ext.ring_prot_plus = p->ring_prot_plus;
+    ext.gauntlet = p->gauntlet;
+    p->native = ext;
+}
+
+static inline s16 mw_weapon_enchant(const Character *p, int slot) {
+    if (!p || slot < 0 || slot >= 12) return 0;
+    return mw_character_native_valid(p) ? p->native.weapon_enchant[slot] :
+                                         (s8)p->eq_wep_enchant[slot];
+}
+
+static inline void mw_set_weapon_enchant(Character *p, int slot, int value) {
+    if (!p || slot < 0 || slot >= 12) return;
+    if (value > INT16_MAX) value = INT16_MAX;
+    if (value < INT16_MIN) value = INT16_MIN;
+    mw_character_native_ensure(p);
+    p->native.weapon_enchant[slot] = (s16)value;
+    p->eq_wep_enchant[slot] = (u8)(value > 127 ? 127 :
+                                      value < -128 ? -128 : (s8)value);
+}
+
+static inline s16 mw_armor_enchant(const Character *p, int slot) {
+    if (!p || slot < 0 || slot >= 8) return 0;
+    return mw_character_native_valid(p) ? p->native.armor_enchant[slot] :
+                                         (s8)p->armor_enchant[slot];
+}
+
+static inline void mw_set_armor_enchant(Character *p, int slot, int value) {
+    if (!p || slot < 0 || slot >= 8) return;
+    if (value > INT16_MAX) value = INT16_MAX;
+    if (value < INT16_MIN) value = INT16_MIN;
+    mw_character_native_ensure(p);
+    p->native.armor_enchant[slot] = (s16)value;
+    p->armor_enchant[slot] = (u8)(value > 127 ? 127 :
+                                    value < -128 ? -128 : (s8)value);
+}
+
+#define MW_NATIVE_BONUS_ACCESSORS(NAME, LEGACY)                              \
+static inline s16 mw_##NAME(const Character *p) {                            \
+    return mw_character_native_valid(p) ? p->native.NAME : (s16)p->LEGACY;   \
+}                                                                            \
+static inline void mw_set_##NAME(Character *p, int value) {                  \
+    if (!p) return;                                                           \
+    if (value > INT16_MAX) value = INT16_MAX;                                \
+    if (value < 0) value = 0;                                                 \
+    mw_character_native_ensure(p);                                            \
+    p->native.NAME = (s16)value;                                              \
+    p->LEGACY = (u8)(value > 255 ? 255 : value);                             \
+}
+
+MW_NATIVE_BONUS_ACCESSORS(enchant_wpn_spell, enchant_wpn_spell)
+MW_NATIVE_BONUS_ACCESSORS(armor_plus, armor_plus)
+MW_NATIVE_BONUS_ACCESSORS(body_armor_plus, body_armor_plus)
+MW_NATIVE_BONUS_ACCESSORS(ring_prot_plus, ring_prot_plus)
+MW_NATIVE_BONUS_ACCESSORS(gauntlet, gauntlet)
+#undef MW_NATIVE_BONUS_ACCESSORS
+
+static inline u16 mw_quest_flags(const Character *p) {
+    return mw_character_native_valid(p) ? p->native.quest_flags :
+                                         (u16)p->quest_flags;
+}
+
+static inline void mw_set_quest_flags(Character *p, u16 flags) {
+    if (!p) return;
+    mw_character_native_ensure(p);
+    p->native.quest_flags = flags;
+    p->quest_flags = (u8)flags;
+}
+
+/* Existing native/legacy saves default to Enhanced because the formerly
+ * reserved byte is zero.  Only newly-created characters explicitly choosing
+ * Classic receive the nonzero marker. */
+static inline int mw_experience_mode(const Character *p) {
+    return mw_character_native_valid(p) &&
+           p->native.experience_mode == MW_EXPERIENCE_CLASSIC ?
+           MW_EXPERIENCE_CLASSIC : MW_EXPERIENCE_ENHANCED;
+}
+
+static inline void mw_set_experience_mode(Character *p, int mode) {
+    if (!p) return;
+    mw_character_native_ensure(p);
+    p->native.experience_mode = mode == MW_EXPERIENCE_CLASSIC ?
+                                MW_EXPERIENCE_CLASSIC :
+                                MW_EXPERIENCE_ENHANCED;
+}
 
 /* Race IDs */
 enum {
@@ -174,7 +314,9 @@ static const char *class_names[] = {
 
 /* Max players/save slots */
 #define MAX_PLAYERS     10
-#define MAX_DUNGEON_FLOORS 200
+#define MAX_DUNGEON_FLOOR  1000
+#define MAX_DUNGEON_FLOORS (MAX_DUNGEON_FLOOR + 1)
+#define CLASSIC_DUNGEON_FLOOR 250
 #define SPELLS_PER_TYPE 45
 #define SPELL_TYPES     4
 

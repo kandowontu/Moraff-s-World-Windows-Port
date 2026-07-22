@@ -15,6 +15,29 @@ typedef struct {
     u8 r, g, b;
 } PaletteEntry;
 
+/* Native-only semantic colors.  Keep these above the original renderer's
+ * 0x00..0xBF palette range so WORLD's depth-dependent DAC bands remain exact. */
+enum {
+    MW_COLOR_WALL_FACE = 224,
+    MW_COLOR_WALL_HIGHLIGHT,
+    MW_COLOR_WALL_CRACK,
+    MW_COLOR_CEILING_1,
+    MW_COLOR_CEILING_2,
+    MW_COLOR_DUNGEON_1,
+    MW_COLOR_DUNGEON_2,
+    MW_COLOR_DUNGEON_3,
+    MW_COLOR_CEILING_3,
+    MW_COLOR_FLOOR_1,
+    MW_COLOR_FLOOR_2,
+    MW_COLOR_FLOOR_3,
+    MW_COLOR_FLOOR_4,
+    MW_COLOR_FLOOR_5,
+    MW_COLOR_MAP_WHITE,
+    MW_COLOR_STATUS_CYAN,
+    MW_COLOR_PROMPT_ORANGE,
+    MW_COLOR_WALL_TINT
+};
+
 typedef struct {
     SDL_Window   *window;
     SDL_Renderer *renderer;
@@ -41,6 +64,10 @@ void video_present(Video *v);
 /* Palette */
 void video_set_palette(Video *v, int index, u8 r, u8 g, u8 b);
 void video_load_vga_default_palette(Video *v);
+void video_load_world_palette(Video *v, int floor,
+                              u8 background_r, u8 background_g,
+                              u8 background_b);
+int  video_world_palette_self_test(void);
 
 /* Drawing primitives — replacements for the 6 VGA dispatch functions */
 void video_clear(Video *v, u8 color);

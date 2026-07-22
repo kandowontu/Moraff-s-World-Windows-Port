@@ -1,28 +1,48 @@
 #include "mw_game.h"
 #include "mw_combat.h"
+#include "mw_trainer.h"
+#include "mw_wilderness.h"
+#include "mw_model_viewer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
+/*
+ * Original-routine coverage
+ * -------------------------
+ * MW_PORT comments identify the WORLD.C/WORLD.ASM routine whose observable
+ * behavior is implemented by the following native code. Several small DOS
+ * routines are deliberately represented by one data-driven C subsystem; the
+ * complete many-to-many mapping and outstanding work live in PORT_STATUS.md.
+ * Functions without an MW_PORT tag are native helpers, tests, or extensions.
+ */
+
 static void reveal_around_player(Game *g);
+static void reveal_around_player_animated(Game *g, Character *player);
 static int select_monster_floor(Game *g, int floor);
 static int load_pit_group(Game *g, int group);
 static int pit_bit_is_set(Game *g, int x, int y);
 static int pitfall_target(Game *g, int x, int y);
 static double experience_for_level(int level);
 static void draw_trapdoor_notice(Game *g, Character *player);
+static void draw_contextual_advice(Game *g, Character *player);
+static void game_draw_exploration_base(Game *g, Character *player);
 static const u8 race_stat_base[RACE_COUNT][6];
 static void roll_character_stats(Game *g, int race, u16 stats[6]);
 static float starting_spell_points(const Character *p);
 static int character_creation_self_test(void);
 
+/* MW_PORT: WORLD build_filepath (0x277E7)/build_open_file (0x2792F) family,
+ * expressed as safe local paths instead of DOS drive/path manipulation. */
 /* ── File path helper ── */
 
 void game_make_path(Game *g, char *out, int out_sz, const char *filename) {
     snprintf(out, out_sz, "%s/%s", g->game_dir, filename);
 }
 
+/* MW_PORT: WORLD's shared random stream used by map, monster, combat,
+ * treasure, and character-generation routines. */
 /* ── RNG — exact match of original LCG ── */
 
 void game_srand(Game *g, u32 seed) {
@@ -34,6 +54,50 @@ int game_rand(Game *g) {
     return (int)((g->rand_state >> 16) & 0x7FFF);
 }
 
+static const GameTraversalRules classic_traversal_rules = {
+    CLASSIC_DUNGEON_FLOOR, /* deepest dungeon floor */
+    65,                    /* Ascend, Double/Major Ascend depth gate */
+    123,                   /* Descend depth gate */
+    75,                    /* deepest Major Descend landing */
+    120,                   /* deepest floor where D may dig */
+    124,                   /* WORLD dig-search reversal floor */
+    150,                   /* WORLD dig-search initial direction split */
+    16,                    /* shallow extra digging sequence */
+    130                    /* WORLD dig-search attempt budget */
+};
+
+static const GameTraversalRules enhanced_traversal_rules = {
+    MAX_DUNGEON_FLOOR,
+    260,
+    492,
+    300,
+    480,
+    496,
+    600,
+    64,
+    520
+};
+
+const GameTraversalRules *game_traversal_rules(const Game *g) {
+    /* Only the exact Classic marker selects original traversal geometry.
+     * Zero/uninitialized and pre-mode native saves intentionally retain the
+     * Enhanced default established by game_init/load. */
+    return g && g->dungeon_max_floor == CLASSIC_DUNGEON_FLOOR ?
+           &classic_traversal_rules : &enhanced_traversal_rules;
+}
+
+int game_dungeon_max_floor(const Game *g) {
+    return game_traversal_rules(g)->max_floor;
+}
+
+int game_clamp_dungeon_floor(const Game *g, int floor) {
+    if (floor < 0) return 0;
+    int max_floor = game_traversal_rules(g)->max_floor;
+    return floor > max_floor ? max_floor : floor;
+}
+
+/* MW_PORT: WORLD func_0A4CF, func_0A51B, func_0A548 and func_0A60D.
+ * Character remains the original packed 0x928-byte save record. */
 /* ── Character save/load ── */
 
 int game_load_character(Game *g, int slot) {
@@ -54,6 +118,14 @@ int game_load_character(Game *g, int slot) {
     fclose(f);
 
     if (n == sizeof(Character)) {
+        mw_character_native_ensure(&g->chars[slot]);
+        /* A zero-HP save is the original game's permanent-death tombstone.
+         * Treat it as an available slot when the launcher is rebuilt instead
+         * of allowing an unusable dead character back into exploration. */
+        if (g->chars[slot].hp_cur == 0) {
+            g->char_exists[slot] = 0;
+            return -1;
+        }
         g->char_exists[slot] = 1;
         return 0;
     }
@@ -64,6 +136,8 @@ int game_load_character(Game *g, int slot) {
 
 int game_save_character(Game *g, int slot) {
     if (slot < 0 || slot >= MAX_PLAYERS) return -1;
+
+    mw_character_native_ensure(&g->chars[slot]);
 
     char path[260];
     char fname[8];
@@ -96,10 +170,107 @@ static void write_le32(u8 *p, u32 value) {
     p[3] = (u8)(value >> 24);
 }
 
+/* V2/V3 used raw type order.  Keep it as an import map so rearranging the
+   displayed catalog never assigns an old kill count to another monster. */
+static int bestiary_type_at_raw_catalog_index(int index) {
+    for (int type = 0; type < MONSTER_TYPE_COUNT; type++) {
+        if (!combat_monster_type_spawnable(type)) continue;
+        if (index-- == 0) return type;
+    }
+    return -1;
+}
+
+/* MWBEST04's 117 records used the completed floor-500 display order. */
+static int bestiary_type_at_v4_catalog_index(int index) {
+    for (int type = 0; type < 112; type++) {
+        if (!combat_monster_type_spawnable(type)) continue;
+        if (index-- == 0) return type;
+    }
+    for (int type = 114; type <= 125; type++)
+        if (index-- == 0) return type;
+    if (index-- == 0) return 112;
+    for (int type = 126; type <= 133; type++)
+        if (index-- == 0) return type;
+    if (index-- == 0) return 113;
+    return -1;
+}
+
+static int bestiary_type_at_catalog_index(int index) {
+    /* Preserve the original roster, then order every native generation and
+       boss by the point at which the player first meets it. */
+    for (int type = 0; type < 112; type++) {
+        if (!combat_monster_type_spawnable(type)) continue;
+        if (index-- == 0) return type;
+    }
+    for (int type = 114; type <= 125; type++)
+        if (index-- == 0) return type;
+    if (index-- == 0) return 112; /* Violet Abyss King, floor 375 */
+    for (int type = 126; type <= 133; type++)
+        if (index-- == 0) return type;
+    if (index-- == 0) return 113; /* Prismatic World King, floor 500 */
+    for (int type = 134; type <= 145; type++)
+        if (index-- == 0) return type;
+    if (index-- == 0) return 174; /* Cobalt Rift Tyrant, floor 625 */
+    for (int type = 146; type <= 153; type++)
+        if (index-- == 0) return type;
+    if (index-- == 0) return 175; /* Crimson Star Eater, floor 750 */
+    for (int type = 154; type <= 165; type++)
+        if (index-- == 0) return type;
+    if (index-- == 0) return 176; /* Viridian Eternity Dragon, floor 875 */
+    for (int type = 166; type <= 173; type++)
+        if (index-- == 0) return type;
+    if (index-- == 0) return 177; /* Radiant Moraff Ascendant, floor 1000 */
+    return -1;
+}
+
+static int bestiary_catalog_index_for_type(int wanted) {
+    for (int index = 0; index < BESTIARY_CATALOG_COUNT; index++)
+        if (bestiary_type_at_catalog_index(index) == wanted) return index;
+    return -1;
+}
+
+static int bestiary_type_available_in_mode(Game *g, int type) {
+    return type >= 0 && type < MONSTER_TYPE_COUNT &&
+           monster_types[type].minL <= game_dungeon_max_floor(g);
+}
+
+static int bestiary_mode_catalog_count(Game *g) {
+    int count = 0;
+    for (int i = 0; i < BESTIARY_CATALOG_COUNT; i++) {
+        int type = bestiary_type_at_catalog_index(i);
+        if (bestiary_type_available_in_mode(g, type)) count++;
+    }
+    return count;
+}
+
+static int bestiary_type_at_mode_catalog_index(Game *g, int wanted_index) {
+    for (int i = 0; i < BESTIARY_CATALOG_COUNT; i++) {
+        int type = bestiary_type_at_catalog_index(i);
+        if (!bestiary_type_available_in_mode(g, type)) continue;
+        if (wanted_index-- == 0) return type;
+    }
+    return -1;
+}
+
+static int bestiary_mode_catalog_index_for_type(Game *g, int wanted_type) {
+    int mode_index = 0;
+    for (int i = 0; i < BESTIARY_CATALOG_COUNT; i++) {
+        int type = bestiary_type_at_catalog_index(i);
+        if (!bestiary_type_available_in_mode(g, type)) continue;
+        if (type == wanted_type) return mode_index;
+        mode_index++;
+    }
+    return -1;
+}
+
 int game_load_bestiary(Game *g, int slot) {
-    static const u8 magic[8] = {'M','W','B','E','S','T','0','1'};
+    static const u8 magic_v1[8] = {'M','W','B','E','S','T','0','1'};
+    static const u8 magic_v2[8] = {'M','W','B','E','S','T','0','2'};
+    static const u8 magic_v3[8] = {'M','W','B','E','S','T','0','3'};
+    static const u8 magic_v4[8] = {'M','W','B','E','S','T','0','4'};
+    static const u8 magic_v5[8] = {'M','W','B','E','S','T','0','5'};
     enum { HEADER_SIZE = 12, RECORD_SIZE = 4 };
-    u8 data[HEADER_SIZE + BESTIARY_MONSTER_COUNT * RECORD_SIZE];
+    u8 header[HEADER_SIZE], record[RECORD_SIZE];
     char name[24], path[300];
 
     memset(g->bestiary_kills, 0, sizeof(g->bestiary_kills));
@@ -111,30 +282,67 @@ int game_load_bestiary(Game *g, int slot) {
     game_make_path(g, path, sizeof(path), name);
     FILE *f = fopen(path, "rb");
     if (!f) return 0; /* Existing DOS/port saves begin with an empty record. */
-    size_t got = fread(data, 1, sizeof(data), f);
-    fclose(f);
-    if (got != sizeof(data) || memcmp(data, magic, sizeof(magic)) != 0 ||
-        read_le32(data + 8) != BESTIARY_MONSTER_COUNT)
+    if (fread(header, 1, sizeof(header), f) != sizeof(header)) {
+        fclose(f);
         return -1;
+    }
 
-    for (int i = 0; i < BESTIARY_MONSTER_COUNT; i++)
-        g->bestiary_kills[i] = read_le32(data + HEADER_SIZE + i * RECORD_SIZE);
+    int legacy = memcmp(header, magic_v1, sizeof(magic_v1)) == 0;
+    int compact_v2 = memcmp(header, magic_v2, sizeof(magic_v2)) == 0;
+    int compact_v3 = memcmp(header, magic_v3, sizeof(magic_v3)) == 0;
+    int compact_v4 = memcmp(header, magic_v4, sizeof(magic_v4)) == 0;
+    int current = memcmp(header, magic_v5, sizeof(magic_v5)) == 0;
+    u32 count = read_le32(header + 8);
+    if ((!legacy && !compact_v2 && !compact_v3 && !compact_v4 && !current) ||
+        (legacy && count != 112 && count != 114 &&
+         count != 134 && count != BESTIARY_MONSTER_COUNT) ||
+        (compact_v2 && count != 95 && count != 97) ||
+        (compact_v3 && count != 117) ||
+        (compact_v4 && count != 117) ||
+        (current && count != BESTIARY_CATALOG_COUNT)) {
+        fclose(f);
+        return -1;
+    }
+
+    for (u32 i = 0; i < count; i++) {
+        if (fread(record, 1, sizeof(record), f) != sizeof(record)) {
+            fclose(f);
+            memset(g->bestiary_kills, 0, sizeof(g->bestiary_kills));
+            return -1;
+        }
+        int type = legacy ? (int)i :
+                   (current ? bestiary_type_at_catalog_index((int)i) :
+                    (compact_v4 ? bestiary_type_at_v4_catalog_index((int)i) :
+                                  bestiary_type_at_raw_catalog_index((int)i)));
+        if (type >= 0 && combat_monster_type_spawnable(type))
+            g->bestiary_kills[type] = read_le32(record);
+    }
+    fclose(f);
+
+    /* Import each historical ordering by type, then rewrite V5 so existing
+       discoveries remain attached while the new entries begin unknown. */
+    if (!current) {
+        g->bestiary_dirty = 1;
+        return game_save_bestiary(g);
+    }
     return 0;
 }
 
 int game_save_bestiary(Game *g) {
-    static const u8 magic[8] = {'M','W','B','E','S','T','0','1'};
+    static const u8 magic[8] = {'M','W','B','E','S','T','0','5'};
     enum { HEADER_SIZE = 12, RECORD_SIZE = 4 };
-    u8 data[HEADER_SIZE + BESTIARY_MONSTER_COUNT * RECORD_SIZE];
+    u8 data[HEADER_SIZE + BESTIARY_CATALOG_COUNT * RECORD_SIZE];
     char name[24], path[300];
 
     if (!g->bestiary_loaded || g->active_save_slot < 0 ||
         g->active_save_slot >= MAX_PLAYERS) return 0;
     memcpy(data, magic, sizeof(magic));
-    write_le32(data + 8, BESTIARY_MONSTER_COUNT);
-    for (int i = 0; i < BESTIARY_MONSTER_COUNT; i++)
+    write_le32(data + 8, BESTIARY_CATALOG_COUNT);
+    for (int i = 0; i < BESTIARY_CATALOG_COUNT; i++) {
+        int type = bestiary_type_at_catalog_index(i);
         write_le32(data + HEADER_SIZE + i * RECORD_SIZE,
-                   g->bestiary_kills[i]);
+                   type >= 0 ? g->bestiary_kills[type] : 0);
+    }
 
     make_bestiary_name(name, sizeof(name), g->active_save_slot);
     game_make_path(g, path, sizeof(path), name);
@@ -147,6 +355,8 @@ int game_save_bestiary(Game *g) {
     return 0;
 }
 
+/* MW_PORT: WORLD func_073B5/func_07783 image loading and the scanline-table
+ * decoder consumed by func_14B85. */
 /* ── .PIC loader ── */
 
 static int load_pic_file(const char *path, u8 **images, int *sizes, int max_images) {
@@ -253,6 +463,8 @@ int game_load_pics(Game *g) {
     return (g->world_pic_count > 0) ? 0 : -1;
 }
 
+/* MW_PORT: WORLD load_dungeon_bin (0x0A3E7), load_monster_map (0x09C8A),
+ * and their floor-selection/state helpers 0x09DA6..0x0A39C. */
 /* ── Binary data loaders ── */
 
 static u8 *load_binary_file(const char *path, int *out_size) {
@@ -293,7 +505,10 @@ int game_load_dungeon(Game *g) {
         game_make_path(g, path, sizeof(path), "worldmap.bin");
         g->worldmap_data = load_binary_file(path, &wsz);
     }
-    if (g->worldmap_data) printf("Loaded WORLDMAP.BIN: %d bytes\n", wsz);
+    if (g->worldmap_data) {
+        g->worldmap_data_size = wsz;
+        printf("Loaded WORLDMAP.BIN: %d bytes\n", wsz);
+    }
 
     return (g->dungeon_data) ? 0 : -1;
 }
@@ -313,6 +528,8 @@ int game_load_monsters(Game *g) {
     return (g->monster_data) ? 0 : -1;
 }
 
+/* MW_PORT: WORLD func_1EE04 (template selection), func_1EEC9 (ladders),
+ * calc_damage/far_1EFA4 (two-bit edges), and func_1F2D4 (rock cells). */
 /* ── Procedural dungeon map access ──
  *
  * WORLD.ASM far_1EFA4 does not index DUNG.BIN as an 80x80 room array.  The
@@ -407,6 +624,7 @@ static int rock_cell_at(Game *g, int x, int y, int floor) {
  * the routine bridges as many as three intervening all-rock floors. */
 static int ladder_delta(Game *g, int x, int y) {
     int floor = g->cur_floor;
+    const GameTraversalRules *rules = game_traversal_rules(g);
 
     for (int shaft = floor - 1;
          shaft > floor - 4 && shaft >= 0; shaft--) {
@@ -421,7 +639,8 @@ static int ladder_delta(Game *g, int x, int y) {
 
     if (dungeon_hash(x, y, floor, g->dungeon_number, 31) == 1) {
         for (int landing = floor + 1;
-             landing < floor + 3 && landing < 202; landing++) {
+             landing < floor + 3 &&
+             landing <= rules->max_floor; landing++) {
             if (!rock_cell_at(g, x, y, landing)) return landing - floor;
         }
     }
@@ -449,36 +668,42 @@ int map_has_wall_e(u8 cell) { return ((cell >> 2) & 3) != 3; }
 int map_has_wall_s(u8 cell) { return ((cell >> 4) & 3) != 3; }
 int map_has_wall_w(u8 cell) { return ((cell >> 6) & 3) != 3; }
 
-/* Check if an actor can move to (nx, ny) from (ox, oy).
-   A normal door (edge 1) opens as part of the move; it is not a solid wall and
-   has no separate "open" command.  Doors remain opaque to viewport rays and
-   fog-of-war discovery, both of which deliberately require edge 3.  Do not
-   use 0xFF as an invalid-cell sentinel here: four open (3) edges are also
-   exactly 0xFF. */
-int game_can_move(Game *g, int ox, int oy, int nx, int ny) {
-    if (ox < 0 || ox >= MAP_W || oy < 0 || oy >= MAP_H) return 0;
-    if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) return 0;
-    u8 src = map_get_cell(g, ox, oy);
-    int wall_val = 0;
-    if (ny < oy) wall_val = src & WALL_N_MASK;
-    else if (ny > oy) wall_val = (src & WALL_S_MASK) >> 4;
-    else if (nx < ox) wall_val = (src & WALL_W_MASK) >> 6;
-    else if (nx > ox) wall_val = (src & WALL_E_MASK) >> 2;
-
-    return wall_val == 1 || wall_val == 3;
+static int edge_between_cells(Game *g, int x1, int y1, int x2, int y2) {
+    if (x1 < 0 || x1 >= MAP_W || y1 < 0 || y1 >= MAP_H ||
+        x2 < 0 || x2 >= MAP_W || y2 < 0 || y2 >= MAP_H)
+        return 0;
+    if (y2 < y1) return map_get_edge(g, x1,     y1,     1);
+    if (y2 > y1) return map_get_edge(g, x1,     y1 + 1, 1);
+    if (x2 < x1) return map_get_edge(g, x1,     y1,     0);
+    if (x2 > x1) return map_get_edge(g, x1 + 1, y1,     0);
+    return 3;
 }
 
+/* Check if an actor can move to (nx, ny) from (ox, oy).
+   A normal door (edge 1) and a secret door (edge 2) open as part of the move;
+   neither has a separate "open" command.  The latter deliberately keeps the
+   wall texture, so it is found by walking into it.  Both remain opaque to
+   viewport rays and fog-of-war discovery, which require edge 3.  Do not use
+   0xFF as an invalid-cell sentinel here: four open (3) edges are also exactly
+   0xFF. */
+int game_can_move(Game *g, int ox, int oy, int nx, int ny) {
+    int wall_val = edge_between_cells(g, ox, oy, nx, ny);
+    return wall_val == 1 || wall_val == 2 || wall_val == 3;
+}
+
+/* MW_PORT: WORLD func_09185/func_091B1/func_091CD monster identity and spawn
+ * rules; load_monster_map plus func_09DA6..func_0A39C persistence; func_0C970
+ * adjacency; func_0E8C8 movement timing; func_0EA5A pit generation/history. */
 /* ── Persistent MON.MAP and .DUN world state ── */
 
 static int monster_record_hp(const MonsterRecord *m) {
-    return (int)m->hp_lo | ((int)m->hp_hi << 8);
+    if (!m) return 0;
+    return m->hp > INT32_MAX ? INT32_MAX : (int)m->hp;
 }
 
 static void monster_record_set_hp(MonsterRecord *m, int hp) {
     if (hp < 0) hp = 0;
-    if (hp > 0xFFFF) hp = 0xFFFF;
-    m->hp_lo = (u8)hp;
-    m->hp_hi = (u8)(hp >> 8);
+    m->hp = (u32)hp;
 }
 
 static int monster_record_alive(Game *g, const MonsterRecord *m) {
@@ -491,21 +716,40 @@ static void clear_monster_record(MonsterRecord *m) {
     /* This is the dead sentinel used by the original MON.MAP files. */
     m->x = 100;
     m->y = 100;
-    m->hp_lo = m->hp_hi = m->type = m->level = 0;
+    m->hp = 0;
+    m->type = 0;
+    m->level = 0;
 }
 
 static void make_monster_map_name(char *out, int out_sz, int slot) {
     snprintf(out, out_sz, "%dMON.MAP", slot);
 }
 
+enum { QUEST_CHAIN_COUNT = 14 };
+
+static const u16 quest_floor_by_step[QUEST_CHAIN_COUNT] = {
+    4, 8, 12, 16, 125, 150, 175, 200, 375, 500,
+    625, 750, 875, 1000
+};
+
+static const u8 quest_type_by_step[QUEST_CHAIN_COUNT] = {
+    104, 105, 106, 107, 108, 109, 110, 111, 112, 113,
+    174, 175, 176, 177
+};
+
+static int quest_step_for_type(int type) {
+    for (int i = 0; i < QUEST_CHAIN_COUNT; i++)
+        if (quest_type_by_step[i] == type) return i;
+    return -1;
+}
+
 static int quest_boss_type(Game *g, int floor) {
-    static const int quest_floor[8] = {4, 8, 12, 16, 125, 150, 175, 200};
-    u8 flags = 0;
+    u16 flags = 0;
     if (g->cur_player >= 0 && g->cur_player < MAX_PLAYERS)
-        flags = g->chars[g->cur_player].quest_flags;
-    for (int i = 0; i < 8; i++)
-        if (floor == quest_floor[i] && !(flags & (1u << i)))
-            return 104 + i;
+        flags = mw_quest_flags(&g->chars[g->cur_player]);
+    for (int i = 0; i < QUEST_CHAIN_COUNT; i++)
+        if (floor == quest_floor_by_step[i] && !(flags & (1u << i)))
+            return quest_type_by_step[i];
     return -1;
 }
 
@@ -515,12 +759,13 @@ static void roll_monster_identity(Game *g, MonsterRecord *m,
                combat_pick_monster_type(g, floor);
     int level = floor + (game_rand(g) % 5) - 2;
     if (level < 1) level = 1;
-    if (level > 255) level = 255;
+    if (level > UINT16_MAX) level = UINT16_MAX;
     int cap = combat_calc_monster_hp(&monster_types[type], level);
-    int hp = cap > 1 ? 1 + game_rand(g) % cap : 1;
+    u32 roll = ((u32)game_rand(g) << 15) | (u32)game_rand(g);
+    int hp = cap > 1 ? 1 + (int)(roll % (u32)cap) : 1;
     monster_record_set_hp(m, hp);
     m->type = (u8)type;
-    m->level = (u8)level;
+    m->level = (u16)level;
 }
 
 /* Repair MON.MAP layers made by older port builds, which could randomly put
@@ -552,7 +797,8 @@ static void sanitize_monster_floor(Game *g, int layer, int floor) {
     for (int i = 0; i < MONSTERS_PER_FLOOR; i++) {
         MonsterRecord *m = &map[i];
         if (!monster_record_alive(g, m) || i == boss_index) continue;
-        if (m->type >= 104 || !combat_monster_type_valid(m->type, floor)) {
+        if (quest_step_for_type(m->type) >= 0 ||
+            !combat_monster_type_valid(m->type, floor)) {
             roll_monster_identity(g, m, floor, -1);
             g->monster_map_dirty = 1;
         }
@@ -566,7 +812,10 @@ static int save_monster_map(Game *g) {
     game_make_path(g, path, sizeof(path), name);
     FILE *f = fopen(path, "wb");
     if (!f) return -1;
-    fwrite(g->monster_floor, 1, MONSTER_MAP_LAYERS, f);
+    static const u8 magic[8] = {'M','W','M','O','N','0','0','3'};
+    fwrite(magic, 1, sizeof(magic), f);
+    fwrite(g->monster_floor, sizeof(g->monster_floor[0]),
+           MONSTER_MAP_LAYERS, f);
     fwrite(g->monster_map, sizeof(MonsterRecord),
            MONSTER_MAP_LAYERS * MONSTERS_PER_FLOOR, f);
     fclose(f);
@@ -602,7 +851,7 @@ static void generate_monster_floor(Game *g, int layer, int floor) {
                               made == 0 ? quest_boss_type(g, floor) : -1);
         made++;
     }
-    g->monster_floor[layer] = (u8)floor;
+    g->monster_floor[layer] = (u16)floor;
     g->monster_map_dirty = 1;
 }
 
@@ -614,7 +863,7 @@ static int select_monster_floor(Game *g, int floor) {
         return -1;
     }
     for (int i = 0; i < MONSTER_MAP_LAYERS; i++) {
-        if (g->monster_floor[i] == (u8)floor) {
+        if (g->monster_floor[i] == (u16)floor) {
             g->monster_layer = i;
             sanitize_monster_floor(g, i, floor);
             return i;
@@ -624,7 +873,7 @@ static int select_monster_floor(Game *g, int floor) {
     /* MON.MAP is a three-floor cache.  Rotate the oldest layer out exactly
      * as the DOS game does when a newly visited floor is entered. */
     memmove(&g->monster_floor[0], &g->monster_floor[1],
-            MONSTER_MAP_LAYERS - 1);
+            sizeof(g->monster_floor[0]) * (MONSTER_MAP_LAYERS - 1));
     memmove(&g->monster_map[0], &g->monster_map[1],
             sizeof(g->monster_map[0]) * (MONSTER_MAP_LAYERS - 1));
     g->monster_layer = MONSTER_MAP_LAYERS - 1;
@@ -726,14 +975,83 @@ int game_load_world_state(Game *g, int slot) {
     game_make_path(g, path, sizeof(path), name);
     FILE *f = fopen(path, "rb");
     if (f) {
-        size_t a = fread(g->monster_floor, 1, MONSTER_MAP_LAYERS, f);
-        size_t b = fread(g->monster_map, sizeof(MonsterRecord),
-                         MONSTER_MAP_LAYERS * MONSTERS_PER_FLOOR, f);
+        static const u8 magic_v3[8] = {'M','W','M','O','N','0','0','3'};
+        static const u8 magic_v2[8] = {'M','W','M','O','N','0','0','2'};
+        u8 header[8];
+        size_t h = fread(header, 1, sizeof(header), f);
+        size_t a = 0, b = 0;
+        if (h == sizeof(header) &&
+            memcmp(header, magic_v3, sizeof(magic_v3)) == 0) {
+            a = fread(g->monster_floor, sizeof(g->monster_floor[0]),
+                      MONSTER_MAP_LAYERS, f);
+            b = fread(g->monster_map, sizeof(MonsterRecord),
+                      MONSTER_MAP_LAYERS * MONSTERS_PER_FLOOR, f);
+        } else if (h == sizeof(header) &&
+                   memcmp(header, magic_v2, sizeof(magic_v2)) == 0) {
+            /* Native-v2 used a packed seven-byte record with 16-bit HP. */
+            u8 old_map[MONSTER_MAP_LAYERS][MONSTERS_PER_FLOOR][7];
+            a = fread(g->monster_floor, sizeof(g->monster_floor[0]),
+                      MONSTER_MAP_LAYERS, f);
+            b = fread(old_map, 7,
+                      MONSTER_MAP_LAYERS * MONSTERS_PER_FLOOR, f);
+            if (a == MONSTER_MAP_LAYERS &&
+                b == MONSTER_MAP_LAYERS * MONSTERS_PER_FLOOR) {
+                for (int z = 0; z < MONSTER_MAP_LAYERS; z++)
+                    for (int i = 0; i < MONSTERS_PER_FLOOR; i++) {
+                        const u8 *src = old_map[z][i];
+                        MonsterRecord *dst = &g->monster_map[z][i];
+                        dst->x = src[0];
+                        dst->y = src[1];
+                        dst->hp = (u32)src[2] | ((u32)src[3] << 8);
+                        dst->type = src[4];
+                        dst->level = (u16)src[5] | ((u16)src[6] << 8);
+                    }
+                g->monster_map_dirty = 1;
+            }
+        } else {
+            /* Import the original three byte floor IDs plus 6-byte records.
+             * The next save rewrites this cache as MWMON003. */
+            typedef struct LegacyMonsterRecord {
+                u8 x, y, hp_lo, hp_hi, type, level;
+            } LegacyMonsterRecord;
+            u8 old_floor[MONSTER_MAP_LAYERS];
+            LegacyMonsterRecord old_map[MONSTER_MAP_LAYERS][MONSTERS_PER_FLOOR];
+            rewind(f);
+            a = fread(old_floor, 1, MONSTER_MAP_LAYERS, f);
+            b = fread(old_map, sizeof(LegacyMonsterRecord),
+                      MONSTER_MAP_LAYERS * MONSTERS_PER_FLOOR, f);
+            if (a == MONSTER_MAP_LAYERS &&
+                b == MONSTER_MAP_LAYERS * MONSTERS_PER_FLOOR) {
+                for (int z = 0; z < MONSTER_MAP_LAYERS; z++) {
+                    g->monster_floor[z] = old_floor[z] == 0xFF ?
+                                          UINT16_MAX : old_floor[z];
+                    for (int i = 0; i < MONSTERS_PER_FLOOR; i++) {
+                        LegacyMonsterRecord *src = &old_map[z][i];
+                        MonsterRecord *dst = &g->monster_map[z][i];
+                        dst->x = src->x;
+                        dst->y = src->y;
+                        dst->hp = (u32)src->hp_lo | ((u32)src->hp_hi << 8);
+                        dst->type = src->type;
+                        dst->level = src->level;
+                    }
+                }
+                g->monster_map_dirty = 1;
+            }
+        }
         fclose(f);
         if (a != MONSTER_MAP_LAYERS ||
             b != MONSTER_MAP_LAYERS * MONSTERS_PER_FLOOR) {
             memset(g->monster_floor, 0xFF, sizeof(g->monster_floor));
         }
+    }
+    /* Purge dormant raw definitions from every cached floor immediately,
+     * not only when that floor is selected later.  This migrates existing
+     * <slot>MON.MAP files away from Hobbit and the other unloaded-art rows. */
+    for (int layer = 0; layer < MONSTER_MAP_LAYERS; layer++) {
+        int cached_floor = g->monster_floor[layer];
+        if (cached_floor > 0 &&
+            cached_floor <= game_dungeon_max_floor(g))
+            sanitize_monster_floor(g, layer, cached_floor);
     }
     select_monster_floor(g, g->cur_floor);
     load_pit_group(g, g->cur_floor / PIT_GROUP_FLOORS);
@@ -761,7 +1079,12 @@ int game_find_adjacent_monster(Game *g) {
     static const int dy[4] = {-1, 1, 0, 0};
     for (int d = 0; d < 4; d++) {
         int x = g->cur_x + dx[d], y = g->cur_y + dy[d];
-        if (!game_can_move(g, g->cur_x, g->cur_y, x, y)) continue;
+        /* WORLD func_0C970 requires calc_damage's edge result to be exactly
+         * three before it considers the actor adjacent.  A value of one is
+         * a usable, auto-opening door, but it remains an opaque encounter
+         * boundary: the monster beyond it neither appears nor answers F. */
+        if (edge_between_cells(g, g->cur_x, g->cur_y, x, y) != 3)
+            continue;
         int index = game_find_monster(g, x, y);
         if (index >= 0) return index;
     }
@@ -787,9 +1110,11 @@ void game_kill_monster(Game *g, int index) {
     clear_monster_record(&g->monster_map[g->monster_layer][index]);
     g->monster_map_dirty = 1;
     save_monster_map(g);
+    mw_audio_play(&g->audio, MW_SFX_VICTORY);
 }
 
 void game_advance_monsters(Game *g, Character *player) {
+    g->advice_counter++;
     character_tick_effects(g, player);
     if (!g->monster_map_loaded || g->monster_layer < 0 || g->cur_floor <= 0) {
         g->monster_adjacent = 0;
@@ -804,40 +1129,55 @@ void game_advance_monsters(Game *g, Character *player) {
     static const int dx[4] = {0, 0, -1, 1};
     static const int dy[4] = {-1, 1, 0, 0};
 
-    for (int i = 0; i < MONSTERS_PER_FLOOR; i++) {
-        MonsterRecord *m = &map[i];
-        if (!monster_record_alive(g, m)) continue;
-        int distance = abs((int)m->x - g->cur_x) + abs((int)m->y - g->cur_y);
-        if (distance <= 1) continue;
-        int notices = distance <= 12 && (!player->eff_invisible || game_rand(g) % 3 == 0);
-        if (!notices && game_rand(g) % 8) continue;
+    /* WORLD func_0E8C8 turns loaded weight into monster action time.  The
+       native movement model uses one pass for each such opportunity, so a
+       burdened player is pursued more quickly while Feather removes the
+       character's body-weight component from that calculation. */
+    int opportunities = game_weight_monster_turns(player);
+    for (int opportunity = 0; opportunity < opportunities; opportunity++) {
+        for (int i = 0; i < MONSTERS_PER_FLOOR; i++) {
+            MonsterRecord *m = &map[i];
+            if (!monster_record_alive(g, m)) continue;
+            int distance = abs((int)m->x - g->cur_x) + abs((int)m->y - g->cur_y);
+            if (distance <= 1) continue;
+            int notices = distance <= 12 &&
+                          (!player->eff_invisible || game_rand(g) % 3 == 0);
+            if (!notices && game_rand(g) % 8) continue;
 
-        int order[4] = {0, 1, 2, 3};
-        if (notices) {
-            int hx = g->cur_x - (int)m->x;
-            int hy = g->cur_y - (int)m->y;
-            order[0] = abs(hx) >= abs(hy) ? (hx < 0 ? 2 : 3) : (hy < 0 ? 0 : 1);
-            order[1] = abs(hx) >= abs(hy) ? (hy < 0 ? 0 : 1) : (hx < 0 ? 2 : 3);
-            order[2] = order[0] ^ 1;
-            order[3] = order[1] ^ 1;
-        } else {
-            int r = game_rand(g) & 3;
-            for (int k = 0; k < 4; k++) order[k] = (r + k) & 3;
-        }
-
-        for (int k = 0; k < 4; k++) {
-            int d = order[k], nx = (int)m->x + dx[d], ny = (int)m->y + dy[d];
-            if (nx == g->cur_x && ny == g->cur_y) continue;
-            if (!game_can_move(g, m->x, m->y, nx, ny)) continue;
-            int occupied = 0;
-            for (int j = 0; j < MONSTERS_PER_FLOOR; j++) {
-                if (j != i && monster_record_alive(g, &map[j]) &&
-                    map[j].x == nx && map[j].y == ny) { occupied = 1; break; }
+            int order[4] = {0, 1, 2, 3};
+            if (notices) {
+                int hx = g->cur_x - (int)m->x;
+                int hy = g->cur_y - (int)m->y;
+                order[0] = abs(hx) >= abs(hy) ?
+                           (hx < 0 ? 2 : 3) : (hy < 0 ? 0 : 1);
+                order[1] = abs(hx) >= abs(hy) ?
+                           (hy < 0 ? 0 : 1) : (hx < 0 ? 2 : 3);
+                order[2] = order[0] ^ 1;
+                order[3] = order[1] ^ 1;
+            } else {
+                int r = game_rand(g) & 3;
+                for (int k = 0; k < 4; k++) order[k] = (r + k) & 3;
             }
-            if (occupied) continue;
-            m->x = (u8)nx; m->y = (u8)ny;
-            g->monster_map_dirty = 1;
-            break;
+
+            for (int k = 0; k < 4; k++) {
+                int d = order[k];
+                int nx = (int)m->x + dx[d], ny = (int)m->y + dy[d];
+                if (nx == g->cur_x && ny == g->cur_y) continue;
+                if (!game_can_move(g, m->x, m->y, nx, ny)) continue;
+                int occupied = 0;
+                for (int j = 0; j < MONSTERS_PER_FLOOR; j++) {
+                    if (j != i && monster_record_alive(g, &map[j]) &&
+                        map[j].x == nx && map[j].y == ny) {
+                        occupied = 1;
+                        break;
+                    }
+                }
+                if (occupied) continue;
+                m->x = (u8)nx;
+                m->y = (u8)ny;
+                g->monster_map_dirty = 1;
+                break;
+            }
         }
     }
     g->monster_adjacent = game_find_adjacent_monster(g) >= 0;
@@ -852,6 +1192,9 @@ int game_trapdoor_floor(Game *g, int x, int y) {
                               g->dungeon_number, 0x960) * 10;
     if (target < 10 || target >= 180 || target / 10 == g->cur_floor / 10)
         return -1;
+    /* Original keyed doors only target floors 10..170, but keep the global
+     * traversal invariant explicit in case the generator is extended. */
+    if (target > game_traversal_rules(g)->max_floor) return -1;
     return target;
 }
 
@@ -876,6 +1219,7 @@ static void set_pit_bit(Game *g, int x, int y) {
 
 static int pitfall_target(Game *g, int x, int y) {
     int floor = g->cur_floor;
+    const GameTraversalRules *rules = game_traversal_rules(g);
     int modulus = 230 - floor / 3;
     if (modulus < 20) modulus = 20;
     /* WORLD func_0EA5A uses a constant 5-in-modulus chance.  The value that
@@ -884,7 +1228,8 @@ static int pitfall_target(Game *g, int x, int y) {
         return floor;
     int span = floor > 9 ? 5 : 3;
     for (int target = floor + 1;
-         target < floor + span && target <= 180; target++)
+         target < floor + span &&
+         target <= rules->max_floor; target++)
         if (!rock_cell_at(g, x, y, target)) return target;
     return floor;
 }
@@ -896,13 +1241,22 @@ int game_is_known_pitfall(Game *g, int x, int y) {
            pitfall_target(g, x, y) != g->cur_floor;
 }
 
+void game_refresh_world_palette(Game *g) {
+    video_load_world_palette(&g->video, g->cur_floor,
+                             g->wall_color_r,
+                             g->wall_color_g,
+                             g->wall_color_b);
+}
+
 int game_change_floor(Game *g, Character *player, int new_floor) {
-    if (new_floor < 0) new_floor = 0;
-    if (new_floor > 201) new_floor = 201;
+    new_floor = game_clamp_dungeon_floor(g, new_floor);
     if (new_floor == g->cur_floor) return 0;
     save_monster_map(g);
     g->cur_floor = new_floor;
     player->floor_depth = (u16)new_floor;
+    /* WORLD rebuilds both floor-dependent DAC bands as soon as the active
+     * depth changes, before any transition or modal frame can be shown. */
+    game_refresh_world_palette(g);
     select_monster_floor(g, new_floor);
     load_pit_group(g, new_floor / PIT_GROUP_FLOORS);
     /* Free-placement spells may land on solid rock, and a cached monster can
@@ -914,7 +1268,65 @@ int game_change_floor(Game *g, Character *player, int new_floor) {
     memset(g->visited, 0, sizeof(g->visited));
     reveal_around_player(g);
     g->monster_adjacent = game_find_adjacent_monster(g) >= 0;
+    mw_audio_play(&g->audio, MW_SFX_LADDER);
     return 1;
+}
+
+/* WORLD func_1CCB5's E-key branch derives a fresh dungeon number from the
+ * outdoor region, clears the old dungeon actor/cache state, and searches the
+ * new floor-zero map for its roof/wilderness shop (type 5). */
+void game_begin_new_dungeon(Game *g, Character *player, int dungeon_number) {
+    if (!g || !player) return;
+    game_save_world_state(g);
+    g->dungeon_number = dungeon_number > 0 ? dungeon_number : 1;
+    player->dungeon_number = (u16)g->dungeon_number;
+
+    memset(g->monster_map, 0, sizeof(g->monster_map));
+    memset(g->monster_floor, 0xFF, sizeof(g->monster_floor));
+    g->monster_layer = -1;
+    g->monster_map_loaded = 1;
+    g->monster_map_dirty = 1;
+    g->cur_floor = -1;
+    game_change_floor(g, player, 0);
+
+    /* select_monster_floor may have read a previous dungeon's sidecar.  A
+     * newly generated world entrance deliberately starts a clean actor set. */
+    memset(g->monster_map, 0, sizeof(g->monster_map));
+    memset(g->monster_floor, 0xFF, sizeof(g->monster_floor));
+    g->monster_layer = 0;
+    g->monster_floor[0] = 0;
+    g->monster_map_dirty = 1;
+    memset(g->pit_used, 0, sizeof(g->pit_used));
+    memset(g->pit_row_mask, 0, sizeof(g->pit_row_mask));
+    g->pit_floor_mask = 0;
+    g->pit_group = 0;
+    g->pit_state_loaded = 1;
+    g->pit_state_dirty = 1;
+
+    int best_x = -1, best_y = -1, best_dist = 0x7FFFFFFF;
+    for (int y = 1; y < MAP_H - 1; y++)
+        for (int x = 1; x < MAP_W - 1; x++) {
+            if (game_shop_type(g, x, y) != 5 || rock_cell_at(g, x, y, 0))
+                continue;
+            int dist = abs(x - MAP_W / 2) + abs(y - MAP_H / 2);
+            if (dist < best_dist) {
+                best_dist = dist;
+                best_x = x;
+                best_y = y;
+            }
+        }
+    if (best_x < 0) {
+        game_relocate(g, player);
+    } else {
+        g->cur_x = best_x;
+        g->cur_y = best_y;
+        player->x_pos = (u16)best_x;
+        player->y_pos = (u16)best_y;
+        memset(g->visited, 0, sizeof(g->visited));
+        reveal_around_player(g);
+    }
+    player->floor_depth = 0;
+    g->monster_adjacent = 0;
 }
 
 int game_relocate(Game *g, Character *player) {
@@ -972,6 +1384,8 @@ int game_apply_pitfall(Game *g, Character *player) {
     return 1;
 }
 
+/* MW_PORT: dungeon initialization branch of WORLD func_0F6E5 plus
+ * func_0A3E7/load_dungeon_bin and original resource setup. */
 /* ── Initialization ── */
 
 int game_init(Game *g, const char *data_dir) {
@@ -985,7 +1399,7 @@ int game_init(Game *g, const char *data_dir) {
     strncpy(g->game_dir, data_dir, sizeof(g->game_dir) - 1);
 
     if (!SDL_WasInit(SDL_INIT_VIDEO)) {
-        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) < 0) {
+        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_AUDIO) < 0) {
             fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
             return -1;
         }
@@ -994,6 +1408,10 @@ int game_init(Game *g, const char *data_dir) {
     if (video_init(&g->video, "Moraff's World", 1) < 0) {
         return -1;
     }
+
+    if (!SDL_WasInit(SDL_INIT_AUDIO)) SDL_InitSubSystem(SDL_INIT_AUDIO);
+    mw_audio_init(&g->audio); /* A missing host audio device is non-fatal. */
+    mw_audio_set_enabled(&g->audio, g->sound_enabled);
 
     input_init(&g->input);
 
@@ -1025,6 +1443,7 @@ int game_init(Game *g, const char *data_dir) {
 
     g->num_players = 1;
     g->cur_player = 0;
+    g->dungeon_max_floor = MAX_DUNGEON_FLOOR;
 
     /* WORLD.ASM modes 8-10 are the chipset-specific 1024x768 variants. */
     g->video_mode = 8;
@@ -1043,10 +1462,13 @@ void game_shutdown(Game *g) {
     free(g->worldmap_data);
     free(g->monster_data);
 
+    mw_audio_shutdown(&g->audio);
     video_shutdown(&g->video);
     SDL_Quit();
 }
 
+/* MW_PORT: WORLD func_1F077/func_1F3FD/far_1FAE6 visibility and map memory;
+ * closed door edges terminate revelation but do not block traversal. */
 /* ── Fog of war: reveal cells around the player ── */
 
 static int edge_from_dir(Game *g, int x, int y, int dir) {
@@ -1098,6 +1520,39 @@ void game_update_visibility(Game *g) {
     reveal_around_player(g);
 }
 
+/* B selects the delay between newly exposed map bricks.  WORLD retains four
+ * settings, with the fourth effectively instantaneous on fast machines. */
+static void reveal_around_player_animated(Game *g, Character *player) {
+    u8 before[MAP_H][MAP_W];
+    u8 target[MAP_H][MAP_W];
+    static const int delay_ms[4] = {45, 20, 8, 0};
+    memcpy(before, g->visited, sizeof(before));
+    reveal_around_player(g);
+    memcpy(target, g->visited, sizeof(target));
+    if (g->brick_speed >= 3) return;
+
+    memcpy(g->visited, before, sizeof(before));
+    for (int distance = 0; distance < 14; distance++) {
+        int changed = 0;
+        for (int y = 0; y < MAP_H; y++)
+            for (int x = 0; x < MAP_W; x++) {
+                if (before[y][x] || !target[y][x] ||
+                    abs(x - g->cur_x) + abs(y - g->cur_y) != distance)
+                    continue;
+                g->visited[y][x] = 1;
+                changed = 1;
+            }
+        if (changed) {
+            draw_minimap(g, 0, 0x1AE * LOGICAL_H / 1200,
+                         0x11B * LOGICAL_W / 1600, 38 * 10);
+            video_present(&g->video);
+            SDL_Delay((u32)delay_ms[g->brick_speed & 3]);
+        }
+    }
+    memcpy(g->visited, target, sizeof(target));
+    (void)player;
+}
+
 /* ── Check if any adjacent cell has a monster ── */
 
 static int has_adjacent_monster(Game *g) {
@@ -1105,6 +1560,9 @@ static int has_adjacent_monster(Game *g) {
     return g->monster_adjacent;
 }
 
+/* MW_PORT: WORLD func_1F077, func_1F3FD and far_1FAE6 (1024-mode map),
+ * including wall, door, ladder, trap-door, known-pit and blinking-player
+ * symbols. */
 /* ── Drawing: 1024-mode map window (WORLD.ASM sub_086F1/far_1FAE6) ── */
 
 /* WORLD.ASM sub_1F077 does not recolor a door's wall.  At the ten-pixel
@@ -1189,26 +1647,30 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
              * value 3 is left undrawn.  Stone and door edges retain the same
              * white wall; doors receive sub_1F077's perpendicular marker. */
             if (edge[0] != 3) {
-                video_hline(v, x, y, cell_px, 46);
+                video_hline(v, x, y, cell_px, MW_COLOR_MAP_WHITE);
                 if (edge[0] == 1)
-                    draw_map_door_marker(v, x, y, cell_px, 1, 46);
+                    draw_map_door_marker(v, x, y, cell_px, 1,
+                                         MW_COLOR_MAP_WHITE);
             }
             if (edge[2] != 3) {
-                video_hline(v, x, y + cell_px - 1, cell_px, 46);
+                video_hline(v, x, y + cell_px - 1, cell_px,
+                            MW_COLOR_MAP_WHITE);
                 if (edge[2] == 1)
                     draw_map_door_marker(v, x, y + cell_px - 1,
-                                         cell_px, 1, 46);
+                                         cell_px, 1, MW_COLOR_MAP_WHITE);
             }
             if (edge[3] != 3) {
-                video_vline(v, x, y, cell_px, 46);
+                video_vline(v, x, y, cell_px, MW_COLOR_MAP_WHITE);
                 if (edge[3] == 1)
-                    draw_map_door_marker(v, x, y, cell_px, 0, 46);
+                    draw_map_door_marker(v, x, y, cell_px, 0,
+                                         MW_COLOR_MAP_WHITE);
             }
             if (edge[1] != 3) {
-                video_vline(v, x + cell_px - 1, y, cell_px, 46);
+                video_vline(v, x + cell_px - 1, y, cell_px,
+                            MW_COLOR_MAP_WHITE);
                 if (edge[1] == 1)
                     draw_map_door_marker(v, x + cell_px - 1, y,
-                                         cell_px, 0, 46);
+                                         cell_px, 0, MW_COLOR_MAP_WHITE);
             }
 
             /* Red corner pixels reproduce the brick joints against the
@@ -1221,8 +1683,9 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
                 /* The DOS map uses opposite diagonal strokes for the two
                  * ladder directions.  Down is a backslash. */
                 for (int p = 2; p <= 7; p++) {
-                    video_put_pixel(v, x + p, y + p, 47);
-                    video_put_pixel(v, x + p, y + p + 1, 47);
+                    video_put_pixel(v, x + p, y + p, MW_COLOR_STATUS_CYAN);
+                    video_put_pixel(v, x + p, y + p + 1,
+                                    MW_COLOR_STATUS_CYAN);
                 }
             } else if (ladder < 0) {
                 /* Up is a forward slash. */
@@ -1238,10 +1701,10 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
                  * high-contrast ladder inside the authentic type+2 color. */
                 u8 shop_color = (u8)(shop + 2);
                 video_fill_rect(v, x + 1, y + 1, 8, 8, shop_color);
-                video_hline(v, x + 1, y + 1, 8, 46);
-                video_hline(v, x + 1, y + 8, 8, 46);
-                video_vline(v, x + 1, y + 1, 8, 46);
-                video_vline(v, x + 8, y + 1, 8, 46);
+                video_hline(v, x + 1, y + 1, 8, MW_COLOR_MAP_WHITE);
+                video_hline(v, x + 1, y + 8, 8, MW_COLOR_MAP_WHITE);
+                video_vline(v, x + 1, y + 1, 8, MW_COLOR_MAP_WHITE);
+                video_vline(v, x + 8, y + 1, 8, MW_COLOR_MAP_WHITE);
                 video_vline(v, x + 3, y + 2, 6, 0);
                 video_vline(v, x + 6, y + 2, 6, 0);
                 video_hline(v, x + 3, y + 3, 4, 4);
@@ -1280,6 +1743,9 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
     }
 }
 
+/* MW_PORT: WORLD func_14B85 (actors), func_14F53 (wall faces), func_16488
+ * (perspective scene), func_1F355/func_1F3B2/func_1F9EF (dungeon geometry),
+ * and func_0D74F (four-view arrangement). */
 /* ── Drawing: 3D first-person view (one viewport, called four times) ── */
 
 /* Direction deltas: index by render direction (0=N, 1=S, 2=W, 3=E) */
@@ -1302,12 +1768,7 @@ static void dir_to_right(int dir, int *dx, int *dy) {
 }
 
 static int edge_between(Game *g, int x1, int y1, int x2, int y2) {
-    if (x2 < 0 || x2 >= MAP_W || y2 < 0 || y2 >= MAP_H) return 0;
-    if (y2 < y1) return map_get_edge(g, x1,     y1,     1);
-    if (y2 > y1) return map_get_edge(g, x1,     y1 + 1, 1);
-    if (x2 < x1) return map_get_edge(g, x1,     y1,     0);
-    if (x2 > x1) return map_get_edge(g, x1 + 1, y1,     0);
-    return 3;
+    return edge_between_cells(g, x1, y1, x2, y2);
 }
 
 static int check_wall_ahead(Game *g, int px, int py, int dir, int dist) {
@@ -1351,18 +1812,27 @@ static void dungeon_line(Video *v, int x0, int y0, int x1, int y1, u8 color,
     }
 }
 
-static u8 remap_wall_texel(u8 src, int door) {
-    if (src == 14) return 32;       /* E0E0E0 face */
-    if (src == 12) return 33;       /* C0C0C0 joints/highlight */
-    if (src == 13) return 34;       /* blue cracks */
+static u8 remap_wall_texel(u8 src, int door, int screen_x) {
     if (door) {
         /* Mode 8 changes these low DAC entries while drawing WALL.PIC. */
         if (src == 1) return 0;                 /* black door boards */
         if (src == 6 || src == 11 || src == 13) return 2; /* bright blue arch */
         return src;                             /* white ironwork */
     }
-    if (src == 0 || src == 16) return 32;
-    return 34;
+    if (src == 14) return MW_COLOR_WALL_FACE;
+    if (src == 12) return MW_COLOR_WALL_HIGHLIGHT;
+    if (src == 13) return MW_COLOR_WALL_CRACK;
+    if (src == 0 || src == 16) return MW_COLOR_WALL_TINT;
+    /* WORLD's mode-8 wall renderer turns its two gradient commands into
+     * screen-position palette indices spanning 0x40..0xBF. */
+    if (src == 18)
+        return (u8)(0x40 + ((screen_x >> 1) & 0x7F));
+    if (src == 19)
+        return (u8)(0x40 + (((LOGICAL_W - screen_x) >> 3) & 0x7F));
+    /* Preserve the original floor-colored surface ramp for uncommon wall
+     * details instead of flattening every high source color to blue. */
+    if (src >= 20 && src <= 31) return src;
+    return MW_COLOR_WALL_CRACK;
 }
 
 /* WALL.PIC's 256x200 RLE scanlines are stored a quarter-turn counter-clockwise
@@ -1410,7 +1880,7 @@ static void textured_triangle(Video *v, const u8 *tex,
             if (tx < 0) tx = 0; if (tx > 255) tx = 255;
             if (ty < 0) ty = 0; if (ty > 199) ty = 199;
             v->pixels[y * LOGICAL_W + x] =
-                remap_wall_texel(sample_wall_texel(tex, tx, ty), door);
+                remap_wall_texel(sample_wall_texel(tex, tx, ty), door, x);
         }
     }
     v->dirty = 1;
@@ -1444,8 +1914,17 @@ static ProjRect projection_rect(int vx, int vy, int vw, int vh, int depth) {
 }
 
 static void draw_dungeon_gradient(Video *v, int vx, int vy, int vw, int vh) {
-    static const u8 ceiling[] = {35, 36, 35, 40, 36, 35, 39, 40};
-    static const u8 floor[]   = {41, 0, 42, 0, 43, 0, 44, 0, 45, 0};
+    static const u8 ceiling[] = {
+        MW_COLOR_CEILING_1, MW_COLOR_CEILING_2,
+        MW_COLOR_CEILING_1, MW_COLOR_CEILING_3,
+        MW_COLOR_CEILING_2, MW_COLOR_CEILING_1,
+        MW_COLOR_DUNGEON_3, MW_COLOR_CEILING_3
+    };
+    static const u8 floor[] = {
+        MW_COLOR_FLOOR_1, 0, MW_COLOR_FLOOR_2, 0,
+        MW_COLOR_FLOOR_3, 0, MW_COLOR_FLOOR_4, 0,
+        MW_COLOR_FLOOR_5, 0
+    };
     int horizon = vy + vh / 2;
     for (int x = vx; x < vx + vw; x++) {
         u8 cc = ceiling[(x - vx) & 7];
@@ -1454,8 +1933,8 @@ static void draw_dungeon_gradient(Video *v, int vx, int vy, int vw, int vh) {
         video_vline(v, x, horizon, vy + vh - horizon, fc);
     }
     video_hline(v, vx, horizon - 2, vw, 0);
-    video_hline(v, vx, horizon - 1, vw, 34);
-    video_hline(v, vx, horizon, vw, 44);
+    video_hline(v, vx, horizon - 1, vw, MW_COLOR_WALL_CRACK);
+    video_hline(v, vx, horizon, vw, MW_COLOR_FLOOR_4);
     video_hline(v, vx, horizon + 1, vw, 0);
 }
 
@@ -1562,7 +2041,7 @@ static void draw_ray_walls(Game *g, int vx, int vy, int vw, int vh, int dir,
             if (ty < 0) ty = 0;
             if (ty > 199) ty = 199;
             v->pixels[y * LOGICAL_W + sx] =
-                remap_wall_texel(sample_wall_texel(tex, tx, ty), door);
+                remap_wall_texel(sample_wall_texel(tex, tx, ty), door, sx);
         }
     }
     v->dirty = 1;
@@ -1634,10 +2113,21 @@ static void draw_ladder_hole(Game *g, ProjRect p, int delta, float depth,
  * every viewport column.  WORLD.PIC index 0 is the original ladder artwork;
  * monster indices are mapped in combat.  Trapdoors are discovered by text at
  * the party's position in the original and have no first-person marker. */
+static int tint_actor_color(int color, int tint) {
+    if (!tint || color <= 0 || color >= 16) return color;
+    /* Keep grayscale shading and white glints intact.  Every chromatic VGA
+       family has a dark (1-6) and bright (9-14) member. */
+    if (color == 7 || color == 8 || color == 15) return color;
+    int family = tint & 7;
+    if (!family) return 8;
+    return color >= 9 ? family + 8 : family;
+}
+
 static void draw_pic_billboard(Game *g, int pic_index, int cx, int top,
                                int draw_h, float depth,
                                int vx, int vy, int vw, int vh,
-                               const float *wall_depth, int replace_color) {
+                               const float *wall_depth, int replace_color,
+                               int tint) {
     if (pic_index < 0 || pic_index >= g->world_pic_count || draw_h < 2) return;
     const u8 *pic = g->world_pic_data[pic_index];
     int pic_size = g->world_pic_sizes[pic_index];
@@ -1672,6 +2162,7 @@ static void draw_pic_billboard(Game *g, int pic_index, int cx, int top,
             }
             if (color == 17 && replace_color >= 0)
                 color = replace_color;
+            color = tint_actor_color(color, tint);
             if (color != 0 && color != 16 && color != 32) {
                 int sx0 = left + xpos * draw_w / 256;
                 int sx1 = left + (xpos + run) * draw_w / 256;
@@ -1697,7 +2188,51 @@ typedef struct ViewActor {
     int pic;
     int kind;       /* 0 monster, 1 up ladder/shop, 2 down */
     int color;      /* original replacement color for shared monster art */
+    int tint;       /* native full-palette family tint for deep variants */
 } ViewActor;
+
+/* The depth buffer clips a sprite against the visible door bitmap, but a
+ * wide billboard could otherwise leak around the door's outer columns.
+ * Reject the actor as a whole when the centre-to-centre sightline crosses
+ * any non-open edge.  Doors (1) are intentionally as opaque as stone here. */
+static int actor_cell_visible(Game *g, int target_x, int target_y) {
+    int map_x = g->cur_x, map_y = g->cur_y;
+    int ray_x = target_x - map_x, ray_y = target_y - map_y;
+    if (ray_x == 0 && ray_y == 0) return 0;
+    int step_x = ray_x < 0 ? -1 : 1;
+    int step_y = ray_y < 0 ? -1 : 1;
+    float delta_x = ray_x == 0 ? 1.0e30f : 1.0f / fabsf((float)ray_x);
+    float delta_y = ray_y == 0 ? 1.0e30f : 1.0f / fabsf((float)ray_y);
+    float side_x = delta_x * 0.5f;
+    float side_y = delta_y * 0.5f;
+
+    while (map_x != target_x || map_y != target_y) {
+        if (side_x + 0.00001f < side_y) {
+            int next_x = map_x + step_x;
+            if (edge_between_cells(g, map_x, map_y, next_x, map_y) != 3)
+                return 0;
+            map_x = next_x;
+            side_x += delta_x;
+        } else if (side_y + 0.00001f < side_x) {
+            int next_y = map_y + step_y;
+            if (edge_between_cells(g, map_x, map_y, map_x, next_y) != 3)
+                return 0;
+            map_y = next_y;
+            side_y += delta_y;
+        } else {
+            int next_x = map_x + step_x;
+            int next_y = map_y + step_y;
+            if (edge_between_cells(g, map_x, map_y, next_x, map_y) != 3 ||
+                edge_between_cells(g, map_x, map_y, map_x, next_y) != 3)
+                return 0;
+            map_x = next_x;
+            map_y = next_y;
+            side_x += delta_x;
+            side_y += delta_y;
+        }
+    }
+    return 1;
+}
 
 static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
                              const float *wall_depth) {
@@ -1711,6 +2246,7 @@ static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
         MonsterRecord *map = g->monster_map[g->monster_layer];
         for (int i = 0; i < MONSTERS_PER_FLOOR && count < (int)(sizeof(actors)/sizeof(actors[0])); i++) {
             if (!monster_record_alive(g, &map[i])) continue;
+            if (!actor_cell_visible(g, map[i].x, map[i].y)) continue;
             float dx = (float)map[i].x - (float)g->cur_x;
             float dy = (float)map[i].y - (float)g->cur_y;
             float forward = dx * fdx + dy * fdy;
@@ -1720,7 +2256,8 @@ static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
             int pic = get_monster_pic_index_ext(map[i].type);
             if (pic < 2) pic = 2; /* keep rare text-only DOS types visible */
             actors[count++] = (ViewActor){forward, side, pic, 0,
-                                           get_monster_color_ext(map[i].type)};
+                                           get_monster_color_ext(map[i].type),
+                                           get_monster_tint_ext(map[i].type)};
         }
     }
 
@@ -1742,10 +2279,10 @@ static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
             if (shop && count < (int)(sizeof(actors)/sizeof(actors[0])))
                 /* Town locations look exactly like ordinary ladders up in
                  * the viewports; their type color belongs only on the map. */
-                actors[count++] = (ViewActor){forward, side, 0, 1, -1};
+                actors[count++] = (ViewActor){forward, side, 0, 1, -1, 0};
             else if (ladder && count < (int)(sizeof(actors)/sizeof(actors[0])))
                 actors[count++] = (ViewActor){forward, side, 0,
-                                               ladder < 0 ? 1 : 2, -1};
+                                               ladder < 0 ? 1 : 2, -1, 0};
         }
     }
 
@@ -1777,7 +2314,7 @@ static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
             a->depth < wall_depth[depth_col] + 0.02f;
         if (a->kind == 0) {
             draw_pic_billboard(g, a->pic, cx, top, height, a->depth,
-                               vx, vy, vw, vh, wall_depth, a->color);
+                               vx, vy, vw, vh, wall_depth, a->color, a->tint);
         } else if (feature_center_visible) {
             ProjRect ladder_box = {
                 .left = cx - height * 3 / 8,
@@ -1789,7 +2326,7 @@ static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
             draw_ladder_hole(g, ladder_box, delta, a->depth,
                              vx, vy, vw, vh, wall_depth);
             draw_pic_billboard(g, 0, cx, top, height, a->depth,
-                               vx, vy, vw, vh, wall_depth, -1);
+                               vx, vy, vw, vh, wall_depth, -1, 0);
         }
     }
 
@@ -1874,6 +2411,7 @@ static void draw_4way_view(Game *g) {
 
 }
 
+/* MW_PORT: WORLD func_27112 command legend and clickable native equivalent. */
 /* ── Drawing: Command menu (matches func_27112, top-right area) ── */
 
 static void draw_command_menu(Game *g) {
@@ -1913,8 +2451,8 @@ static void draw_command_menu(Game *g) {
                               8, xsn, xsd, ysn, ysd);
     video_draw_text_scaled_xy(v, menu_x, y, "           O       ", 4, xsn, xsd, ysn, ysd);
     y += spacing;
-    video_draw_text_scaled_xy(v, menu_x, y, "BEASTIARY ( )       ", 8, xsn, xsd, ysn, ysd);
-    video_draw_text_scaled_xy(v, menu_x, y, "           J        ", 4, xsn, xsd, ysn, ysd);
+    video_draw_text_scaled_xy(v, menu_x, y, "BEASTIARY( )  -STATS", 8, xsn, xsd, ysn, ysd);
+    video_draw_text_scaled_xy(v, menu_x, y, "          J  G      ", 4, xsn, xsd, ysn, ysd);
     y += spacing;
     video_draw_text_scaled_xy(v, menu_x, y, "SPELLS IN EFFECT  ", 8, xsn, xsd, ysn, ysd);
     video_draw_text_scaled_xy(v, menu_x, y, "                 1", 4, xsn, xsd, ysn, ysd);
@@ -1929,11 +2467,35 @@ static void draw_command_menu(Game *g) {
 /* Convert a click on the command legend into the exact same command byte as
  * its keyboard hotkey.  SDL performs the inverse logical-size transform so
  * this remains accurate for resized and letterboxed windows. */
+int game_mouse_click_logical(Game *g, int *x, int *y) {
+    int window_x = 0, window_y = 0;
+    float logical_x = 0.0f, logical_y = 0.0f;
+    if (!g || !g->video.renderer) return 0;
+    input_last_mouse_click(&g->input, &window_x, &window_y);
+    SDL_RenderWindowToLogical(g->video.renderer, window_x, window_y,
+                              &logical_x, &logical_y);
+    if (x) *x = (int)logical_x;
+    if (y) *y = (int)logical_y;
+    return logical_x >= 0.0f && logical_y >= 0.0f &&
+           logical_x < LOGICAL_W && logical_y < LOGICAL_H;
+}
+
+int game_mouse_row(Game *g, int x0, int x1, int y0, int row_height,
+                   int row_count) {
+    int x, y;
+    if (row_height <= 0 || row_count <= 0 ||
+        !game_mouse_click_logical(g, &x, &y))
+        return -1;
+    if (x < x0 || x >= x1 || y < y0 || y >= y0 + row_height * row_count)
+        return -1;
+    return (y - y0) / row_height;
+}
+
 static int command_menu_click_key(Game *g, int window_x, int window_y) {
     static const int command[12][2] = {
         {'b','m'}, {'w','v'}, {'z','c'}, {'i','x'},
         {'a','l'}, {'f','p'}, {'t','e'}, {'o','o'},
-        {'j','j'}, {'1','1'}, {'2','2'}, {'q','h'}
+        {'j','g'}, {'1','1'}, {'2','2'}, {'q','h'}
     };
     float logical_x, logical_y;
     SDL_RenderWindowToLogical(g->video.renderer, window_x, window_y,
@@ -1954,6 +2516,82 @@ static int command_menu_click_key(Game *g, int window_x, int window_y) {
     return command[row][right_column];
 }
 
+static int mouse_position_logical(Game *g, int *x, int *y, unsigned *serial) {
+    int wx, wy;
+    float lx, ly;
+    input_mouse_position(&g->input, &wx, &wy, serial);
+    if (!g->video.renderer) return 0;
+    SDL_RenderWindowToLogical(g->video.renderer, wx, wy, &lx, &ly);
+    if (x) *x = (int)lx;
+    if (y) *y = (int)ly;
+    return lx >= 0 && ly >= 0 && lx < LOGICAL_W && ly < LOGICAL_H;
+}
+
+static void hover_frame(Video *v, int x, int y, int w, int h, u8 color) {
+    video_hline(v, x, y, w, color);
+    video_hline(v, x, y + h - 1, w, color);
+    video_vline(v, x, y, h, color);
+    video_vline(v, x + w - 1, y, h, color);
+}
+
+/* INT 33h mode continuously moved a software cursor through the command and
+ * view hit regions.  A thin yellow frame supplies the corresponding native
+ * hover feedback without covering the original artwork. */
+static void draw_mouse_hover(Game *g) {
+    int x, y;
+    if (!mouse_position_logical(g, &x, &y, NULL)) return;
+    const int menu_x = SX(0x48C), spacing = SY(35);
+    int adv = g->video.font_advance ? g->video.font_advance : g->video.font_char_w;
+    int half = adv * 7 / 6 * 9;
+    if (x >= menu_x && x < menu_x + half * 2 && y >= 0 && y < spacing * 12) {
+        int row = y / spacing;
+        int column = x >= menu_x + half;
+        hover_frame(&g->video, menu_x + column * half, row * spacing,
+                    half, spacing, 4);
+        return;
+    }
+    const ViewLayout *vl = &view_layouts[g->view_mode % 3];
+    const ViewRect *rects[4] = {&vl->north, &vl->south, &vl->west, &vl->east};
+    for (int i = 0; i < 4; i++)
+        if (x >= rects[i]->x && x < rects[i]->x + rects[i]->w &&
+            y >= rects[i]->y && y < rects[i]->y + rects[i]->h) {
+            hover_frame(&g->video, rects[i]->x, rects[i]->y,
+                        rects[i]->w, rects[i]->h, 4);
+            return;
+        }
+    if (x >= SX(0x2D3) && x < SX(0x48A) && y > SY(0x487))
+        hover_frame(&g->video, SX(0x2D3), SY(0x487),
+                    SX(0x48A) - SX(0x2D3), LOGICAL_H - SY(0x487), 4);
+}
+
+int game_mouse_command_key(Game *g) {
+    int window_x, window_y;
+    input_last_mouse_click(&g->input, &window_x, &window_y);
+    return command_menu_click_key(g, window_x, window_y);
+}
+
+/* WORLD func_0D74F/func_0F6E5: the four rendered views are also the four
+ * absolute-direction mouse controls.  Keep their small original gaps so a
+ * click on a border cannot accidentally spend a turn. */
+int game_mouse_view_direction(Game *g) {
+    int x, y;
+    const ViewLayout *vl;
+    const ViewRect *rects[4];
+    static const int direction[4] = {0, 1, 2, 3};
+    if (!game_mouse_click_logical(g, &x, &y)) return -1;
+    vl = &view_layouts[g->view_mode % 3];
+    rects[0] = &vl->north;
+    rects[1] = &vl->south;
+    rects[2] = &vl->west;
+    rects[3] = &vl->east;
+    for (int i = 0; i < 4; i++)
+        if (x >= rects[i]->x && x < rects[i]->x + rects[i]->w &&
+            y >= rects[i]->y && y < rects[i]->y + rects[i]->h)
+            return direction[i];
+    return -1;
+}
+
+/* MW_PORT: status portion of WORLD func_0F5CD/func_0F6E5. */
 /* ── Drawing: Status bar (matches original format) ── */
 
 static void draw_status_bar(Game *g, Character *player) {
@@ -1974,12 +2612,17 @@ static void draw_status_bar(Game *g, Character *player) {
     char line[128];
     int y = bar_y;
 
-    snprintf(line, sizeof(line), "L:%d  X:%d  Y:%d",
-             g->cur_floor, g->cur_x, g->cur_y);
+    /* WORLD's leading L is the character level, not the dungeon depth.
+     * Dungeon depth is deliberately reported by Detect Level and the
+     * expanded-map/stat views instead of replacing the player's level here. */
+    snprintf(line, sizeof(line), "L:%u  X:%d  Y:%d",
+             (unsigned)player->level, g->cur_x, g->cur_y);
     video_draw_text_scaled_xy(v, 0, y, line, 6, xsn, xsd, ysn, ysd);
     snprintf(line, sizeof(line), "STR: %d  CON: %d",
              player->stat_str, player->stat_con);
-    video_draw_text_scaled_xy(v, right_x + 7, y, line, 47, xsn, xsd, ysn, ysd);
+    video_draw_text_scaled_xy(v, right_x + 7, y, line,
+                              MW_COLOR_STATUS_CYAN,
+                              xsn, xsd, ysn, ysd);
     y += line_step;
 
     snprintf(line, sizeof(line), "SPELL POINTS: %.0f OF %.0f",
@@ -1987,14 +2630,19 @@ static void draw_status_bar(Game *g, Character *player) {
     video_draw_text_scaled_xy(v, 0, y, line, 6, xsn, xsd, ysn, ysd);
     snprintf(line, sizeof(line), "INT: %d  DEX: %d",
              player->stat_int, player->stat_agi);
-    video_draw_text_scaled_xy(v, right_x + 7, y, line, 47, xsn, xsd, ysn, ysd);
+    video_draw_text_scaled_xy(v, right_x + 7, y, line,
+                              MW_COLOR_STATUS_CYAN,
+                              xsn, xsd, ysn, ysd);
     y += line_step;
 
     snprintf(line, sizeof(line), "HEALTH POINTS: %d OF %d",
              player->hp_cur, player->hp_max);
     video_draw_text_scaled_xy(v, 0, y, line, 6, xsn, xsd, ysn, ysd);
     char action_line[64];
-    const char *action = "HIT 'D' TO DIG A HOLE";
+    const char *action = g->cur_floor <=
+                         game_traversal_rules(g)->dig_max_floor ?
+                         "HIT 'D' TO DIG A HOLE" :
+                         "SOLID ROCK - USE A LADDER";
     int ladder = ladder_delta(g, g->cur_x, g->cur_y);
     int trap = game_trapdoor_floor(g, g->cur_x, g->cur_y);
     int shop = game_shop_type(g, g->cur_x, g->cur_y);
@@ -2020,10 +2668,13 @@ static void draw_status_bar(Game *g, Character *player) {
         }
     }
     video_draw_text_scaled_xy(v, SX(0x2D8), south_bottom,
-                              action, 48, 13, 12, ysn, ysd);
+                              action, MW_COLOR_PROMPT_ORANGE,
+                              13, 12, ysn, ysd);
     snprintf(line, sizeof(line), "WIZ: %d  LUCK: %d",
              player->stat_wis, player->stat_luck);
-    video_draw_text_scaled_xy(v, right_x + 7, y, line, 47, xsn, xsd, ysn, ysd);
+    video_draw_text_scaled_xy(v, right_x + 7, y, line,
+                              MW_COLOR_STATUS_CYAN,
+                              xsn, xsd, ysn, ysd);
 }
 
 /* ── Weapon/armor name tables (from DS:0x1C0 and DS:0x214) ── */
@@ -2041,6 +2692,46 @@ static const char *armor_names[] = {
 };
 #define ARMOR_COUNT 8
 
+/* Exact final-byte weights from WORLD.EXE's DS:01C0 weapon records and
+   DS:0214 armor records.  Armor slot 7 is not part of the original seven
+   armor records and therefore contributes no weight. */
+static const u8 armor_weight[8] = {0, 14, 24, 40, 60, 72, 48, 0};
+
+unsigned long long game_loaded_weight(const Character *p) {
+    unsigned long long weight = p->eff_feather ? 0u : p->weight_pounds;
+
+    /* WORLD divides each loose-stone denomination separately.  Jewel stones
+       and ordinary jewels are intentionally weightless. */
+    weight += p->copper_stones / 16u;
+    weight += p->silver_stones / 16u;
+    weight += p->ivory_stones / 16u;
+    weight += p->gold_stones / 16u;
+    weight += p->platinum_stones / 16u;
+
+    for (int i = 0; i < 8; i++)
+        weight += (unsigned long long)p->weapon_inventory[i] *
+                  (unsigned)weapon_stats[i].weight;
+    for (int i = 0; i < 7; i++)
+        weight += (unsigned long long)p->armor_inventory[i] *
+                  (unsigned)armor_weight[i];
+    return weight;
+}
+
+int game_weight_monster_turns(const Character *p) {
+    unsigned long long loaded = game_loaded_weight(p);
+    unsigned long long agility = (unsigned long long)p->stat_agi * 10u;
+    unsigned long long excess = loaded + 100u > agility ?
+                                loaded + 100u - agility : 0u;
+    unsigned long long turns = excess / 100u + 1u;
+
+    /* Original saves normally keep this small.  Saturating protects edited
+       and trainer-maxed saves from turning one keypress into millions of
+       iterations while retaining the full practical encumbrance range. */
+    return turns > 8u ? 8 : (int)turns;
+}
+
+/* MW_PORT: WORLD func_0DF4A (statistics), func_0E8C8 (carried weight), and
+ * associated 0x0DBA5/0x0DBE8 display helpers. */
 /* ── Command: View Stats (func_0DF4A) ── */
 
 static void cmd_view_stats(Game *g, Character *p) {
@@ -2080,6 +2771,19 @@ static void cmd_view_stats(Game *g, Character *p) {
     snprintf(line, sizeof(line), "TOTAL MONEY: %u",
              p->jewels_pocket + p->jewels_bank);
     video_draw_text(v, 8, y, line, 8);
+    y += fh + 2;
+
+    snprintf(line, sizeof(line), "LOADED WEIGHT: %llu",
+             game_loaded_weight(p));
+    video_draw_text(v, 8, y, line, 5);
+    y += fh;
+
+    snprintf(line, sizeof(line), "NAKED WEIGHT: %u", p->weight_pounds);
+    video_draw_text(v, 8, y, line, 5);
+    y += fh;
+
+    snprintf(line, sizeof(line), "HEIGHT (INCHES): %u", p->height_inches);
+    video_draw_text(v, 8, y, line, 5);
     y += fh + 2;
 
     snprintf(line, sizeof(line), "STRENGTH: %d", p->stat_str);
@@ -2150,6 +2854,132 @@ static void cmd_view_stats(Game *g, Character *p) {
     input_wait_any_key(&g->input);
 }
 
+/* MW_EXTENSION: G summarizes persistent and derived state that the original
+ * save format keeps but none of WORLD's normal status pages aggregate. */
+static int count_bits_u16(u16 value) {
+    int count = 0;
+    while (value) {
+        value &= (u16)(value - 1);
+        count++;
+    }
+    return count;
+}
+
+static void draw_game_stats(Game *g, Character *p) {
+    Video *v = &g->video;
+    char line[160];
+    int discovered = 0;
+    int quest_total = game_dungeon_max_floor(g) == CLASSIC_DUNGEON_FLOOR ?
+                      8 : QUEST_CHAIN_COUNT;
+    int quest_count = count_bits_u16(
+        (u16)(mw_quest_flags(p) & ((1u << quest_total) - 1u)));
+    int known_pits = 0, visited_cells = 0, alive_monsters = 0;
+    int learned = 0, weapons = 0, armor = 0;
+    unsigned long long kills = 0, scrolls = 0, wand_charges = 0, papers = 0;
+
+    int bestiary_total = bestiary_mode_catalog_count(g);
+    for (int i = 0; i < bestiary_total; i++) {
+        int type = bestiary_type_at_mode_catalog_index(g, i);
+        if (type >= 0 && g->bestiary_kills[type]) {
+            discovered++;
+            kills += g->bestiary_kills[type];
+        }
+    }
+    for (int y = 0; y < MAP_H; y++)
+        for (int x = 0; x < MAP_W; x++)
+            if (g->visited[y][x]) visited_cells++;
+    for (int z = 0; z < PIT_GROUP_FLOORS; z++)
+        for (int y = 0; y < MAP_H; y++)
+            for (int b = 0; b < PIT_ROW_BYTES; b++)
+                known_pits += count_bits_u16(g->pit_used[z][y][b]);
+    if (g->monster_map_loaded && g->monster_layer >= 0)
+        for (int i = 0; i < MONSTERS_PER_FLOOR; i++)
+            if (monster_record_alive(g,
+                    &g->monster_map[g->monster_layer][i]))
+                alive_monsters++;
+    for (int category = 0; category < 4; category++)
+        for (int spell = 0; spell < 30; spell++) {
+            if (p->spells[category][spell]) learned++;
+            scrolls += p->scrolls[category][spell];
+            wand_charges += p->wands[category][spell];
+            papers += p->papers[category][spell];
+        }
+    for (int i = 0; i < 8; i++) {
+        weapons += p->weapon_inventory[i];
+        armor += p->armor_inventory[i];
+    }
+
+    video_clear(v, 0);
+    snprintf(line, sizeof(line), "GAME STATS FOR %s", p->name);
+    video_draw_text(v, 8, 5, line, 4);
+    video_hline(v, 8, 36, LOGICAL_W - 16, 8);
+
+    int left_y = 52, right_y = 52;
+    const int row = v->font_char_h + 8;
+#define GAME_STAT_LEFT(color, ...) do { \
+    snprintf(line, sizeof(line), __VA_ARGS__); \
+    video_draw_text_scaled(v, 12, left_y, line, color, 3, 4); left_y += row; \
+} while (0)
+#define GAME_STAT_RIGHT(color, ...) do { \
+    snprintf(line, sizeof(line), __VA_ARGS__); \
+    video_draw_text_scaled(v, 520, right_y, line, color, 3, 4); right_y += row; \
+} while (0)
+    GAME_STAT_LEFT(15, "SAVE SLOT: %d", g->active_save_slot);
+    GAME_STAT_LEFT(15, "DUNGEON SEED: %d", g->dungeon_number);
+    GAME_STAT_LEFT(14, "EXPERIENCE MODE: %s (FLOORS 0-%d)",
+                   game_dungeon_max_floor(g) == CLASSIC_DUNGEON_FLOOR ?
+                   "CLASSIC" : "ENHANCED", game_dungeon_max_floor(g));
+    GAME_STAT_LEFT(7, "POSITION: FLOOR %d  X:%d Y:%d",
+                   g->cur_floor, g->cur_x, g->cur_y);
+    GAME_STAT_LEFT(7, "CHARACTER AGE: %u DAYS", p->age / 86400u);
+    GAME_STAT_LEFT(7, "EXPERIENCE: %.0f", p->experience);
+    GAME_STAT_LEFT(10, "BESTIARY DISCOVERED: %d / %d",
+                   discovered, bestiary_total);
+    GAME_STAT_LEFT(10, "TOTAL MONSTERS DEFEATED: %llu", kills);
+    GAME_STAT_LEFT(10, "QUEST BOSSES DEFEATED: %d / %d",
+                   quest_count, quest_total);
+    int key_count = 0;
+    for (int i = 1; i < 18; i++) if (p->trapdoor_keys[i]) key_count++;
+    GAME_STAT_LEFT(12, "TRAPDOOR KEYS FOUND: %d / 17", key_count);
+    GAME_STAT_LEFT(12, "KNOWN PITS IN FLOOR GROUP: %d", known_pits);
+    GAME_STAT_LEFT(12, "CURRENT FLOOR CELLS SEEN: %d / %d",
+                   visited_cells, MAP_W * MAP_H);
+    GAME_STAT_LEFT(12, "LIVING MONSTERS ON FLOOR: %d", alive_monsters);
+
+    GAME_STAT_RIGHT(3, "SPELLS LEARNED: %d / 120", learned);
+    GAME_STAT_RIGHT(3, "SCROLLS CARRIED: %llu", scrolls);
+    GAME_STAT_RIGHT(3, "WAND CHARGES CARRIED: %llu", wand_charges);
+    GAME_STAT_RIGHT(3, "MAGIC PAPERS CARRIED: %llu", papers);
+    GAME_STAT_RIGHT(5, "WEAPON ITEMS OWNED: %d", weapons);
+    GAME_STAT_RIGHT(5, "ARMOR ITEMS OWNED: %d", armor);
+    GAME_STAT_RIGHT(8, "JEWEL PIECES TOTAL: %llu",
+                    (unsigned long long)p->jewels_pocket + p->jewels_bank);
+    GAME_STAT_RIGHT(8, "LOADED WEIGHT: %llu", game_loaded_weight(p));
+    GAME_STAT_RIGHT(8, "MONSTER ACTIONS PER TURN: %d",
+                    game_weight_monster_turns(p));
+    GAME_STAT_RIGHT(g->cheat_noclip ? 4 : 7, "NOCLIP: %s",
+                    g->cheat_noclip ? "ON" : "OFF");
+    GAME_STAT_RIGHT(g->cheat_god_mode ? 4 : 7, "GOD MODE: %s",
+                    g->cheat_god_mode ? "ON" : "OFF");
+    GAME_STAT_RIGHT(g->cheat_open_floor ? 4 : 7, "OPEN FLOOR MODE: %s",
+                    g->cheat_open_floor ? "ON" : "OFF");
+#undef GAME_STAT_LEFT
+#undef GAME_STAT_RIGHT
+    video_draw_text_scaled(v, 255, LOGICAL_H - 35,
+                           "HIT ANY KEY TO RETURN...", 15, 3, 4);
+    video_present(v);
+}
+
+void game_draw_game_stats_test(Game *g, Character *p) {
+    if (g && p) draw_game_stats(g, p);
+}
+
+static void cmd_game_stats(Game *g, Character *p) {
+    draw_game_stats(g, p);
+    input_wait_any_key(&g->input);
+}
+
+/* MW_PORT: WORLD shop_finances (0x0803D). */
 /* ── Command: View Money (shop_finances) ── */
 
 static void cmd_view_money(Game *g, Character *p) {
@@ -2366,13 +3196,13 @@ static void cmd_pockets_misc(Game *g, Character *p) {
     y += fh;
     snprintf(line, sizeof(line), "12) RINGS OF REGENERATION: %d", p->ring_regen);
     video_draw_text(v, 8, y, line, 7); y += fh;
-    snprintf(line, sizeof(line), "13) RING OF PROTECTION, PLUS %d", p->ring_prot_plus);
+    snprintf(line, sizeof(line), "13) RING OF PROTECTION, PLUS %d", mw_ring_prot_plus(p));
     video_draw_text(v, 8, y, line, 7); y += fh;
     snprintf(line, sizeof(line), "14) ANTI MAGIC RING, PLUS %d", p->antimagic_ring);
     video_draw_text(v, 8, y, line, 7); y += fh;
-    snprintf(line, sizeof(line), "15) BODY ARMOR, LEVEL %d", p->body_armor_plus);
+    snprintf(line, sizeof(line), "15) BODY ARMOR, LEVEL %d", mw_body_armor_plus(p));
     video_draw_text(v, 8, y, line, 7); y += fh;
-    snprintf(line, sizeof(line), "16) GAUNTLET, PLUS %d", p->gauntlet);
+    snprintf(line, sizeof(line), "16) GAUNTLET, PLUS %d", mw_gauntlet(p));
     video_draw_text(v, 8, y, line, 7);
 
     video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
@@ -2380,6 +3210,7 @@ static void cmd_pockets_misc(Game *g, Character *p) {
     input_wait_any_key(&g->input);
 }
 
+/* MW_PORT: WORLD func_0DDAA pockets inventory and its spell-item pages. */
 /* ── Command: Pockets main menu (func_0DDAA) ── */
 
 static void cmd_pockets(Game *g, Character *p) {
@@ -2391,6 +3222,7 @@ static void cmd_pockets(Game *g, Character *p) {
 
     video_draw_text(v, 8, y, "WHICH DO YOU WISH TO SEE?", 14);
     y += fh + 4;
+    int option_y = y;
     video_draw_text(v, 8, y, "1) SPELLBOOKS", 7); y += fh;
     video_draw_text(v, 8, y, "2) SCROLLS", 7); y += fh;
     video_draw_text(v, 8, y, "3) WANDS", 7); y += fh;
@@ -2400,6 +3232,10 @@ static void cmd_pockets(Game *g, Character *p) {
     video_present(v);
 
     int key = input_getch(&g->input);
+    if (key == INPUT_MOUSE_CLICK) {
+        int choice = game_mouse_row(g, 0, LOGICAL_W, option_y, fh, 5);
+        key = choice >= 0 ? '1' + choice : 0x1B;
+    }
     switch (key) {
         case '1': cmd_pockets_spells(g, p, p->spells, 0, "SPELLBOOKS"); break;
         case '2': cmd_pockets_spells(g, p, p->scrolls, 0, "SCROLLS"); break;
@@ -2409,6 +3245,8 @@ static void cmd_pockets(Game *g, Character *p) {
     }
 }
 
+/* MW_PORT: WORLD inn_service/func_0A6F2 experience threshold and level-up
+ * calculations, exposed by the E command and inn rest. */
 /* ── Command: Experience Needed ── */
 
 static void cmd_exp_needed(Game *g, Character *p) {
@@ -2457,6 +3295,10 @@ static void cmd_exp_needed(Game *g, Character *p) {
     input_wait_any_key(&g->input);
 }
 
+/* MW_PORT: WORLD shop_buy_check, shop_weapon, shop_pills, shop_magic,
+ * shop_misc, shop_main_menu, shop_buy_item, shop_finances, func_081C1,
+ * func_08326, inn_service, func_0A6F2, func_0A751, inn_hotel/inn_full and
+ * the ordered post-kill chain ending at func_21F9C. */
 /* ── Town locations and post-battle treasure ────────────────────────────
  *
  * Floor zero locations are not conventional dungeon rooms.  In the DOS
@@ -2516,7 +3358,10 @@ static int town_menu(Game *g, Character *p, const char *title, const char *subti
                      u32 money) {
     Video *v = &g->video;
     char line[128];
+    int item_top[16];
+    int item_bottom[16];
     int y = 0;
+    for (int i = 0; i < 16; i++) item_top[i] = item_bottom[i] = -1;
     town_pane_begin(g, p);
     y = town_pane_text(g, y, title, color);
     if (subtitle && *subtitle) y = town_pane_text(g, y, subtitle, 7);
@@ -2526,14 +3371,28 @@ static int town_menu(Game *g, Character *p, const char *title, const char *subti
     }
     for (int i = 0; i < item_count; i++) {
         snprintf(line, sizeof(line), "%d) %s", i + 1, items[i]);
+        if (i < 16) item_top[i] = y;
         y = town_pane_text(g, y, line,
                            (u8)(i == item_count - 1 ? 8 : 7));
+        if (i < 16) item_bottom[i] = y;
     }
     town_pane_text(g, y, "SELECT OPTION (ESC LEAVES)", 15);
     video_present(v);
     for (;;) {
         int key = input_getch(&g->input);
         if (input_poll_quit(&g->input) || key == 0x1B) return -1;
+        if (key == INPUT_MOUSE_CLICK) {
+            int x, click_y;
+            if (game_mouse_click_logical(g, &x, &click_y) &&
+                x >= 0 && x < SX(0x2D3)) {
+                int limit = item_count < 16 ? item_count : 16;
+                for (int i = 0; i < limit; i++)
+                    if (item_bottom[i] > item_top[i] &&
+                        click_y >= item_top[i] && click_y < item_bottom[i])
+                        return i;
+            }
+            continue;
+        }
         if (key >= '1' && key < '1' + item_count) return key - '1';
     }
 }
@@ -2554,9 +3413,35 @@ static u32 town_prompt_amount(Game *g, Character *p, const char *title,
                            "PLEASE TYPE THE AMOUNT AND HIT ENTER:", 7);
         y = town_pane_text(g, y, used ? digits : "0", 15);
         town_pane_text(g, y, "ESC CANCELS", 8);
+        const int keypad_y = SY(0x180);
+        const int keypad_w = SX(0x2D3) / 12;
+        video_fill_rect(v, 0, keypad_y, SX(0x2D3), SY(0x2E), 0);
+        for (int i = 0; i < 12; i++) {
+            char label[4];
+            if (i < 9) snprintf(label, sizeof(label), "%d", i + 1);
+            else if (i == 9) snprintf(label, sizeof(label), "0");
+            else if (i == 10) snprintf(label, sizeof(label), "<");
+            else snprintf(label, sizeof(label), "OK");
+            video_draw_text_scaled_xy(v, i * keypad_w + 4, keypad_y + 2,
+                                      label, i == 11 ? 4 : 15,
+                                      2, 3, 2, 3);
+            video_vline(v, i * keypad_w, keypad_y, SY(0x2E), 8);
+        }
         video_present(v);
 
         int key = input_getch(&g->input);
+        if (key == INPUT_MOUSE_CLICK) {
+            int x, click_y;
+            if (game_mouse_click_logical(g, &x, &click_y) &&
+                x >= 0 && x < SX(0x2D3) && click_y >= keypad_y &&
+                click_y < keypad_y + SY(0x2E)) {
+                int button = x / keypad_w;
+                if (button < 9) key = '1' + button;
+                else if (button == 9) key = '0';
+                else if (button == 10) key = 8;
+                else key = '\r';
+            } else continue;
+        }
         if (input_poll_quit(&g->input) || key == 0x1B) return 0;
         if (key == '\r' || key == '\n') {
             unsigned long long value = used ? strtoull(digits, NULL, 10) : 0;
@@ -2574,15 +3459,17 @@ static u32 town_prompt_amount(Game *g, Character *p, const char *title,
 
 static int spend_jewels(Game *g, Character *p, u32 price) {
     if (p->jewels_pocket < price) {
+        mw_audio_play(&g->audio, MW_SFX_ERROR);
         town_message(g, p, "SORRY, CAN'T BUY ON CREDIT HERE.",
                      "YOU DO NOT HAVE ENOUGH JEWEL PIECES.", "", 12);
         return 0;
     }
     p->jewels_pocket -= price;
+    mw_audio_play(&g->audio, MW_SFX_COIN);
     return 1;
 }
 
-/* Original L command (func_0C366): discard armor, weapons, or one complete
+/* MW_PORT: Original L command (func_0C366): discard armor, weapons, or one complete
  * denomination of carried money.  Negative enchant bytes are cursed items;
  * when equipped they cannot be removed or dropped. */
 static void cmd_drop_item(Game *g, Character *p) {
@@ -2599,8 +3486,8 @@ static void cmd_drop_item(Game *g, Character *p) {
         for (int i = 0; i < 8; i++) {
             int count = category == 0 ? p->armor_inventory[i]
                                       : p->weapon_inventory[i];
-            int enchant = category == 0 ? (s8)p->armor_enchant[i]
-                                        : (s8)p->eq_wep_enchant[i];
+            int enchant = category == 0 ? mw_armor_enchant(p, i)
+                                        : mw_weapon_enchant(p, i);
             const char *name = category == 0 ? armor_names[i] : weapon_names[i];
             if (i == 0)
                 snprintf(labels[i], sizeof(labels[i]), "%-14s (IMPLICIT)", name);
@@ -2620,12 +3507,12 @@ static void cmd_drop_item(Game *g, Character *p) {
 
         u8 *inventory = category == 0 ? p->armor_inventory
                                       : p->weapon_inventory;
-        u8 *enchant = category == 0 ? p->armor_enchant
-                                    : p->eq_wep_enchant;
         int equipped = category == 0 ? p->equipped_armor
                                      : p->equipped_weapon;
         if (!inventory[selected]) return;
-        if (equipped == selected && (s8)enchant[selected] < 0) {
+        int selected_enchant = category == 0 ? mw_armor_enchant(p, selected) :
+                                               mw_weapon_enchant(p, selected);
+        if (equipped == selected && selected_enchant < 0) {
             town_message(g, p, "OWE! IT JUST WON'T COME OFF!",
                          "THE ITEM IS CURSED.", "", 4);
             return;
@@ -2664,23 +3551,78 @@ static void cmd_drop_item(Game *g, Character *p) {
     town_message(g, p, "MONEY DROPPED", line, "", 8);
 }
 
-static int dig_hole_target(Game *g) {
-    int last = g->cur_floor + 40;
-    if (last > 180) last = 180;
-    for (int floor = g->cur_floor + 1; floor <= last; floor++)
-        if (!rock_cell_at(g, g->cur_x, g->cur_y, floor)) return floor;
-    return -1;
+typedef struct DigLanding {
+    int floor, x, y;
+    int relocated;
+} DigLanding;
+
+/* WORLD func_0EDAD walks the same coordinate through successive generated
+ * floors.  Its original 124/150/130-floor geometry scales with the native
+ * dungeon depth; floor 1 remains the absolute surface-side boundary.  It
+ * does not create a persistent pit/ladder marker. */
+static int find_dig_landing(Game *g, DigLanding *landing) {
+    int floor = g->cur_floor;
+    const GameTraversalRules *rules = game_traversal_rules(g);
+    int direction_floor = rules->dig_direction_floor;
+    int reverse_floor = rules->dig_reverse_floor;
+    int search_attempts = rules->dig_search_attempts;
+    int delta = floor < direction_floor ? 1 : -1;
+
+    for (int attempts = 0; attempts <= search_attempts; attempts++) {
+        floor += delta;
+        if (floor == reverse_floor) delta = -1;
+        if (floor == 1) delta = 1;
+        if (!rock_cell_at(g, g->cur_x, g->cur_y, floor)) {
+            landing->floor = floor;
+            landing->x = g->cur_x;
+            landing->y = g->cur_y;
+            landing->relocated = 0;
+            return 1;
+        }
+    }
+
+    int fallback_floor = g->cur_floor < direction_floor ?
+                         g->cur_floor + 1 : g->cur_floor;
+    for (int x = 21; x < 59; x++) {
+        for (int y = 21; y < 89; y++) {
+            if (rock_cell_at(g, x, y, fallback_floor)) continue;
+            landing->floor = fallback_floor;
+            landing->x = x;
+            landing->y = y;
+            landing->relocated = 1;
+            return 1;
+        }
+    }
+    return 0;
 }
 
-/* Original D command (func_0EDAD).  Digging is deliberately slow in game
- * turns, records the shaft in the same persistent .DUN bit grid as used
- * pitfalls, and retains the original solid-rock cutoff below level 120. */
+static void dig_timed_message(Game *g, Character *p, const char *message,
+                              u32 before_ms, u32 hold_ms) {
+    town_pane_begin(g, p);
+    video_present(&g->video);
+    if (before_ms) SDL_Delay(before_ms);
+    town_pane_text(g, 0, message, 4);
+    video_present(&g->video);
+    if (hold_ms) SDL_Delay(hold_ms);
+}
+
+static int dig_depth_allowed(Game *g, int floor) {
+    return floor >= 0 &&
+           floor <= game_traversal_rules(g)->dig_max_floor;
+}
+
+/* MW_PORT: Original D command (WORLD func_0EDAD). The lengthy pauses are gameplay:
+ * monsters and timed effects get six opportunities before the work starts,
+ * and shallow floors require a second, slower four-pass digging sequence. */
 static int cmd_dig_hole(Game *g, Character *p) {
-    if (g->cur_floor <= 0 || g->cur_floor > 120 ||
-        game_trapdoor_floor(g, g->cur_x, g->cur_y) >= 0) {
-        town_message(g, p, "THE FLOOR SEEMS TO BE MADE OF SOLID ROCK.",
-                     "IT IS NOT POSSIBLE TO DIG HERE.",
-                     "A LITTLE MOUSE SUGGESTS A LADDER OR SPELL.", 4);
+    if (!dig_depth_allowed(g, g->cur_floor)) {
+        char depth_limit[96];
+        snprintf(depth_limit, sizeof(depth_limit),
+                 "PAST LEVEL %d, YOU MUST USE THE LADDERS.",
+                 game_traversal_rules(g)->dig_max_floor);
+        town_message(g, p,
+                     "THE FLOOR SEEMS TO BE MADE OF SOLID ROCK. IT IS NOT POSSIBLE TO DIG HERE.",
+                     depth_limit, "", 4);
         return 0;
     }
 
@@ -2688,33 +3630,46 @@ static int cmd_dig_hole(Game *g, Character *p) {
         "DIG A HOLE IN THE FLOOR", "FORGET THE HOLE IDEA"
     };
     if (town_menu(g, p, "DO YOU WISH TO DIG A HOLE IN THE FLOOR?",
-                  "IT MAY TAKE SOME TIME.", choices, 2, 14,
+                  "IT MAY TAKE SOME TIME, BUT IF YOU ARE TRAPPED, THEN YOU HAVE NO CHOICE.",
+                  choices, 2, 14,
                   UINT32_MAX) != 0)
         return 0;
 
-    int target = dig_hole_target(g);
-    if (target < 0) {
-        town_message(g, p, "DIGGING... DIGGING...",
-                     "THE ROCK BELOW WILL NOT GIVE WAY.", "", 4);
+    /* The original temporarily primes all 145 monster action counters, runs
+     * six complete world turns, then checks for an open-passage encounter. */
+    for (int turn = 0; turn < 6; turn++)
+        game_advance_monsters(g, p);
+    if (game_find_adjacent_monster(g) >= 0) {
+        dig_timed_message(g, p, "A MONSTER WANTS TO HELP", 0, 1000);
         return 0;
     }
 
-    int old_x = g->cur_x, old_y = g->cur_y;
-    set_pit_bit(g, old_x, old_y);
-    for (int turn = 0; turn < 4 && p->hp_cur > 0; turn++)
-        game_advance_monsters(g, p);
-    if (p->hp_cur == 0) return 1;
+    for (int pass = 0; pass < 4; pass++)
+        dig_timed_message(g, p, "DIGGING... DIGGING...", 300, 1500);
 
-    char line[96];
-    snprintf(line, sizeof(line), "THE HOLE OPENS ON LEVEL %d.", target);
-    game_change_floor(g, p, target);
-    /* Normally the shaft lands at the same coordinate.  game_change_floor()
-     * may relocate if a cached monster occupies that landing; preserve that
-     * safety relocation instead of putting the player inside an actor. */
+    town_message(g, p, "BOY THIS IS HARD WORK!",
+                 "YOUR HANDS ARE RAW FROM DIGGING. BLISTERS ARE DEVELOPING ON YOUR HANDS",
+                 "MAKING IT A LITTLE MORE DIFFICULT TO HOLD YOUR WEAPONS.", 4);
+
+    if (g->cur_floor < game_traversal_rules(g)->dig_slow_floor)
+        for (int pass = 0; pass < 4; pass++)
+            dig_timed_message(g, p, "DIGGING... DIGGING...", 300, 2000);
+
+    DigLanding landing;
+    if (!find_dig_landing(g, &landing)) {
+        town_message(g, p, "THE FLOOR SEEMS TO BE MADE OF SOLID ROCK.",
+                     "IT IS NOT POSSIBLE TO DIG HERE.", "", 4);
+        return 0;
+    }
+
+    /* func_0D2C9 removes preparation effects before an ordinary same-column
+     * landing.  Preserve the original exceptional relocation distinction. */
+    if (!landing.relocated) character_clear_town_effects(p);
+    g->cur_x = landing.x;
+    g->cur_y = landing.y;
+    game_change_floor(g, p, landing.floor);
     p->x_pos = (u16)g->cur_x;
     p->y_pos = (u16)g->cur_y;
-    town_message(g, p, "DIGGING... DIGGING...", line,
-                 "YOUR HANDS ARE RAW AND BLISTERED.", 4);
     return 1;
 }
 
@@ -2957,10 +3912,7 @@ static void town_wilderness_exit(Game *g, Character *p) {
     int choice = town_menu(g, p, "YOU ARE STANDING ON TOP OF THE TOWN.",
                            "NOTE: WILDERNESS EXPLORATION REQUIRES A FAST COMPUTER!",
                            items, 2, 7, UINT32_MAX);
-    if (choice == 0)
-        town_message(g, p, "WILDERNESS EXPLORATION",
-                     "THE WILDERNESS EXIT IS READY.",
-                     "EXPLORATION ITSELF IS NOT IMPLEMENTED YET.", 7);
+    if (choice == 0) wilderness_run(g, p);
 }
 
 static void enter_town_location(Game *g, Character *p, int type) {
@@ -2980,26 +3932,56 @@ static void inc_u8_sat(u8 *value, int amount) {
 
 static void grant_quest_reward(Character *p, const CombatState *cs,
                                char *out, size_t out_size) {
-    static const int floor_needed[8] = {4, 8, 12, 16, 125, 150, 175, 200};
-    int step = cs->monster_type_idx - 104;
-    if (step < 0 || step >= 8 || cs->monster_level < 1 ||
-        (int)p->floor_depth != floor_needed[step] ||
-        (p->quest_flags & (1u << step))) return;
-    p->quest_flags |= (u8)(1u << step);
+    int step = quest_step_for_type(cs->monster_type_idx);
+    u16 flags = mw_quest_flags(p);
+    if (step < 0 || cs->monster_level < 1 ||
+        (int)p->floor_depth != quest_floor_by_step[step] ||
+        (flags & (1u << step))) return;
+    mw_set_quest_flags(p, (u16)(flags | (1u << step)));
     switch (step) {
-    case 0: p->body_armor_plus = 9; snprintf(out, out_size, "QUEST: PLUS 9 BODY ARMOR!"); break;
-    case 1: p->gauntlet = 12; snprintf(out, out_size, "QUEST: PLUS 12 GAUNTLET!"); break;
-    case 2: p->ring_prot_plus = 15; snprintf(out, out_size, "QUEST: PLUS 15 RING OF PROTECTION!"); break;
+    case 0: mw_set_body_armor_plus(p, 9); snprintf(out, out_size, "QUEST: PLUS 9 BODY ARMOR!"); break;
+    case 1: mw_set_gauntlet(p, 12); snprintf(out, out_size, "QUEST: PLUS 12 GAUNTLET!"); break;
+    case 2: mw_set_ring_prot_plus(p, 15); snprintf(out, out_size, "QUEST: PLUS 15 RING OF PROTECTION!"); break;
     case 3:
-        p->eq_wep_enchant[p->equipped_weapon < 12 ? p->equipped_weapon : 0] = 25;
+        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 25);
         snprintf(out, out_size, "QUEST: YOUR EQUIPPED WEAPON IS NOW PLUS 25!");
         break;
-    case 4: p->body_armor_plus = 25; snprintf(out, out_size, "QUEST: PLUS 25 BODY ARMOR!"); break;
-    case 5: p->gauntlet = 50; snprintf(out, out_size, "QUEST: PLUS 50 GAUNTLET!"); break;
-    case 6: p->ring_prot_plus = 50; snprintf(out, out_size, "QUEST: PLUS 50 RING OF PROTECTION!"); break;
+    case 4: mw_set_body_armor_plus(p, 25); snprintf(out, out_size, "QUEST: PLUS 25 BODY ARMOR!"); break;
+    case 5: mw_set_gauntlet(p, 50); snprintf(out, out_size, "QUEST: PLUS 50 GAUNTLET!"); break;
+    case 6: mw_set_ring_prot_plus(p, 50); snprintf(out, out_size, "QUEST: PLUS 50 RING OF PROTECTION!"); break;
     case 7:
-        p->eq_wep_enchant[p->equipped_weapon < 12 ? p->equipped_weapon : 0] = 100;
+        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 100);
         snprintf(out, out_size, "QUEST: YOUR EQUIPPED WEAPON IS NOW PLUS 100!");
+        break;
+    case 8:
+        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 200);
+        snprintf(out, out_size,
+                 "QUEST: THE ABYSSAL ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 200!");
+        break;
+    case 9:
+        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 300);
+        snprintf(out, out_size,
+                 "QUEST: THE WORLD ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 300!");
+        break;
+    case 10:
+        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 450);
+        snprintf(out, out_size,
+                 "QUEST: THE RIFT ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 450!");
+        break;
+    case 11:
+        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 600);
+        snprintf(out, out_size,
+                 "QUEST: THE STAR ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 600!");
+        break;
+    case 12:
+        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 800);
+        snprintf(out, out_size,
+                 "QUEST: THE ETERNITY ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 800!");
+        break;
+    case 13:
+        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 1000);
+        snprintf(out, out_size,
+                 "QUEST: THE ASCENDANT ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 1000!");
         break;
     }
 }
@@ -3213,22 +4195,6 @@ static int reward_make_stone_pile(Game *g, int level, int depth,
     return 0;
 }
 
-static unsigned long long reward_loaded_weight(const Character *p) {
-    static const int armor_weight[8] = {0, 5, 15, 30, 50, 75, 100, 100};
-    unsigned long long weight = p->weight_pounds;
-    unsigned long long stones = (unsigned long long)p->copper_stones +
-        p->silver_stones + p->ivory_stones + p->gold_stones +
-        p->platinum_stones + p->jewel_stones;
-    weight += stones / 16u;
-    for (int i = 1; i < 8; i++)
-        weight += (unsigned long long)p->weapon_inventory[i] *
-                  (unsigned)weapon_stats[i].weight;
-    for (int i = 1; i < 8; i++)
-        weight += (unsigned long long)p->armor_inventory[i] *
-                  (unsigned)armor_weight[i];
-    return weight;
-}
-
 static void reward_take_stones(Character *p, const RewardStones *pile,
                                int key) {
     int first = 6;
@@ -3270,7 +4236,7 @@ static void reward_offer_stones(Game *g, Character *p,
     y = town_pane_text(g, y, line, 7);
 
     if (p->weight_pounds &&
-        reward_loaded_weight(p) > (unsigned long long)p->weight_pounds * 3u) {
+        game_loaded_weight(p) > (unsigned long long)p->weight_pounds * 3u) {
         y = town_pane_text(g, y, "IT IS TOO HEAVY FOR YOU TO CARRY.", 12);
         town_pane_text(g, y, "HIT ANY KEY...", 15);
         video_present(&g->video);
@@ -3278,6 +4244,7 @@ static void reward_offer_stones(Game *g, Character *p,
         return;
     }
 
+    int choice_y = y;
     y = town_pane_text(g, y, "A) TAKE ALL    L) LEAVE ALL", 15);
     y = town_pane_text(g, y, "J) JEWELS ONLY P) PL AND JWL", 15);
     y = town_pane_text(g, y, "G) GLD,PL,JWL  I) I,G,PL,JWL", 15);
@@ -3288,6 +4255,19 @@ static void reward_offer_stones(Game *g, Character *p,
     for (;;) {
         key = input_getch(&g->input);
         if (input_poll_quit(&g->input) || key == 0x1B) key = 'L';
+        if (key == INPUT_MOUSE_CLICK) {
+            static const char click_key[3][2] = {
+                {'A', 'L'}, {'J', 'P'}, {'G', 'I'}
+            };
+            int x, click_y;
+            key = 0;
+            if (game_mouse_click_logical(g, &x, &click_y) &&
+                x >= 0 && x < SX(0x2D3) && click_y >= choice_y &&
+                click_y < choice_y + SY(38) * 3) {
+                int row = (click_y - choice_y) / SY(38);
+                key = click_key[row][x >= SX(0x2D3) / 2];
+            }
+        }
         if (key >= 'a' && key <= 'z') key -= 'a' - 'A';
         if (strchr("IGPAJL", key)) break;
     }
@@ -3452,7 +4432,43 @@ int game_economy_self_test(void) {
     if (starting_spell_points(&novice) != 9.0f) failures++;
     novice.class_id = CLASS_MONK;
     if (starting_spell_points(&novice) != 3.0f) failures++;
+    {
+        Character hero = {0};
+        CombatState boss = {0};
+        char reward[160] = "";
+        hero.equipped_weapon = 1;
+        hero.floor_depth = 375;
+        boss.monster_type_idx = 112;
+        boss.monster_level = 375;
+        grant_quest_reward(&hero, &boss, reward, sizeof(reward));
+        if (mw_weapon_enchant(&hero, 1) != 200 ||
+            !(mw_quest_flags(&hero) & (1u << 8)) || !strstr(reward, "PLUS 200"))
+            failures++;
+        hero.floor_depth = 500;
+        boss.monster_type_idx = 113;
+        boss.monster_level = 500;
+        grant_quest_reward(&hero, &boss, reward, sizeof(reward));
+        if (mw_weapon_enchant(&hero, 1) != 300 ||
+            !(mw_quest_flags(&hero) & (1u << 9)) || !strstr(reward, "PLUS 300"))
+            failures++;
+        static const int deep_floor[4] = {625, 750, 875, 1000};
+        static const int deep_type[4] = {174, 175, 176, 177};
+        static const int deep_orb[4] = {450, 600, 800, 1000};
+        for (int i = 0; i < 4; i++) {
+            hero.floor_depth = (u16)deep_floor[i];
+            boss.monster_type_idx = deep_type[i];
+            boss.monster_level = deep_floor[i];
+            grant_quest_reward(&hero, &boss, reward, sizeof(reward));
+            char amount[16];
+            snprintf(amount, sizeof(amount), "PLUS %d", deep_orb[i]);
+            if (mw_weapon_enchant(&hero, 1) != deep_orb[i] ||
+                !(mw_quest_flags(&hero) & (1u << (10 + i))) ||
+                !strstr(reward, amount))
+                failures++;
+        }
+    }
     failures += character_creation_self_test();
+    failures += game_weight_self_test();
 
     printf("Economy/reward/creation self-test: %s (%d failure%s)\n",
            failures ? "FAIL" : "PASS", failures,
@@ -3460,20 +4476,52 @@ int game_economy_self_test(void) {
     return failures ? 1 : 0;
 }
 
+int game_weight_self_test(void) {
+    int failures = 0;
+    Character p = {0};
+    p.weight_pounds = 130;
+    p.stat_agi = 20;
+    p.copper_stones = 1600;       /* 100 pounds */
+    p.silver_stones = 15;         /* remainder does not combine */
+    p.jewel_stones = UINT32_MAX;  /* deliberately weightless */
+    p.weapon_inventory[1] = 2;    /* two 4-pound sticks */
+    p.armor_inventory[1] = 1;     /* 14-pound leather armor */
+    if (game_loaded_weight(&p) != 252u ||
+        game_weight_monster_turns(&p) != 2)
+        failures++;
+
+    p.eff_feather = 1;
+    if (game_loaded_weight(&p) != 122u ||
+        game_weight_monster_turns(&p) != 1)
+        failures++;
+
+    p.eff_feather = 100;
+    if (game_loaded_weight(&p) != 122u) failures++;
+    p.copper_stones = UINT32_MAX;
+    p.stat_agi = 0;
+    if (game_weight_monster_turns(&p) != 8) failures++;
+
+    return failures;
+}
+
+/* MW_EXTENSION: the bestiary has no WORLD.EXE counterpart. It uses original
+ * monster records and WORLD.PIC assets but keeps its own discovery save. */
 /* ── Beastiary ───────────────────────────────────────────────────────
  *
  * J was unused by the DOS command set (and reads naturally as monster
- * journal), so it opens a persistent record of all 112 definitions. */
+ * journal), so it opens a persistent record of every graphics-backed random
+ * monster and quest boss, including the native floor-375..1000 bosses. */
 
 static void bestiary_floor_text(int type, char *out, size_t out_size) {
-    static const int quest_floor[8] = {4, 8, 12, 16, 125, 150, 175, 200};
     const MonsterType *mt = &monster_types[type];
-    if (type >= 104) {
-        snprintf(out, out_size, "FLOOR: %d (QUEST)", quest_floor[type - 104]);
+    int quest_step = quest_step_for_type(type);
+    if (quest_step >= 0) {
+        snprintf(out, out_size, "FLOOR: %u (QUEST)",
+                 quest_floor_by_step[quest_step]);
         return;
     }
     int min_floor = mt->minL < 1 ? 1 : mt->minL;
-    int max_floor = mt->maxL > 120 ? 200 : mt->maxL;
+    int max_floor = combat_monster_max_floor(type);
     if (min_floor > max_floor)
         snprintf(out, out_size, "FLOORS: NOT IN RANDOM SPAWNS");
     else if (min_floor == max_floor)
@@ -3488,19 +4536,15 @@ static void draw_bestiary_fullscreen(Game *g, int type) {
     int adv = v->font_advance ? v->font_advance : v->font_char_w;
     int title_x = (LOGICAL_W - (int)strlen(mt->name) * adv) / 2;
     int pic = get_monster_pic_index_ext(type);
-    int substitute = pic < 2;
-    if (substitute) pic = 2;
+    if (pic < 2) return;
 
     video_clear(v, 0);
     video_draw_text(v, title_x > 4 ? title_x : 4, 5, mt->name, 14);
     draw_pic_billboard(g, pic, LOGICAL_W / 2,
                        42, LOGICAL_H - 104, 0.0f,
                        0, 0, LOGICAL_W, LOGICAL_H, NULL,
-                       get_monster_color_ext(type));
-    if (substitute)
-        video_draw_text_scaled(v, 12, LOGICAL_H - 62,
-                               "SUBSTITUTE ART - SOURCE SLOT IS ABSENT IN 1024X768 WORLD.PIC",
-                               8, 3, 4);
+                       get_monster_color_ext(type),
+                       get_monster_tint_ext(type));
     video_draw_text_scaled(v, 12, LOGICAL_H - 36,
                            "FULLSCREEN MONSTER VIEW - PRESS ANY KEY", 15,
                            3, 4);
@@ -3514,38 +4558,47 @@ static void draw_bestiary_page(Game *g, int selected) {
     int page = selected / ROWS_PER_PAGE;
     int first = page * ROWS_PER_PAGE;
     int discovered = 0;
+    int catalog_count = bestiary_mode_catalog_count(g);
     char line[160];
 
-    for (int i = 0; i < MONSTER_TYPE_COUNT; i++)
-        if (g->bestiary_kills[i]) discovered++;
+    for (int i = 0; i < catalog_count; i++) {
+        int type = bestiary_type_at_mode_catalog_index(g, i);
+        if (type >= 0 &&
+            (g->bestiary_unlock_all || g->bestiary_kills[type])) discovered++;
+    }
 
     video_clear(v, 0);
     video_draw_text(v, 10, 4, "BEASTIARY", 4);
     snprintf(line, sizeof(line), "DISCOVERED: %d OF %d    PAGE %d OF %d",
-             discovered, MONSTER_TYPE_COUNT, page + 1,
-             (MONSTER_TYPE_COUNT + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE);
+             discovered, catalog_count, page + 1,
+             (catalog_count + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE);
     video_draw_text_scaled(v, 205, 9, line, 8, 3, 4);
     video_hline(v, 4, 41, LOGICAL_W - 8, 8);
     video_vline(v, LIST_RIGHT, 42, LOGICAL_H - 84, 8);
 
     for (int row = 0; row < ROWS_PER_PAGE; row++) {
-        int type = first + row;
-        if (type >= MONSTER_TYPE_COUNT) break;
+        int entry = first + row;
+        if (entry >= catalog_count) break;
+        int type = bestiary_type_at_mode_catalog_index(g, entry);
+        if (type < 0) break;
         int y = 53 + row * 35;
-        int unlocked = g->bestiary_kills[type] != 0;
-        if (type == selected)
+        int unlocked = g->bestiary_unlock_all || g->bestiary_kills[type] != 0;
+        if (entry == selected)
             video_fill_rect(v, 7, y - 3, LIST_RIGHT - 15, 31, 1);
         if (unlocked)
-            snprintf(line, sizeof(line), "%03d  %s", type + 1,
+            snprintf(line, sizeof(line), "%03d  %s", entry + 1,
                      monster_types[type].name);
         else
-            snprintf(line, sizeof(line), "%03d  ????", type + 1);
+            snprintf(line, sizeof(line), "%03d  ????", entry + 1);
         video_draw_text_scaled(v, 13, y, line,
-                               type == selected ? 15 : (unlocked ? 7 : 8),
+                               entry == selected ? 15 : (unlocked ? 7 : 8),
                                3, 4);
     }
 
-    int unlocked = g->bestiary_kills[selected] != 0;
+    int selected_type = bestiary_type_at_mode_catalog_index(g, selected);
+    int unlocked = selected_type >= 0 &&
+                   (g->bestiary_unlock_all ||
+                    g->bestiary_kills[selected_type] != 0);
     if (!unlocked) {
         video_draw_text(v, 610, 110, "????", 8);
         video_draw_text_scaled(v, 470, 190,
@@ -3556,23 +4609,19 @@ static void draw_bestiary_page(Game *g, int selected) {
                                "WILL BE REVEALED AFTER YOUR FIRST KILL.", 7,
                                3, 4);
     } else {
-        const MonsterType *mt = &monster_types[selected];
-        int pic = get_monster_pic_index_ext(selected);
-        int substitute = pic < 2;
-        if (substitute) pic = 2;
+        const MonsterType *mt = &monster_types[selected_type];
+        int pic = get_monster_pic_index_ext(selected_type);
         video_draw_text(v, 430, 48, mt->name, 14);
         draw_pic_billboard(g, pic, 720, 80, 300, 0.0f,
                            LIST_RIGHT + 1, 42, LOGICAL_W - LIST_RIGHT - 1,
-                           350, NULL, get_monster_color_ext(selected));
-        if (substitute)
-            video_draw_text_scaled(v, 430, 353,
-                                   "SUBSTITUTE ART (SOURCE SLOT NOT IN THIS PIC SET)",
-                                   8, 3, 4);
+                           350, NULL, get_monster_color_ext(selected_type),
+                           get_monster_tint_ext(selected_type));
 
         int y = 390;
-        bestiary_floor_text(selected, line, sizeof(line));
+        bestiary_floor_text(selected_type, line, sizeof(line));
         video_draw_text_scaled(v, 430, y, line, 10, 3, 4); y += 32;
-        snprintf(line, sizeof(line), "KILLED: %u", g->bestiary_kills[selected]);
+        snprintf(line, sizeof(line), "KILLED: %u",
+                 g->bestiary_kills[selected_type]);
         video_draw_text_scaled(v, 430, y, line, 15, 3, 4); y += 32;
         snprintf(line, sizeof(line), "DEFENSE: %d       ATTACK: %d",
                  mt->def, mt->atk);
@@ -3599,54 +4648,462 @@ static void draw_bestiary_page(Game *g, int selected) {
 
     video_hline(v, 4, LOGICAL_H - 42, LOGICAL_W - 8, 8);
     video_draw_text_scaled(v, 10, LOGICAL_H - 34,
-                           "UP/DOWN SELECT  LEFT/RIGHT OR PGUP/PGDN PAGE  F FULLSCREEN  ESC RETURN",
+                           "UP/DOWN SELECT  PGUP/PGDN PAGE  F FULLSCREEN  CTRL-F12 UNLOCK ALL  ESC RETURN",
                            15, 3, 4);
 }
 
 void game_draw_bestiary_test(Game *g, int selected) {
-    if (selected < 0) selected = 0;
-    if (selected >= MONSTER_TYPE_COUNT) selected = MONSTER_TYPE_COUNT - 1;
-    draw_bestiary_page(g, selected);
+    int catalog_index = bestiary_mode_catalog_index_for_type(g, selected);
+    if (catalog_index < 0) catalog_index = 0;
+    draw_bestiary_page(g, catalog_index);
 }
 
-static int bestiary_move_selection(int selected, int scan) {
+static int bestiary_move_selection(int selected, int scan, int count) {
+    if (count < 1) return 0;
     switch (scan) {
     case 0x48:
-        return selected > 0 ? selected - 1 : MONSTER_TYPE_COUNT - 1;
+        return selected > 0 ? selected - 1 : count - 1;
     case 0x50:
-        return selected + 1 < MONSTER_TYPE_COUNT ? selected + 1 : 0;
+        return selected + 1 < count ? selected + 1 : 0;
     case 0x49:
     case 0x4B:
-        return selected >= 18 ? selected - 18 : MONSTER_TYPE_COUNT - 1;
+        return selected >= 18 ? selected - 18 : count - 1;
     case 0x51:
     case 0x4D:
-        return selected + 18 < MONSTER_TYPE_COUNT ? selected + 18 : 0;
+        return selected + 18 < count ? selected + 18 : 0;
     case 0x47:
         return 0;
     case 0x4F:
-        return MONSTER_TYPE_COUNT - 1;
+        return count - 1;
     default:
         return selected;
     }
+}
+
+static int game_door_encounter_self_test(Game *g) {
+    static const int dx[4] = {0, 0, -1, 1};
+    static const int dy[4] = {-1, 1, 0, 0};
+    int failures = 0;
+    int door_x = -1, door_y = -1, door_d = -1;
+    int secret_x = -1, secret_y = -1, secret_d = -1;
+    int open_x = -1, open_y = -1, open_d = -1;
+    int saved_floor = g->cur_floor;
+    int saved_x = g->cur_x, saved_y = g->cur_y;
+    int saved_loaded = g->monster_map_loaded;
+    int saved_layer = g->monster_layer;
+    int test_layer = 0;
+    MonsterRecord saved_map[MONSTERS_PER_FLOOR];
+
+    memcpy(saved_map, g->monster_map[test_layer], sizeof(saved_map));
+    g->cur_floor = 1;
+    for (int y = 1; y < MAP_H - 1 &&
+                        (door_d < 0 || secret_d < 0 || open_d < 0); y++) {
+        for (int x = 1; x < MAP_W - 1 &&
+                            (door_d < 0 || secret_d < 0 || open_d < 0); x++) {
+            for (int d = 0; d < 4; d++) {
+                int edge = edge_between_cells(g, x, y, x + dx[d], y + dy[d]);
+                if (edge == 1 && door_d < 0) {
+                    door_x = x; door_y = y; door_d = d;
+                } else if (edge == 2 && secret_d < 0) {
+                    secret_x = x; secret_y = y; secret_d = d;
+                } else if (edge == 3 && open_d < 0) {
+                    open_x = x; open_y = y; open_d = d;
+                }
+            }
+        }
+    }
+
+    memset(g->monster_map[test_layer], 0,
+           sizeof(g->monster_map[test_layer]));
+    g->monster_map_loaded = 1;
+    g->monster_layer = test_layer;
+    if (door_d < 0 || secret_d < 0 || open_d < 0) {
+        failures++;
+    } else {
+        MonsterRecord *m = &g->monster_map[test_layer][0];
+        g->cur_x = door_x; g->cur_y = door_y;
+        m->x = (u8)(door_x + dx[door_d]);
+        m->y = (u8)(door_y + dy[door_d]);
+        monster_record_set_hp(m, 1);
+        m->type = 0; m->level = 1;
+        if (!game_can_move(g, door_x, door_y, m->x, m->y) ||
+            game_find_monster(g, m->x, m->y) != 0 ||
+            game_find_adjacent_monster(g) >= 0 ||
+            actor_cell_visible(g, m->x, m->y))
+            failures++;
+
+        /* Edge 2 is WORLD's visually hidden, auto-opening secret door.  It
+         * permits an empty move but, like a visible door, hides a monster and
+         * makes that occupied doorway jam instead of starting combat. */
+        g->cur_x = secret_x; g->cur_y = secret_y;
+        m->x = (u8)(secret_x + dx[secret_d]);
+        m->y = (u8)(secret_y + dy[secret_d]);
+        if (!game_can_move(g, secret_x, secret_y, m->x, m->y) ||
+            game_find_monster(g, m->x, m->y) != 0 ||
+            game_find_adjacent_monster(g) >= 0 ||
+            actor_cell_visible(g, m->x, m->y))
+            failures++;
+
+        g->cur_x = open_x; g->cur_y = open_y;
+        m->x = (u8)(open_x + dx[open_d]);
+        m->y = (u8)(open_y + dy[open_d]);
+        if (!game_can_move(g, open_x, open_y, m->x, m->y) ||
+            game_find_adjacent_monster(g) != 0 ||
+            !actor_cell_visible(g, m->x, m->y))
+            failures++;
+    }
+
+    memcpy(g->monster_map[test_layer], saved_map, sizeof(saved_map));
+    g->monster_map_loaded = saved_loaded;
+    g->monster_layer = saved_layer;
+    g->cur_floor = saved_floor;
+    g->cur_x = saved_x; g->cur_y = saved_y;
+    return failures;
+}
+
+static int game_dig_self_test(Game *g) {
+    int failures = 0;
+    int saved_floor = g->cur_floor;
+    int saved_x = g->cur_x, saved_y = g->cur_y;
+    int saved_max_floor = g->dungeon_max_floor;
+    DigLanding landing;
+
+    g->dungeon_max_floor = MAX_DUNGEON_FLOOR;
+    const GameTraversalRules *rules = game_traversal_rules(g);
+    if (rules->max_floor != 1000 ||
+        rules->prep_ascend_max_floor != 260 ||
+        rules->prep_descend_max_floor != 492 ||
+        rules->prep_major_descend_cap != 300 ||
+        rules->dig_max_floor != 480 ||
+        rules->dig_reverse_floor != 496 ||
+        rules->dig_direction_floor != 600 ||
+        rules->dig_slow_floor != 64 ||
+        rules->dig_search_attempts != 520 ||
+        game_clamp_dungeon_floor(g, -1) != 0 ||
+        game_clamp_dungeon_floor(g, 1001) != 1000)
+        failures++;
+    g->cur_floor = 0;
+    g->cur_x = 40;
+    g->cur_y = 55;
+    if (!find_dig_landing(g, &landing) || landing.floor == g->cur_floor ||
+        rock_cell_at(g, landing.x, landing.y, landing.floor))
+        failures++;
+
+    if (!dig_depth_allowed(g, rules->dig_max_floor) ||
+        dig_depth_allowed(g, rules->dig_max_floor + 1))
+        failures++;
+
+    g->cur_floor = rules->dig_max_floor;
+    if (!find_dig_landing(g, &landing) || landing.floor < 1 ||
+        landing.floor > rules->dig_reverse_floor ||
+        rock_cell_at(g, landing.x, landing.y, landing.floor))
+        failures++;
+
+    g->dungeon_max_floor = CLASSIC_DUNGEON_FLOOR;
+    rules = game_traversal_rules(g);
+    if (rules->max_floor != 250 ||
+        rules->prep_ascend_max_floor != 65 ||
+        rules->prep_descend_max_floor != 123 ||
+        rules->prep_major_descend_cap != 75 ||
+        rules->dig_max_floor != 120 ||
+        rules->dig_reverse_floor != 124 ||
+        rules->dig_direction_floor != 150 ||
+        rules->dig_slow_floor != 16 ||
+        rules->dig_search_attempts != 130 ||
+        game_clamp_dungeon_floor(g, -1) != 0 ||
+        game_clamp_dungeon_floor(g, 250) != 250 ||
+        game_clamp_dungeon_floor(g, 251) != 250 ||
+        !dig_depth_allowed(g, 120) || dig_depth_allowed(g, 121))
+        failures++;
+    g->cur_floor = 120;
+    if (!find_dig_landing(g, &landing) || landing.floor < 1 ||
+        landing.floor > 124 ||
+        rock_cell_at(g, landing.x, landing.y, landing.floor))
+        failures++;
+
+    g->cur_floor = saved_floor;
+    g->cur_x = saved_x; g->cur_y = saved_y;
+    g->dungeon_max_floor = saved_max_floor;
+    return failures;
+}
+
+/* MW_PORT: WORLD use_item/0x0F4E7.  Despite its decompiler name this is not
+ * the inventory command: the map renderer calls it for entity records
+ * 0x68..0x6F and it prints a compass hint toward the living quest monster. */
+static int quest_compass_direction(int player_x, int player_y,
+                                   int target_x, int target_y) {
+    int dx = player_x - target_x;
+    int dy = player_y - target_y;
+    int abs_dx = dx < 0 ? -dx : dx;
+    int abs_dy = dy < 0 ? -dy : dy;
+    if (abs_dx > abs_dy) return dx > 0 ? 2 : 3; /* west/east */
+    return dy > 0 ? 0 : 1;                     /* north/south */
+}
+
+static void draw_quest_compass_hint(Game *g) {
+    static const char *const hint[4] = {
+        "GO NORTH", "GO SOUTH", "GO WEST", "GO EAST"
+    };
+    if (!g->monster_map_loaded || g->monster_layer < 0) return;
+    for (int i = 0; i < MONSTERS_PER_FLOOR; i++) {
+        MonsterRecord *m = &g->monster_map[g->monster_layer][i];
+        if (quest_step_for_type(m->type) < 0 || game_monster_hp(g, i) <= 0)
+            continue;
+        int direction = quest_compass_direction(g->cur_x, g->cur_y,
+                                                m->x, m->y);
+        video_draw_text_scaled_xy(&g->video, SX(0x4B0), SY(0x442),
+                                  hint[direction], 4, 7, 6, 12, 17);
+        return;
+    }
+}
+
+/* Consume and apply the character-side portion of a raise-dead contract.
+ * The caller performs the actual dungeon-floor switch after receiving the
+ * validated return position.  Keeping this separate makes death recovery
+ * testable without entering the interactive exploration loop. */
+static int character_apply_raise_contract(Character *p,
+                                          int *return_floor,
+                                          int *return_x,
+                                          int *return_y) {
+    if (!p || p->raise_x == 0xFFFFu) return 0;
+
+    int max_floor = mw_experience_mode(p) == MW_EXPERIENCE_CLASSIC ?
+                    CLASSIC_DUNGEON_FLOOR : MAX_DUNGEON_FLOOR;
+    *return_floor = p->raise_floor <= max_floor ? p->raise_floor : 0;
+    *return_x = p->raise_x < MAP_W ? p->raise_x : MAP_W / 2;
+    *return_y = p->raise_y < MAP_H ? p->raise_y : MAP_H / 2;
+
+    p->raise_x = 0xFFFFu;
+    if (p->stat_con > 1) p->stat_con--;
+    character_clear_battle_effects(p);
+    p->hp_cur = p->hp_max;
+    p->sp_cur = p->sp_max;
+    return 1;
+}
+
+static int game_death_recovery_self_test(void) {
+    Character p = {0};
+    int floor = -1, x = -1, y = -1;
+    int failures = 0;
+
+    p.hp_max = 123;
+    p.sp_max = 45.0f;
+    p.stat_con = 9;
+    p.raise_floor = 77;
+    p.raise_x = 12;
+    p.raise_y = 34;
+    p.eff_battle_str = 10;
+    p.eff_hold_monster = 5;
+    if (!character_apply_raise_contract(&p, &floor, &x, &y) ||
+        floor != 77 || x != 12 || y != 34 ||
+        p.raise_x != 0xFFFFu || p.stat_con != 8 ||
+        p.hp_cur != p.hp_max || p.sp_cur != p.sp_max ||
+        p.eff_battle_str != 0 || p.eff_hold_monster != 0)
+        failures++;
+
+    p.hp_cur = 0;
+    if (character_apply_raise_contract(&p, &floor, &x, &y) || p.hp_cur != 0)
+        failures++;
+
+    memset(&p, 0, sizeof(p));
+    p.hp_max = 20;
+    p.sp_max = 10.0f;
+    p.stat_con = 1;
+    p.raise_floor = UINT16_MAX;
+    p.raise_x = MAP_W + 10;
+    p.raise_y = MAP_H + 10;
+    if (!character_apply_raise_contract(&p, &floor, &x, &y) ||
+        floor != 0 || x != MAP_W / 2 || y != MAP_H / 2 ||
+        p.stat_con != 1)
+        failures++;
+
+    /* Raise contracts are another vertical traversal and must not allow a
+     * corrupt or edited Classic save to re-enter an Enhanced-only floor. */
+    memset(&p, 0, sizeof(p));
+    mw_set_experience_mode(&p, MW_EXPERIENCE_CLASSIC);
+    p.hp_max = 20;
+    p.sp_max = 10.0f;
+    p.raise_floor = 251;
+    p.raise_x = 10;
+    p.raise_y = 10;
+    if (!character_apply_raise_contract(&p, &floor, &x, &y) || floor != 0)
+        failures++;
+
+    memset(&p, 0, sizeof(p));
+    mw_set_experience_mode(&p, MW_EXPERIENCE_ENHANCED);
+    p.hp_max = 20;
+    p.sp_max = 10.0f;
+    p.raise_floor = 777;
+    p.raise_x = 10;
+    p.raise_y = 10;
+    if (!character_apply_raise_contract(&p, &floor, &x, &y) || floor != 777)
+        failures++;
+
+    return failures;
 }
 
 int game_ui_self_test(Game *g) {
     static const int expected[12][2] = {
         {'b','m'}, {'w','v'}, {'z','c'}, {'i','x'},
         {'a','l'}, {'f','p'}, {'t','e'}, {'o','o'},
-        {'j','j'}, {'1','1'}, {'2','2'}, {'q','h'}
+        {'j','g'}, {'1','1'}, {'2','2'}, {'q','h'}
     };
     int failures = 0;
-    if (bestiary_move_selection(0, 0x48) != MONSTER_TYPE_COUNT - 1) failures++;
-    if (bestiary_move_selection(MONSTER_TYPE_COUNT - 1, 0x50) != 0) failures++;
-    if (bestiary_move_selection(0, 0x49) != MONSTER_TYPE_COUNT - 1) failures++;
-    if (bestiary_move_selection(MONSTER_TYPE_COUNT - 1, 0x51) != 0) failures++;
-    if (bestiary_move_selection(18, 0x49) != 0) failures++;
-    if (bestiary_move_selection(0, 0x51) != 18) failures++;
+    int catalog_count = 0;
+    while (bestiary_type_at_catalog_index(catalog_count) >= 0)
+        catalog_count++;
+    if (catalog_count != BESTIARY_CATALOG_COUNT ||
+        bestiary_catalog_index_for_type(6) >= 0 ||
+        bestiary_catalog_index_for_type(112) != 107 ||
+        bestiary_catalog_index_for_type(113) != 116 ||
+        bestiary_catalog_index_for_type(174) != 129 ||
+        bestiary_catalog_index_for_type(175) != 138 ||
+        bestiary_catalog_index_for_type(176) != 151 ||
+        bestiary_catalog_index_for_type(177) != 160 ||
+        bestiary_type_at_catalog_index(128) != 145 ||
+        bestiary_type_at_catalog_index(130) != 146 ||
+        bestiary_type_at_catalog_index(159) != 173)
+        failures++;
+    {
+        int saved_floor = g->cur_floor;
+        int saved_max_floor = g->dungeon_max_floor;
+        int found_down_251 = 0, found_down_500 = 0;
+        int found_down_999 = 0, down_from_1000 = 0;
+        const int floors[4] = {251, 500, 999, 1000};
+        int *found[4] = {
+            &found_down_251, &found_down_500,
+            &found_down_999, &down_from_1000
+        };
+        g->dungeon_max_floor = MAX_DUNGEON_FLOOR;
+        for (int f = 0; f < 4; f++) {
+            g->cur_floor = floors[f];
+            for (int y = 0; y < MAP_H; y++)
+                for (int x = 0; x < MAP_W; x++)
+                    if (ladder_delta(g, x, y) > 0) *found[f] = 1;
+        }
+        if (!found_down_251 || !found_down_500 || !found_down_999 ||
+            down_from_1000) failures++;
+
+        int found_down_249 = 0, down_from_250 = 0;
+        g->dungeon_max_floor = CLASSIC_DUNGEON_FLOOR;
+        g->cur_floor = 249;
+        for (int y = 0; y < MAP_H; y++)
+            for (int x = 0; x < MAP_W; x++)
+                if (ladder_delta(g, x, y) > 0) found_down_249 = 1;
+        g->cur_floor = 250;
+        for (int y = 0; y < MAP_H; y++)
+            for (int x = 0; x < MAP_W; x++)
+                if (ladder_delta(g, x, y) > 0) down_from_250 = 1;
+        if (!found_down_249 || down_from_250) failures++;
+
+        /* Chutes and keyed trap doors share the same policy even though the
+         * original key-door generator currently stops at floor 170. */
+        for (int y = 0; y < MAP_H; y++)
+            for (int x = 0; x < MAP_W; x++) {
+                if (pitfall_target(g, x, y) > CLASSIC_DUNGEON_FLOOR)
+                    failures++;
+                int trap = game_trapdoor_floor(g, x, y);
+                if (trap > CLASSIC_DUNGEON_FLOOR) failures++;
+            }
+
+        g->cur_floor = saved_floor;
+        g->dungeon_max_floor = saved_max_floor;
+    }
+    {
+        MonsterRecord saved_map[MONSTER_MAP_LAYERS][MONSTERS_PER_FLOOR];
+        u16 saved_monster_floor[MONSTER_MAP_LAYERS];
+        Character saved_character = g->chars[0];
+        int saved_player = g->cur_player;
+        int saved_floor = g->cur_floor;
+        int saved_layer = g->monster_layer;
+        int saved_dirty = g->monster_map_dirty;
+        u32 saved_rand = g->rand_state;
+        memcpy(saved_map, g->monster_map, sizeof(saved_map));
+        memcpy(saved_monster_floor, g->monster_floor, sizeof(saved_monster_floor));
+        g->cur_player = 0;
+        mw_set_quest_flags(&g->chars[0], 0);
+        static const int boss_floor[] = {375, 500, 625, 750, 875, 1000};
+        static const int boss_type[] = {112, 113, 174, 175, 176, 177};
+        for (int q = 0; q < 6; q++) {
+            generate_monster_floor(g, 0, boss_floor[q]);
+            int found = -1;
+            for (int i = 0; i < MONSTERS_PER_FLOOR; i++)
+                if (g->monster_map[0][i].type == boss_type[q]) {
+                    found = i;
+                    break;
+                }
+            if (found < 0 ||
+                g->monster_map[0][found].level < boss_floor[q] - 2)
+                failures++;
+        }
+        memcpy(g->monster_map, saved_map, sizeof(saved_map));
+        memcpy(g->monster_floor, saved_monster_floor, sizeof(saved_monster_floor));
+        g->chars[0] = saved_character;
+        g->cur_player = saved_player;
+        g->cur_floor = saved_floor;
+        g->monster_layer = saved_layer;
+        g->monster_map_dirty = saved_dirty;
+        g->rand_state = saved_rand;
+    }
+    {
+        int saved_max_floor = g->dungeon_max_floor;
+        g->dungeon_max_floor = MAX_DUNGEON_FLOOR;
+        int enhanced_count = bestiary_mode_catalog_count(g);
+        if (enhanced_count != BESTIARY_CATALOG_COUNT ||
+            bestiary_move_selection(0, 0x48, enhanced_count) !=
+                enhanced_count - 1 ||
+            bestiary_move_selection(enhanced_count - 1, 0x50,
+                                    enhanced_count) != 0 ||
+            bestiary_move_selection(0, 0x49, enhanced_count) !=
+                enhanced_count - 1 ||
+            bestiary_move_selection(enhanced_count - 1, 0x51,
+                                    enhanced_count) != 0 ||
+            bestiary_move_selection(18, 0x49, enhanced_count) != 0 ||
+            bestiary_move_selection(0, 0x51, enhanced_count) != 18)
+            failures++;
+        g->dungeon_max_floor = CLASSIC_DUNGEON_FLOOR;
+        int classic_count = bestiary_mode_catalog_count(g);
+        if (classic_count <= 0 || classic_count >= enhanced_count ||
+            bestiary_mode_catalog_index_for_type(g, 112) >= 0 ||
+            bestiary_move_selection(0, 0x48, classic_count) !=
+                classic_count - 1)
+            failures++;
+        g->dungeon_max_floor = saved_max_floor;
+    }
     if (input_sdl_to_dos(SDLK_PAGEUP, KMOD_NONE) != -0x49) failures++;
     if (input_sdl_to_dos(SDLK_PAGEDOWN, KMOD_NONE) != -0x51) failures++;
     if (input_sdl_to_dos(SDLK_KP_9, KMOD_NONE) != -0x49) failures++;
     if (input_sdl_to_dos(SDLK_KP_3, KMOD_NONE) != -0x51) failures++;
+    if (input_sdl_to_dos(SDLK_8, KMOD_SHIFT) != '*') failures++;
+    if (input_sdl_to_dos(SDLK_9, KMOD_SHIFT) != '(') failures++;
+    if (input_sdl_to_dos(SDLK_0, KMOD_SHIFT) != ')') failures++;
+    if (input_sdl_to_dos(SDLK_F1, KMOD_NONE) != -0x3B) failures++;
+    if (input_sdl_to_dos(SDLK_F5, KMOD_CTRL) != INPUT_MODEL_VIEWER)
+        failures++;
+    if (input_sdl_to_dos(SDLK_F6, KMOD_CTRL) != INPUT_DUNGEON_REROLL)
+        failures++;
+    if (input_sdl_to_dos(SDLK_F7, KMOD_CTRL) != INPUT_OPEN_FLOOR_TOGGLE)
+        failures++;
+    if (input_sdl_to_dos(SDLK_F8, KMOD_CTRL) != INPUT_TOWN_TELEPORT)
+        failures++;
+    if (input_sdl_to_dos(SDLK_F9, KMOD_CTRL) != INPUT_GOD_TOGGLE)
+        failures++;
+    if (input_sdl_to_dos(SDLK_F10, KMOD_CTRL) != INPUT_NOCLIP_TOGGLE)
+        failures++;
+    if (input_sdl_to_dos(SDLK_F5, KMOD_NONE) != -0x3F ||
+        input_sdl_to_dos(SDLK_F6, KMOD_NONE) != -0x40 ||
+        input_sdl_to_dos(SDLK_F10, KMOD_NONE) != -0x44)
+        failures++;
+    if (quest_compass_direction(10, 10, 2, 9) != 2 ||
+        quest_compass_direction(10, 10, 18, 11) != 3 ||
+        quest_compass_direction(10, 10, 9, 2) != 0 ||
+        quest_compass_direction(10, 10, 11, 18) != 1 ||
+        quest_compass_direction(10, 10, 18, 18) != 1)
+        failures++;
+    failures += video_world_palette_self_test();
+    failures += game_door_encounter_self_test(g);
+    failures += game_dig_self_test(g);
+    failures += game_death_recovery_self_test();
 
     const int menu_x = SX(0x48C);
     const int spacing = SY(35);
@@ -3666,69 +5123,226 @@ int game_ui_self_test(Game *g) {
                 failures++;
         }
     }
+    {
+        static const int direction[4] = {0, 1, 2, 3};
+        int saved_x = g->input.last_mouse_x;
+        int saved_y = g->input.last_mouse_y;
+        int saved_mode = g->view_mode;
+        for (int mode = 0; mode < 3; mode++) {
+            const ViewLayout *vl = &view_layouts[mode];
+            const ViewRect *rects[4] = {
+                &vl->north, &vl->south, &vl->west, &vl->east
+            };
+            g->view_mode = mode;
+            for (int i = 0; i < 4; i++) {
+                float logical_x = rects[i]->x + rects[i]->w / 2.0f;
+                float logical_y = rects[i]->y + rects[i]->h / 2.0f;
+                SDL_RenderLogicalToWindow(g->video.renderer,
+                                          logical_x, logical_y,
+                                          &g->input.last_mouse_x,
+                                          &g->input.last_mouse_y);
+                if (game_mouse_view_direction(g) != direction[i]) failures++;
+            }
+        }
+        g->view_mode = saved_mode;
+        g->input.last_mouse_x = saved_x;
+        g->input.last_mouse_y = saved_y;
+    }
     return failures;
 }
 
 static void cmd_bestiary(Game *g) {
     int selected = 0;
     for (;;) {
+        int catalog_count = bestiary_mode_catalog_count(g);
         draw_bestiary_page(g, selected);
         video_present(&g->video);
         int key = input_getch(&g->input);
         if (input_poll_quit(&g->input) || key == 0x1B) return;
-        if ((key == 'f' || key == 'F') && g->bestiary_kills[selected]) {
-            draw_bestiary_fullscreen(g, selected);
+        if (key == INPUT_TRAINER) {
+            g->bestiary_unlock_all = 1;
+            draw_bestiary_page(g, selected);
+            video_fill_rect(&g->video, 420, 43, 590, 42, 0);
+            video_draw_text_scaled(&g->video, 435, 50,
+                                   "ALL BESTIARY ENTRIES UNLOCKED", 4,
+                                   3, 4);
+            video_present(&g->video);
+            SDL_Delay(700);
+            continue;
+        }
+        if (key == INPUT_MOUSE_CLICK) {
+            int x, y;
+            if (!game_mouse_click_logical(g, &x, &y)) continue;
+            if (x < 408 && y >= 50 && y < 50 + 18 * 35) {
+                int entry = (selected / 18) * 18 + (y - 50) / 35;
+                if (entry < catalog_count) selected = entry;
+                continue;
+            }
+            if (x >= 408 && y >= 42 && y < LOGICAL_H - 42) {
+                int type = bestiary_type_at_mode_catalog_index(g, selected);
+                if (type >= 0 &&
+                    (g->bestiary_unlock_all || g->bestiary_kills[type]))
+                    draw_bestiary_fullscreen(g, type);
+                continue;
+            }
+            if (y >= LOGICAL_H - 42) {
+                selected = bestiary_move_selection(selected,
+                           x < LOGICAL_W / 2 ? 0x49 : 0x51,
+                           catalog_count);
+            }
+            continue;
+        }
+        int selected_type = bestiary_type_at_mode_catalog_index(g, selected);
+        if ((key == 'f' || key == 'F') && selected_type >= 0 &&
+            (g->bestiary_unlock_all || g->bestiary_kills[selected_type])) {
+            draw_bestiary_fullscreen(g, selected_type);
             continue;
         }
         if (key != 0) continue;
         int scan = input_getch(&g->input);
-        selected = bestiary_move_selection(selected, scan);
+        selected = bestiary_move_selection(selected, scan, catalog_count);
     }
 }
 
-/* ── Command: Help screen (matches original func_26DE1 help menu) ── */
+/* MW_PORT: WORLD func_26C03 help menu and its topic dispatch. */
+/* ── Command: Help screen (matches original func_26C03 help menu) ── */
 
-static void cmd_help(Game *g) {
+typedef struct HelpTopic {
+    int key;
+    const char *menu;
+    const char *detail;
+} HelpTopic;
+
+static const HelpTopic help_topics[] = {
+    {'A', "ARMOR (SELECT TYPE)",
+     "Select any armor you own. Your class limits the heaviest armor it can use. Equipped cursed armor cannot be dropped until its curse is removed."},
+    {'B', "BRICK SPEED CHANGE (4 SETTINGS)",
+     "Cycles the original four brick-animation speed settings and updates the dungeon-display control value."},
+    {'C', "CAST SPELL OR GET HELP ON SPELLS",
+     "Choose Permanent, Preparation, Wizard Battle, or Priest Battle magic. The selector lists all ten levels at once. A spell costs one spell point per level; permanent magic is cast in town, preparation magic outside battle, and battle magic against a monster. The four Help choices explain every spell individually."},
+    {'D', "GO DOWN LADDER OR DIG HOLE",
+     "On a downward ladder, D descends. Elsewhere it digs through the floor using the original timed sequence. Classic permits digging through floor 120; Enhanced proportionally extends it through floor 480. Deeper rock cannot be dug. U uses upward ladders and town shop ladders; K operates a keyed trap door when you carry its matching key."},
+    {'E', "EXPERIENCE NEEDED TO GAIN LEVEL",
+     "Shows current experience and the exact amount required for the next level. Level gains are awarded when you use the inn."},
+    {'F', "FIGHT A MONSTER",
+     "Attacks an adjacent visible monster. Walking toward a monster through an open passage also engages it. A monster behind a visible or secret door remains hidden and jams that door until it moves away."},
+    {'G', "GAME STATS (CURRENT SAVE)",
+     "Summarizes the current dungeon seed and position, age, total recorded kills, Beastiary progress, quest bosses, keys, known pitfalls, explored cells, living floor monsters, magic inventory, equipment, weight pressure, and active runtime test modes."},
+    {'H', "THIS HELP SCREEN",
+     "Every highlighted help line can be clicked or selected with its shown key. Escape returns to exploration."},
+    {'I', "USE AN ITEM",
+     "Use scrolls, wands, magic paper, pills, stones, potions, floor sloshers, or the Holy Hand Grenade. Scrolls and papers are consumed; wands lose one charge. Fighters may cast only from magic paper."},
+    {'L', "LOSE (DROP) AN ITEM",
+     "Drops armor, weapons, or an entire carried money denomination. Fists and skin are implicit and cannot be dropped. Cursed equipped gear refuses to come off."},
+    {'M', "VIEW MONEY (FINANCIAL STATUS)",
+     "Shows jewel pieces and every stone denomination in your pockets and bank. Carried stones have weight; banked wealth and jewel pieces do not."},
+    {'O', "TOGGLE SOUND ON AND OFF",
+     "Toggles the original sound state and changes the command legend between ON and OFF."},
+    {'P', "VIEW CONTENTS OF POCKETS",
+     "Opens spellbooks, scrolls, wands, papers, miscellaneous magic items, pills, rings, body armor, and gauntlet inventory pages."},
+    {'Q', "QUIT AND SAVE GAME",
+     "Writes the character, explored dungeon, monsters, pitfalls, and bestiary record, then returns to the launcher. S performs the same save without quitting."},
+    {'J', "BEASTIARY (MONSTER JOURNAL)",
+     "Lists every spawnable monster as ???? until your first kill. Discovered entries show their original picture, statistics, floor range, and kill count. Press F or click the picture for a full-screen view."},
+    {'S', "SAVE AND CONTINUE PLAYING",
+     "Saves the complete current game state and immediately resumes play."},
+    {'T', "WAIT (SKIP A TURN)",
+     "Passes one player turn. Monsters move and timed battle effects, poison, and disease advance normally."},
+    {'V', "VIEW STATS",
+     "Shows race, class, level, attributes, health, spell points, age, load, equipment bonuses, drains, and raise-dead contract state."},
+    {'W', "WEAPONS (SELECT TYPE)",
+     "Equips an owned weapon permitted to your class. Damage, hit bonus, temporary spell enchantment, and permanent item enchantment all contribute in combat."},
+    {'X', "EXPAND MAP VIEW",
+     "Displays the remembered dungeon map with exact wall and door edges, ladder directions, shops, keyed trap doors, known pitfalls, and the blinking player marker. Quest floors also show the original directional hint toward a living quest monster."},
+    {'Z', "ZOOM IN ON A 3D VIEW",
+     "Opens the original direction chooser. Press an arrow or click a compass viewport to expand that view across the full 1024x768 screen until another key is pressed. Press Z again in the chooser to cycle the original three four-view sizes."},
+    {'1', "SHOW SPELL EFFECT PAGE 1",
+     "Shows preparation and battle bonuses including strength, agility, invisibility, feather, fast movement, protection, and weapon power with their remaining state."},
+    {'2', "SHOW SPELL EFFECT PAGE 2",
+     "Shows poison, disease, elemental and drain resistances, and monster hold/stop effects with their remaining turns."}
+};
+
+static void draw_help_detail(Game *g, const HelpTopic *topic) {
     Video *v = &g->video;
-    int fh = v->font_char_h + 2;
-
+    int fh = v->font_char_h + 5;
+    char copy[1024], line[72] = "";
+    snprintf(copy, sizeof(copy), "%s", topic->detail);
     video_clear(v, 0);
-    int y = 4;
-
-    video_draw_text(v, 8, y, "HELP MENU-HIT ESC TO RETURN TO GAME", 4);
-    y += fh;
-    video_draw_text(v, 8, y, "HIT LETTER OR NUMBER FOR MORE HELP", 5);
-    y += fh + 4;
-
-    video_draw_text(v, 8, y, "A-ARMOR (SELECT TYPE)", 8); y += fh;
-    video_draw_text(v, 8, y, "B-BRICK SPEED CHANGE (4 SETTINGS)", 8); y += fh;
-    video_draw_text(v, 8, y, "C-CAST SPELL OR GET HELP ON SPELLS", 8); y += fh;
-    video_draw_text(v, 8, y, "D-GO DOWN LADDER OR DIG HOLE", 8); y += fh;
-    video_draw_text(v, 8, y, "E-EXPERIENCE NEEDED TO GAIN LEVEL", 8); y += fh;
-    video_draw_text(v, 8, y, "F-FIGHT A MONSTER", 8); y += fh;
-    video_draw_text(v, 8, y, "H-THIS HELP SCREEN", 8); y += fh;
-    video_draw_text(v, 8, y, "I-USE AN ITEM", 8); y += fh;
-    video_draw_text(v, 8, y, "L-LOSE (DROP) AN ITEM", 8); y += fh;
-    video_draw_text(v, 8, y, "M-VIEW MONEY (FINANCIAL STATUS)", 8); y += fh;
-    video_draw_text(v, 8, y, "O-TOGGLE SOUND ON AND OFF", 8); y += fh;
-    video_draw_text(v, 8, y, "P-VIEW CONTENTS OF POCKETS", 8); y += fh;
-    video_draw_text(v, 8, y, "Q-QUIT AND SAVE GAME", 8); y += fh;
-    video_draw_text(v, 8, y, "J-BEASTIARY (MONSTER JOURNAL)", 8); y += fh;
-    video_draw_text(v, 8, y, "S-SAVE AND CONTINUE PLAYING", 8); y += fh;
-    video_draw_text(v, 8, y, "T-WAIT (SKIP A TURN)", 8); y += fh;
-    video_draw_text(v, 8, y, "V-VIEW STATS", 8); y += fh;
-    video_draw_text(v, 8, y, "W-WEAPONS (SELECT TYPE)", 8); y += fh;
-    video_draw_text(v, 8, y, "X-EXPAND MAP VIEW", 8); y += fh;
-    video_draw_text(v, 8, y, "Z-ZOOM (TOGGLE MAP SIZE)", 8); y += fh;
-    y += 4;
-    video_draw_text(v, 8, y, "ARROWS-MOVE AND TURN", 8); y += fh;
-    video_draw_text(v, 8, y, "1,2-SHOW SPELL EFFECT PAGES", 8); y += fh;
-
-    video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
+    char title[96];
+    snprintf(title, sizeof(title), "%c - %s", topic->key, topic->menu);
+    video_draw_text(v, 8, 6, title, 4);
+    video_hline(v, 8, 6 + fh, LOGICAL_W - 16, 8);
+    int y = 6 + fh * 2;
+    char *word = strtok(copy, " ");
+    while (word) {
+        size_t used = strlen(line), need = strlen(word);
+        if (used && used + need + 1 > 62) {
+            video_draw_text(v, 8, y, line, 7);
+            y += fh;
+            line[0] = 0;
+            used = 0;
+        }
+        if (used) strncat(line, " ", sizeof(line) - strlen(line) - 1);
+        strncat(line, word, sizeof(line) - strlen(line) - 1);
+        word = strtok(NULL, " ");
+    }
+    if (*line) video_draw_text(v, 8, y, line, 7);
+    video_draw_text(v, 8, LOGICAL_H - fh - 4,
+                    "HIT ANY KEY TO RETURN TO HELP...", 15);
     video_present(v);
     input_wait_any_key(&g->input);
 }
 
+static void cmd_help(Game *g) {
+    Video *v = &g->video;
+    int fh = v->font_char_h + 2;
+    const int topic_count = (int)(sizeof(help_topics) / sizeof(help_topics[0]));
+    const int split = topic_count - 2; /* The last two topics are 1 and 2. */
+    for (;;) {
+        video_clear(v, 0);
+        int y = 4;
+        video_draw_text(v, 8, y, "HELP MENU-HIT ESC TO RETURN TO GAME", 4);
+        y += fh;
+        video_draw_text(v, 8, y, "HIT OR CLICK A LETTER OR NUMBER FOR MORE HELP", 5);
+        y += fh + 4;
+        int option_y = y;
+        for (int i = 0; i < topic_count; i++) {
+            if (i == split) y += 4;
+            char line[96];
+            snprintf(line, sizeof(line), "%c-%s", help_topics[i].key,
+                     help_topics[i].menu);
+            video_draw_text(v, 8, y, line, 8);
+            y += fh;
+        }
+        video_draw_text(v, 8, LOGICAL_H - fh - 4, "ESC RETURNS TO GAME", 15);
+        video_present(v);
+
+        int key = input_getch(&g->input);
+        if (input_poll_quit(&g->input) || key == 0x1B) return;
+        if (key == INPUT_MOUSE_CLICK) {
+            int x, click_y;
+            key = -1;
+            if (game_mouse_click_logical(g, &x, &click_y)) {
+                if (click_y >= option_y && click_y < option_y + fh * split)
+                    key = help_topics[(click_y - option_y) / fh].key;
+                else {
+                    int last_y = option_y + fh * split + 4;
+                    if (click_y >= last_y && click_y < last_y + fh * 2)
+                        key = help_topics[split + (click_y - last_y) / fh].key;
+                }
+            }
+        }
+        if (key >= 'a' && key <= 'z') key -= 'a' - 'A';
+        for (int i = 0; i < topic_count; i++)
+            if (key == help_topics[i].key) {
+                draw_help_detail(g, &help_topics[i]);
+                break;
+            }
+    }
+}
+
+/* MW_PORT: expand-map command branch of WORLD func_0F6E5 and the map
+ * primitives in func_1F077/func_1F3FD/far_1FAE6. */
 /* ── Command: Expand Map (dungeon map viewer) ── */
 
 static void draw_expanded_map_frame(Game *g) {
@@ -3781,7 +5395,8 @@ static void draw_expanded_map_frame(Game *g) {
                     video_put_pixel(v, px + p, py + cs - 1 - p, 4);
             } else if (ladder > 0) {
                 for (int p = 1; p < cs - 1; p++)
-                    video_put_pixel(v, px + p, py + p, 47);
+                    video_put_pixel(v, px + p, py + p,
+                                    MW_COLOR_STATUS_CYAN);
             } else if (trap >= 0) {
                 for (int p = 1; p < cs - 1; p++) {
                     video_put_pixel(v, px + p, py + p, 4);
@@ -3813,9 +5428,11 @@ static void draw_expanded_map_frame(Game *g) {
     video_draw_text(v, lx, ly, "INN LADDER", 6); ly += step;
     video_draw_text(v, lx, ly, "WILDERNESS EXIT", 7); ly += step * 2;
     video_draw_text(v, lx, ly, "YELLOW /: UP", 4); ly += step;
-    video_draw_text(v, lx, ly, "CYAN \\: DOWN", 47); ly += step;
+    video_draw_text(v, lx, ly, "CYAN \\: DOWN",
+                    MW_COLOR_STATUS_CYAN); ly += step;
     video_draw_text(v, lx, ly, "ORANGE X: TRAPDOOR", 4); ly += step;
     video_draw_text(v, lx, ly, "MAGENTA X: KNOWN PIT", 3);
+    draw_quest_compass_hint(g);
 }
 
 static void cmd_expand_map(Game *g) {
@@ -3839,6 +5456,86 @@ static void cmd_expand_map(Game *g) {
     g->map_player_visible = 1;
 }
 
+/* MW_PORT: WORLD func_0E578/examine_item directional zoom path.  Z opens the
+ * original chooser; an arrow (or a viewport click) renders that compass view
+ * across the complete 1024x768 surface until another key is pressed.  A
+ * second Z changes the three original 3-D size modes instead. */
+static void cmd_zoom(Game *g, Character *p) {
+    Video *v = &g->video;
+    int direction = -1;
+
+    game_draw_exploration_base(g, p);
+    video_fill_rect(v, 0, 0, SX(0x2D3), SY(0x1AE), 0);
+    video_draw_text_scaled_xy(v, 8, 8,
+                              "HIT AN ARROW OR CLICK A VIEW", 7,
+                              7, 6, 12, 17);
+    video_draw_text_scaled_xy(v, 8, SY(42),
+                              "TO ZOOM IN ON THAT VIEW.", 7,
+                              7, 6, 12, 17);
+    video_draw_text_scaled_xy(v, 8, SY(84),
+                              "HIT Z TO CHANGE VIEW SIZE.", 7,
+                              7, 6, 12, 17);
+    video_draw_text_scaled_xy(v, 8, SY(126), "ESC CANCELS.", 8,
+                              7, 6, 12, 17);
+    video_present(v);
+
+    while (!input_poll_quit(&g->input)) {
+        int key = input_getch(&g->input);
+        if (key == 0x1B) return;
+        if (key == INPUT_MOUSE_CLICK) {
+            direction = game_mouse_view_direction(g);
+            if (direction < 0) {
+                int x, y;
+                if (game_mouse_click_logical(g, &x, &y) &&
+                    x < SX(0x2D3) && y < SY(0x1AE))
+                    key = 'z';
+                else
+                    continue;
+            }
+        } else if (key == 0) {
+            switch (input_getch(&g->input)) {
+            case 0x48: direction = 0; break;
+            case 0x50: direction = 1; break;
+            case 0x4B: direction = 2; break;
+            case 0x4D: direction = 3; break;
+            default: break;
+            }
+        }
+
+        if (key == 'z' || key == 'Z') {
+            g->view_mode = (g->view_mode + 1) % 3;
+            return;
+        }
+        if (direction >= 0) break;
+    }
+    if (direction < 0) return;
+
+    video_clear(v, 0);
+    draw_3d_viewport(g, 0, 0, LOGICAL_W, LOGICAL_H, direction);
+    {
+        static const int dx[4] = {0, 0, -1, 1};
+        static const int dy[4] = {-1, 1, 0, 0};
+        int x = g->cur_x + dx[direction];
+        int y = g->cur_y + dy[direction];
+        if (edge_between_cells(g, g->cur_x, g->cur_y, x, y) == 3) {
+            int index = game_find_monster(g, x, y);
+            if (index >= 0) {
+                int type = g->monster_map[g->monster_layer][index].type;
+                if (type >= 0 && type < MONSTER_TYPE_COUNT) {
+                    int w = (int)strlen(monster_types[type].name) *
+                            (v->font_advance ? v->font_advance : v->font_char_w);
+                    video_fill_rect(v, 0, 0, w + 16, v->font_char_h + 12, 0);
+                    video_draw_text(v, 8, 6, monster_types[type].name, 15);
+                }
+            }
+        }
+    }
+    video_present(v);
+    input_wait_any_key(&g->input);
+}
+
+/* MW_PORT: WORLD func_0C031 effect pages and func_0CDDD/func_0D2C9 effect
+ * expiration/reset state. */
 /* ── Spells in effect display (keys '1' and '2', matches func_0C031) ── */
 
 static void cmd_spells_in_effect(Game *g, Character *p, int page) {
@@ -3863,7 +5560,7 @@ static void cmd_spells_in_effect(Game *g, Character *p, int page) {
         video_draw_text(v, 8, y, line, p->eff_super_agi > 0 ? 15 : 8); y += fh;
         snprintf(line, sizeof(line), "INVISIBLE:       %d", p->eff_invisible);
         video_draw_text(v, 8, y, line, p->eff_invisible > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "FEATHER FALL:    %d", p->eff_feather);
+        snprintf(line, sizeof(line), "FEATHER:         %d", p->eff_feather);
         video_draw_text(v, 8, y, line, p->eff_feather > 0 ? 15 : 8); y += fh;
         snprintf(line, sizeof(line), "FAST MOVE:       %d", p->eff_fast_move);
         video_draw_text(v, 8, y, line, p->eff_fast_move > 0 ? 15 : 8); y += fh;
@@ -3904,6 +5601,7 @@ static void cmd_spells_in_effect(Game *g, Character *p, int page) {
     input_wait_any_key(&g->input);
 }
 
+/* MW_PORT: WORLD select_player (0x0889F) and character_menu (0x092B4). */
 /* ── Player selection screen ── */
 
 static int player_select_screen(Game *g) {
@@ -3950,6 +5648,17 @@ static int player_select_screen(Game *g) {
     while (1) {
         int key = input_getch(&g->input);
         if (input_poll_quit(&g->input)) return -1;
+        if (key == INPUT_MOUSE_CLICK) {
+            int x, y;
+            if (game_mouse_click_logical(g, &x, &y)) {
+                for (int i = 0; i < MAX_PLAYERS; i++) {
+                    int top = SY(140 + 55 * i);
+                    int bottom = top + SY(55);
+                    if (y >= top && y < bottom) return i;
+                }
+            }
+            continue;
+        }
         if (key >= '0' && key <= '9') {
             return key - '0';
         }
@@ -3957,6 +5666,8 @@ static int player_select_screen(Game *g) {
     }
 }
 
+/* MW_PORT: WORLD func_037B5 character-design entry and far_19115 roller,
+ * including ROLL.TXT screens, race profile, stat rerolls, name and class. */
 /* ── Original character roller (ROLL.TXT / WORLD.ASM far_19115) ── */
 
 #define CREATION_TEXT_LINES 40
@@ -4041,9 +5752,9 @@ static void creation_draw(Game *g, int x, int y, const char *line, u8 color) {
     video_draw_text(&g->video, SX(x), SY(y), line, color);
 }
 
-/* WORLD's far_277E7 distributes glyphs between two logical X coordinates.
- * Its name editor uses the same operation with eighteen fixed character
- * positions, while ordinary fitted text uses the string length. */
+/* WORLD's character creator distributes glyphs between two logical X
+ * coordinates. Its name editor uses eighteen fixed character positions,
+ * while ordinary fitted text uses the string length. */
 static void creation_draw_distributed(Game *g, int x0, int x1, int y,
                                       const char *line, int positions,
                                       u8 color, int sn, int sd) {
@@ -4083,6 +5794,42 @@ static int show_creation_intro(Game *g, const CreationText *text) {
     return !input_poll_quit(&g->input);
 }
 
+static int select_experience_mode(Game *g) {
+    video_clear(&g->video, 0);
+    creation_draw(g, 0, 0, "SELECT YOUR DUNGEON EXPERIENCE:", 4);
+    creation_draw(g, 0, 120, "1) CLASSIC EXPERIENCE", 14);
+    creation_draw(g, 70, 210, "251 TOTAL FLOORS: TOWN LEVEL 0 AND", 15);
+    creation_draw(g, 70, 280, "DUNGEON LEVELS 1 THROUGH 250.", 15);
+    creation_draw(g, 70, 350, "ORIGINAL MONSTERS, QUEST BOSSES, AND", 15);
+    creation_draw(g, 70, 420, "ORIGINAL DIG/ASCEND/DESCEND LIMITS.", 15);
+
+    creation_draw(g, 0, 560, "2) ENHANCED EXPERIENCE", 10);
+    creation_draw(g, 70, 650, "1001 TOTAL FLOORS: TOWN LEVEL 0 AND", 15);
+    creation_draw(g, 70, 720, "DUNGEON LEVELS 1 THROUGH 1000.", 15);
+    creation_draw(g, 70, 790, "ADDS NEW MONSTER TIERS, SIX DEEP QUEST", 15);
+    creation_draw(g, 70, 860, "BOSSES, POWERFUL ORBS, AND SCALED", 15);
+    creation_draw(g, 70, 930, "DIG/ASCEND/DESCEND DEPTH LIMITS.", 15);
+
+    creation_draw(g, 0, 1060, "THIS CHOICE IS SAVED WITH THE CHARACTER.", 6);
+    creation_draw(g, 0, 1150, "PRESS 1 OR 2. ESCAPE CANCELS.", 4);
+    video_present(&g->video);
+
+    for (;;) {
+        int key = creation_key(g);
+        if (input_poll_quit(&g->input) || key == 0x1B) return -1;
+        if (key == INPUT_MOUSE_CLICK) {
+            int x, y;
+            if (!game_mouse_click_logical(g, &x, &y)) continue;
+            (void)x;
+            if (y >= SY(90) && y < SY(510)) key = '1';
+            else if (y >= SY(530) && y < SY(1010)) key = '2';
+            else continue;
+        }
+        if (key == '1' || key == 'C') return MW_EXPERIENCE_CLASSIC;
+        if (key == '2' || key == 'E') return MW_EXPERIENCE_ENHANCED;
+    }
+}
+
 static int select_character_race(Game *g, const CreationText *text) {
     static const int y[12] = {0,100,150,220,320,420,520,620,720,820,920,1020};
     static const u8 color[12] = {3,4,4,5,8,8,8,8,8,8,8,8};
@@ -4092,6 +5839,11 @@ static int select_character_race(Game *g, const CreationText *text) {
     for (;;) {
         int key = creation_key(g);
         if (input_poll_quit(&g->input) || key == 0x1B) return -1;
+        if (key == INPUT_MOUSE_CLICK) {
+            int row = game_mouse_row(g, 0, LOGICAL_W, SY(270), SY(100), 8);
+            if (row >= 0) return row;
+            continue;
+        }
         if (key >= '1' && key <= '8') return key - '1';
     }
 }
@@ -4155,6 +5907,11 @@ static int design_character_stats(Game *g, int race, int sex, u16 stats[6],
             memcpy(stats, rolled, sizeof(rolled));
             return 0;
         }
+        if (key == INPUT_MOUSE_CLICK) {
+            int row = game_mouse_row(g, 0, LOGICAL_W, SY(70), SY(60), 6);
+            static const int stat_key[6] = {'S','I','W','C','D','L'};
+            if (row >= 0) key = stat_key[row];
+        }
         if (key == 'S') which = 0;
         else if (key == 'I') which = 1;
         else if (key == 'W') which = 2;
@@ -4175,9 +5932,51 @@ static int read_character_name(Game *g, int race, int sex, const u16 stats[6],
         video_fill_rect(&g->video, 0, SY(530), LOGICAL_W, LOGICAL_H - SY(530), 0);
         creation_draw(g, 0, 700, "PLEASE TYPE YOUR NAME:", 7);
         if (used)
-            creation_draw_distributed(g, 0, 1100, 1000, name, 18, 4, 1, 1);
+            creation_draw_distributed(g, 0, 1100, 830, name, 18, 4, 1, 1);
+        static const char *const keyboard[3] = {
+            "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"
+        };
+        static const int key_count[3] = {10, 9, 7};
+        const int key_y[3] = {560, 615, 670};
+        const int key_w = 72;
+        for (int row = 0; row < 3; row++) {
+            int row_x = (LOGICAL_W - key_count[row] * key_w) / 2;
+            for (int col = 0; col < key_count[row]; col++) {
+                char label[2] = {keyboard[row][col], 0};
+                video_fill_rect(&g->video, row_x + col * key_w, key_y[row],
+                                key_w - 4, 44, 0);
+                video_hline(&g->video, row_x + col * key_w, key_y[row],
+                            key_w - 4, 8);
+                video_draw_text_scaled_xy(&g->video,
+                    row_x + col * key_w + 22, key_y[row] + 5,
+                    label, 15, 2, 3, 2, 3);
+            }
+        }
+        video_draw_text_scaled_xy(&g->video, 110, 728,
+            "[SPACE]        [BACKSPACE]        [DONE]        [CANCEL]",
+            4, 2, 3, 2, 3);
         video_present(&g->video);
         int key = input_getch(&g->input);
+        if (key == INPUT_MOUSE_CLICK) {
+            int x, y;
+            key = 0;
+            if (!game_mouse_click_logical(g, &x, &y)) continue;
+            for (int row = 0; row < 3 && !key; row++) {
+                int row_x = (LOGICAL_W - key_count[row] * key_w) / 2;
+                if (y < key_y[row] || y >= key_y[row] + 44 ||
+                    x < row_x || x >= row_x + key_count[row] * key_w)
+                    continue;
+                int col = (x - row_x) / key_w;
+                if (col < key_count[row]) key = keyboard[row][col];
+            }
+            if (!key && y >= 712) {
+                if (x < 280) key = ' ';
+                else if (x < 560) key = 8;
+                else if (x < 780) key = '\r';
+                else key = 0x1B;
+            }
+            if (!key) continue;
+        }
         if (input_poll_quit(&g->input) || key == 0x1B) return 0;
         if (key == '\r' || key == '\n') {
             if (used) return 1;
@@ -4216,6 +6015,16 @@ static int select_character_class(Game *g, const CreationText *text, const char 
     for (;;) {
         int key = creation_key(g);
         if (input_poll_quit(&g->input) || key == 0x1B) return -1;
+        if (key == INPUT_MOUSE_CLICK) {
+            static const int top[7] = {530,620,710,800,890,980,1100};
+            static const int bottom[7] = {620,710,800,890,980,1100,1200};
+            int x, click_y;
+            if (game_mouse_click_logical(g, &x, &click_y))
+                for (int i = 0; i < 7; i++)
+                    if (click_y >= SY(top[i]) && click_y < SY(bottom[i]))
+                        return i;
+            continue;
+        }
         if (key >= '1' && key <= '7') return key - '1';
     }
 }
@@ -4293,6 +6102,18 @@ static int character_creation_self_test(void) {
                 known += p.spells[category][spell] != 0;
         if (known != expected_spells[class_id]) failures++;
     }
+    {
+        Character p = {0};
+        mw_character_native_ensure(&p);
+        if (mw_experience_mode(&p) != MW_EXPERIENCE_ENHANCED)
+            failures++;
+        mw_set_experience_mode(&p, MW_EXPERIENCE_CLASSIC);
+        if (mw_experience_mode(&p) != MW_EXPERIENCE_CLASSIC)
+            failures++;
+        mw_set_experience_mode(&p, MW_EXPERIENCE_ENHANCED);
+        if (mw_experience_mode(&p) != MW_EXPERIENCE_ENHANCED)
+            failures++;
+    }
     return failures;
 }
 
@@ -4307,6 +6128,8 @@ static int create_character(Game *g, Character *p) {
         return 0;
     }
     if (!show_creation_intro(g, &text)) return 0;
+    int experience_mode = select_experience_mode(g);
+    if (experience_mode < 0) return 0;
     int race = select_character_race(g, &text);
     if (race < 0) return 0;
     int sex;
@@ -4318,6 +6141,12 @@ static int create_character(Game *g, Character *p) {
         draw_character_card(g, race, sex, stats, height, weight, age, 1);
         video_present(&g->video);
         int key = creation_key(g);
+        if (key == INPUT_MOUSE_CLICK) {
+            int row = game_mouse_row(g, SX(150), SX(1300), SY(665),
+                                     SY(70), 3);
+            static const int choice_key[3] = {'Y','N','D'};
+            if (row >= 0) key = choice_key[row];
+        }
         if (key == 'Y') break;
         if (key == 'N')
             roll_character_profile(g, race, &sex, &height, &weight, &age, stats);
@@ -4363,6 +6192,7 @@ static int create_character(Game *g, Character *p) {
     p->_pad_80A[0] = 0x2C;
     p->_pad_80A[1] = 0x01;
     grant_starting_spells(p);
+    mw_set_experience_mode(p, experience_mode);
 
     draw_character_card(g, race, sex, stats, height, weight, age, 0);
     creation_draw_fitted(g, 700, 880, 310, "NAME:", 8, 1, 1);
@@ -4374,6 +6204,11 @@ static int create_character(Game *g, Character *p) {
     snprintf(summary, sizeof(summary), "SPELL POINTS: %.0f    HEALTH POINTS: %u",
              p->sp_max, p->hp_max);
     creation_draw(g, 0, 460, summary, 4);
+    snprintf(summary, sizeof(summary), "EXPERIENCE: %s - DUNGEON LEVELS 0-%d",
+             experience_mode == MW_EXPERIENCE_CLASSIC ? "CLASSIC" : "ENHANCED",
+             experience_mode == MW_EXPERIENCE_CLASSIC ?
+             CLASSIC_DUNGEON_FLOOR : MAX_DUNGEON_FLOOR);
+    creation_draw(g, 0, 520, summary, 10);
     video_present(&g->video);
     input_wait_any_key(&g->input);
     return 1;
@@ -4397,10 +6232,13 @@ static void find_start_pos(Game *g) {
     g->cur_y = MAP_H / 2;
 }
 
+/* MW_PORT: WORLD func_09148 encounter setup, combat_encounter (0x018FE),
+ * func_0EAE9 proximity handling, and func_21F9C kill/reward hand-off. */
 /* ── Monster encounter check ── */
 
 static void record_bestiary_kill(Game *g, int monster_type) {
-    if (monster_type < 0 || monster_type >= MONSTER_TYPE_COUNT) return;
+    if (monster_type < 0 || monster_type >= MONSTER_TYPE_COUNT ||
+        !combat_monster_type_spawnable(monster_type)) return;
     if (g->bestiary_kills[monster_type] != UINT32_MAX)
         g->bestiary_kills[monster_type]++;
     g->bestiary_dirty = 1;
@@ -4425,20 +6263,30 @@ static void fight_monster(Game *g, Character *player, int index) {
     g->monster_adjacent = game_find_adjacent_monster(g) >= 0;
 }
 
+/* MW_PORT: exploration dispatcher for WORLD spell_menu/cast_spell and
+ * func_10E9A..func_11DA5; implementations are in mw_combat.c. */
 /* ── Cast spell from exploration (handles battle vs prep) ── */
 
 static int cmd_cast_spell(Game *g, Character *player) {
     return cmd_cast_spell_menu(g, player, NULL);
 }
 
+/* MW_PORT: dungeon branch of WORLD func_0F6E5, including
+ * movement, auto-opening doors, encounter blocking, commands, pits, ladders,
+ * shops, effect turns, save/quit, death and raise-contract recovery. */
 /* ── Main game loop ── */
 
 static void game_draw_exploration_base(Game *g, Character *player) {
+    /* Tests and loaded saves can assign cur_floor directly, so refresh here
+     * as well as at transitions.  This mirrors WORLD's palette setup at the
+     * beginning of every exploration redraw. */
+    game_refresh_world_palette(g);
     video_clear(&g->video, 0);
     draw_4way_view(g);
     draw_minimap(g, 0, SY(0x1AE), SX(0x11B), 38 * 10);
     draw_command_menu(g);
     draw_status_bar(g, player);
+    draw_contextual_advice(g, player);
     draw_trapdoor_notice(g, player);
 }
 
@@ -4472,6 +6320,220 @@ static int draw_combat_message(Video *v, int y, int bottom,
         while (*p == ' ') p++;
     }
     return y;
+}
+
+/* MW_PORT: WORLD func_1D5A7.  The routine was previously mislabeled as the
+ * wilderness main loop; it is the rotating tutorial and condition-advice
+ * writer used by the otherwise black upper-left pane. */
+static void draw_contextual_advice(Game *g, Character *p) {
+    static const char *const tutorial[][4] = {
+        {"OBJECTIVE: USE ARROW KEYS TO", "EXPLORE THE DUNGEON. USE THE",
+         "LADDERS TO DESCEND TO DEEPER,", "MORE DANGEROUS PLACES."},
+        {"IF YOU HAVE A MOUSE, JUST", "POINT TO THINGS AND PRESS",
+         "BUTTONS TO SEE WHAT HAPPENS.", ""},
+        {"ON THE LEFT IS A MAP SHOWING", "THE AREA AROUND YOU. SLANTED",
+         "LINES SHOW LADDERS GOING UP", "AND DOWN."},
+        {"USE THE CURSOR KEYS TO MOVE.", "UP IS NORTH, DOWN IS SOUTH,",
+         "LEFT IS WEST, RIGHT IS EAST.", "HIT F1 FOR MORE INFORMATION."},
+        {"MONSTERS ARE ONLY FOUND IN", "THE DUNGEON. YOU ARE IN THE",
+         "TOWN NOW, SO YOU MUST FIND A", "LADDER AND GO DOWN IT."},
+        {"YOUR MISSION: FIND TREASURES", "AND MONEY, GAIN POWER BY",
+         "DEFEATING MONSTERS, ENJOY", "THE FUN AND EXCITEMENT."}
+    };
+    const char *line[4] = {NULL, NULL, NULL, NULL};
+    u8 color = 3;
+    if (p->hp_max && p->hp_cur * 3u < p->hp_max) {
+        line[0] = "YOU ARE BADLY DAMAGED. YOU";
+        line[1] = "SHOULD CURE YOURSELF WITH";
+        line[2] = "THE CURE SPELL OR GO SEARCH";
+        line[3] = "THE TOWN FOR A TEMPLE.";
+        color = 5;
+    } else if (p->poisoned_turns) {
+        line[0] = "YOU HAVE BEEN POISONED. FOR";
+        line[1] = "A FEW JEWELS YOU CAN GET A";
+        line[2] = "CURE POISON AT A TEMPLE.";
+        color = 7;
+    } else if (p->diseased_turns) {
+        line[0] = "YOU DON'T FEEL VERY WELL.";
+        line[1] = "YOU SHOULD REALLY TRY TO";
+        line[2] = "GET A CURE DISEASE AT A";
+        line[3] = "TEMPLE IN THE TOWN.";
+        color = 8;
+    } else if (p->experience >= experience_for_level((int)p->level + 1)) {
+        line[0] = "YOU ARE READY TO GAIN A";
+        line[1] = "LEVEL, WHICH WILL MAKE YOU";
+        line[2] = "MORE POWERFUL. YOU MUST STAY";
+        line[3] = "AT AN INN TO GAIN A LEVEL.";
+        color = 6;
+    } else if (p->sp_max > 0.0f && p->sp_cur * 4.0f < p->sp_max) {
+        line[0] = "YOU ARE RUNNING LOW ON SPELL";
+        line[1] = "POINTS. YOU CAN REGAIN YOUR";
+        line[2] = "SPELL POINTS BY STAYING AT";
+        line[3] = "AN INN IN THE TOWN.";
+        color = 6;
+    } else if (game_loaded_weight(p) >
+               (unsigned long long)p->weight_pounds + (unsigned long long)p->stat_str * 12u) {
+        line[0] = "YOU ARE CARRYING A LOT OF";
+        line[1] = "WEIGHT. THIS ALLOWS MONSTERS";
+        line[2] = "TO TAKE MORE STRIKES AT YOU.";
+        line[3] = "YOU SHOULD GO FIND A BANK.";
+        color = 5;
+    } else if (g->cur_floor == 0) {
+        int topic = (int)((g->advice_counter / 8u) % 6u);
+        for (int i = 0; i < 4; i++) line[i] = tutorial[topic][i];
+    } else {
+        return;
+    }
+
+    int y = 0;
+    const int bottom = SY(0x1AE);
+    for (int i = 0; i < 4 && line[i] && *line[i]; i++)
+        y = draw_combat_message(&g->video, y, bottom, line[i], color);
+}
+
+/* MW_PORT: WORLD func_0E913: a hidden chute interrupts only the upper-left pane. Its
+ * opening warning appears alone for 1500 ms, then the explanation waits for
+ * a complete keypress.  Keep the destination unseen until that acknowledgement
+ * so the visible sequence is warning -> key -> new floor. */
+static int game_apply_pitfall_interactive(Game *g, Character *player) {
+    int target = pitfall_destination(g);
+    if (target == g->cur_floor) return 0;
+
+    Video *v = &g->video;
+    const int message_w = SX(0x2D3);
+    const int message_bottom = SY(0x1AE);
+
+    game_draw_exploration_base(g, player);
+    video_fill_rect(v, 0, 0, message_w, message_bottom, 0);
+    video_draw_text_scaled_xy(v, 0, 0,
+                              "UH OH... A SINKING FEELING...", 5,
+                              7, 6, 12, 17);
+    video_present(v);
+    mw_audio_play(&g->audio, MW_SFX_FALL);
+    SDL_Delay(1500);
+
+    video_draw_text_scaled_xy(v, 0, SY(0x28),
+                              "YOU HAVE FALLEN DOWN A CHUTE!", 5,
+                              7, 6, 12, 17);
+    video_draw_text_scaled_xy(v, 0, SY(0x50),
+                              "  HIT ANY KEY TO CONTINUE...", 5,
+                              7, 6, 12, 17);
+    video_present(v);
+    input_wait_any_key(&g->input);
+
+    game_change_floor(g, player, target);
+    save_pit_group(g);
+    return 1;
+}
+
+/* One movement implementation serves both DOS extended-arrow input and the
+ * four mouse view hit regions.  In particular, a monster immediately behind
+ * a door blocks the step without being revealed or engaged. */
+static void show_movement_block(Game *g, Character *player,
+                                const char *message) {
+    game_draw_exploration_base(g, player);
+    video_fill_rect(&g->video, 0, 0, SX(0x2D3), SY(42), 0);
+    video_draw_text_scaled_xy(&g->video, 8, 8, message, 12,
+                              7, 6, 12, 17);
+    video_present(&g->video);
+    SDL_Delay(350);
+}
+
+static void show_runtime_indicator(Game *g, Character *player,
+                                   const char *title, const char *detail,
+                                   u8 color) {
+    const int pane_w = SX(0x2D3), pane_h = SY(0x78);
+    game_draw_exploration_base(g, player);
+    video_fill_rect(&g->video, 0, 0, pane_w, pane_h, 0);
+    int y = draw_combat_message(&g->video, 0, pane_h, title, color);
+    draw_combat_message(&g->video, y, pane_h, detail, 15);
+    video_present(&g->video);
+    mw_audio_play(&g->audio, MW_SFX_UI);
+    SDL_Delay(700);
+}
+
+static int confirm_dungeon_reroll(Game *g, Character *player) {
+    const int pane_w = SX(0x2D3), pane_h = SY(0x1AE);
+    game_draw_exploration_base(g, player);
+    video_fill_rect(&g->video, 0, 0, pane_w, pane_h, 0);
+    int y = draw_combat_message(&g->video, 0, pane_h,
+                                "REROLL THE ENTIRE DUNGEON?", 12);
+    y = draw_combat_message(&g->video, y, pane_h,
+                            "THIS CREATES A NEW DUNGEON AND RETURNS YOU TO TOWN.", 15);
+    draw_combat_message(&g->video, y, pane_h,
+                        "PRESS Y TO CONTINUE OR N TO CANCEL.", 4);
+    video_present(&g->video);
+    for (;;) {
+        int key = input_getch(&g->input);
+        if (input_poll_quit(&g->input) || key == 0x1B ||
+            key == 'n' || key == 'N')
+            return 0;
+        if (key == 'y' || key == 'Y') return 1;
+        if (key == 0) (void)input_getch(&g->input);
+    }
+}
+
+static void reroll_dungeon(Game *g, Character *player) {
+    if (!confirm_dungeon_reroll(g, player)) {
+        show_runtime_indicator(g, player, "DUNGEON REROLL CANCELLED.",
+                               "THE CURRENT DUNGEON IS UNCHANGED.", 8);
+        return;
+    }
+    int old_seed = g->dungeon_number;
+    int new_seed;
+    do {
+        new_seed = 1 + (int)(game_rand(g) % 31000u);
+    } while (new_seed == old_seed);
+    game_begin_new_dungeon(g, player, new_seed);
+    show_runtime_indicator(g, player, "DUNGEON REROLLED.",
+                           "YOU HAVE ARRIVED IN THE NEW TOWN.", 4);
+}
+
+static int game_try_step(Game *g, Character *player, int direction) {
+    static const int dx[4] = {0, 0, -1, 1};
+    static const int dy[4] = {-1, 1, 0, 0};
+    if (direction < 0 || direction > 3) return 0;
+
+    int nx = g->cur_x + dx[direction];
+    int ny = g->cur_y + dy[direction];
+    g->last_move_dir = direction;
+    if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) {
+        mw_audio_play(&g->audio, MW_SFX_BLOCKED);
+        show_movement_block(g, player, "THE EDGE OF THE MAP BLOCKS YOU");
+        return 0;
+    }
+    if (!g->cheat_noclip &&
+        !game_can_move(g, g->cur_x, g->cur_y, nx, ny)) {
+        mw_audio_play(&g->audio, MW_SFX_BLOCKED);
+        show_movement_block(g, player, "THE WALL REFUSES TO MOVE");
+        return 0;
+    }
+
+    int edge = g->cheat_noclip ? 3 :
+               edge_between_cells(g, g->cur_x, g->cur_y, nx, ny);
+    int monster = game_find_monster(g, nx, ny);
+    if (monster >= 0 && edge != 3) {
+        /* Both visible and secret doors auto-open only when their destination
+         * can be occupied.  WORLD has a distinct message for edge type 2. */
+        mw_audio_play(&g->audio, MW_SFX_BLOCKED);
+        show_movement_block(g, player,
+                            edge == 2 ? "THE SECRET DOOR IS JAMMED"
+                                      : "THE DOOR IS JAMMED");
+        return 0;
+    }
+    if (monster >= 0) {
+        mw_audio_play(&g->audio, MW_SFX_ATTACK);
+        fight_monster(g, player, monster);
+        return player->hp_cur <= 0 ? -1 : 1;
+    }
+
+    g->cur_x = nx;
+    g->cur_y = ny;
+    mw_audio_play(&g->audio, edge == 1 ? MW_SFX_DOOR : MW_SFX_STEP);
+    reveal_around_player_animated(g, player);
+    game_apply_pitfall_interactive(g, player);
+    game_advance_monsters(g, player);
+    return player->hp_cur <= 0 ? -1 : 1;
 }
 
 static void draw_trapdoor_notice(Game *g, Character *player) {
@@ -4566,7 +6628,8 @@ void game_draw_combat_overlay(Game *g, Character *player,
         int top = vr->y + vr->h - sprite_h - 2;
         draw_pic_billboard(g, pic, vr->x + vr->w / 2, top, sprite_h,
                            0.20f, vr->x, vr->y, vr->w, vr->h, NULL,
-                           get_monster_color_ext(monster_type));
+                           get_monster_color_ext(monster_type),
+                           get_monster_tint_ext(monster_type));
     }
 
     /* LEV/HP strip belongs to the active viewport, not to a separate UI. */
@@ -4602,10 +6665,12 @@ void game_draw_combat_overlay(Game *g, Character *player,
 void game_run(Game *g) {
     Video *v = &g->video;
 
+title_screen:
+    ;
     /* Title screen */
     video_clear(v, 0);
     video_draw_text(v, 180, 100, "MORAFF'S WORLD", 14);
-    video_draw_text(v, 130, 140, "Native Port - Work In Progress", 7);
+    video_draw_text(v, 130, 140, "1024 X 768 NATIVE EDITION", 7);
     video_draw_text(v, 160, 200, "Press any key to continue...", 15);
     video_present(v);
     input_wait_any_key(&g->input);
@@ -4635,10 +6700,15 @@ void game_run(Game *g) {
         if (input_poll_quit(&g->input)) return;
     }
     g->player_slot[0] = slot;
+    g->cur_player = slot;
+    g->dungeon_max_floor =
+        mw_experience_mode(player) == MW_EXPERIENCE_CLASSIC ?
+        CLASSIC_DUNGEON_FLOOR : MAX_DUNGEON_FLOOR;
 
     g->cur_x = player->x_pos;
     g->cur_y = player->y_pos;
-    g->cur_floor = player->floor_depth;
+    g->cur_floor = game_clamp_dungeon_floor(g, player->floor_depth);
+    player->floor_depth = (u16)g->cur_floor;
     g->dungeon_number = player->dungeon_number;
     g->last_move_dir = player->facing_dir <= 3 ? player->facing_dir : 0;
     g->view_mode = 0;
@@ -4651,16 +6721,15 @@ void game_run(Game *g) {
 
     game_load_world_state(g, slot);
 
+resume_exploration:
+    ;
     reveal_around_player(g);
-    if (game_apply_pitfall(g, player)) {
-        video_clear(v, 0);
-        video_draw_text(v, 250, LOGICAL_H / 2, "YOU FALL THROUGH A PIT!", 12);
-        video_present(v);
-        SDL_Delay(900);
-    }
+    game_apply_pitfall_interactive(g, player);
 
     g->map_player_visible = 1;
     u32 next_map_blink = SDL_GetTicks() + 350;
+    unsigned hover_serial = 0;
+    input_mouse_position(&g->input, NULL, NULL, &hover_serial);
     while (!input_poll_quit(&g->input)) {
         game_draw_exploration(g, player);
 
@@ -4671,6 +6740,14 @@ void game_run(Game *g) {
          * movement or another keypress. */
         while (!input_poll_quit(&g->input) && !input_kbhit(&g->input)) {
             u32 now = SDL_GetTicks();
+            unsigned current_hover = hover_serial;
+            input_mouse_position(&g->input, NULL, NULL, &current_hover);
+            if (current_hover != hover_serial) {
+                hover_serial = current_hover;
+                game_draw_exploration(g, player);
+                draw_mouse_hover(g);
+                video_present(v);
+            }
             if (SDL_TICKS_PASSED(now, next_map_blink)) {
                 g->map_player_visible = !g->map_player_visible;
                 next_map_blink = now + 350;
@@ -4686,11 +6763,81 @@ void game_run(Game *g) {
             int mouse_x, mouse_y;
             input_last_mouse_click(&g->input, &mouse_x, &mouse_y);
             key = command_menu_click_key(g, mouse_x, mouse_y);
-            if (!key) continue;
+            if (!key) {
+                int direction = game_mouse_view_direction(g);
+                if (direction >= 0) {
+                    if (game_try_step(g, player, direction) < 0)
+                        goto game_over;
+                    /* The click has already executed the turn. */
+                    key = -1;
+                } else {
+                    int logical_x, logical_y;
+                    if (game_mouse_click_logical(g, &logical_x, &logical_y) &&
+                        logical_x >= SX(0x2D3) && logical_x < SX(0x48A) &&
+                        logical_y > SY(0x487)) {
+                        int delta = ladder_delta(g, g->cur_x, g->cur_y);
+                        int shop = game_shop_type(g, g->cur_x, g->cur_y);
+                        int trap = game_trapdoor_floor(g, g->cur_x, g->cur_y);
+                        key = (shop || delta < 0) ? 'u' :
+                              (delta > 0 ? 'd' : (trap >= 0 ? 'k' : 'd'));
+                    } else {
+                        continue;
+                    }
+                }
+            }
         }
 
-        if (key == 0x1B) {
-            break;
+        if (key == INPUT_MODEL_VIEWER) {
+            model_viewer_run(g);
+        } else if (key == INPUT_DUNGEON_REROLL) {
+            reroll_dungeon(g, player);
+        } else if (key == INPUT_OPEN_FLOOR_TOGGLE) {
+            g->cheat_open_floor = !g->cheat_open_floor;
+            show_runtime_indicator(g, player,
+                g->cheat_open_floor ? "OPEN FLOOR MODE: ON"
+                                    : "OPEN FLOOR MODE: OFF",
+                g->cheat_open_floor ? "U AND D NOW WORK WITHOUT LADDERS."
+                                    : "U AND D REQUIRE LADDERS AGAIN.",
+                g->cheat_open_floor ? 4 : 8);
+        } else if (key == INPUT_TOWN_TELEPORT) {
+            game_change_floor(g, player, 0);
+            game_relocate(g, player);
+            show_runtime_indicator(g, player, "TOWN TELEPORT COMPLETE.",
+                                   "YOU ARE NOW ON FLOOR ZERO.", 4);
+        } else if (key == INPUT_GOD_TOGGLE) {
+            g->cheat_god_mode = !g->cheat_god_mode;
+            show_runtime_indicator(g, player,
+                g->cheat_god_mode ? "GOD MODE: ON" : "GOD MODE: OFF",
+                g->cheat_god_mode ? "DAMAGE AND SPELL-POINT COSTS ARE DISABLED."
+                                  : "NORMAL DAMAGE AND SPELL COSTS RESTORED.",
+                g->cheat_god_mode ? 4 : 8);
+        } else if (key == INPUT_NOCLIP_TOGGLE) {
+            g->cheat_noclip = !g->cheat_noclip;
+            show_runtime_indicator(g, player,
+                g->cheat_noclip ? "NOCLIP: ON" : "NOCLIP: OFF",
+                g->cheat_noclip ? "WALL AND ROCK COLLISION IS DISABLED."
+                                : "NORMAL DUNGEON COLLISION RESTORED.",
+                g->cheat_noclip ? 4 : 8);
+        } else if (key == INPUT_WILDERNESS_TEST) {
+            wilderness_test_run(g, player);
+        } else if (key == INPUT_TRAINER) {
+            trainer_run(g, player);
+        } else if (key == 0x1B) {
+            /* WORLD's dungeon dispatcher sends Escape to its transient-pane
+             * clear path.  It does not quit and does not save; Q is the only
+             * printed save-and-quit command. */
+            continue;
+        } else if (key == '*') {
+            /* Undocumented WORLD controls: each key advances one VGA DAC
+             * channel by 0x10.  Six-bit hardware makes four presses wrap. */
+            g->wall_color_r = (u8)(g->wall_color_r + 0x10);
+            game_refresh_world_palette(g);
+        } else if (key == '(') {
+            g->wall_color_g = (u8)(g->wall_color_g + 0x10);
+            game_refresh_world_palette(g);
+        } else if (key == ')') {
+            g->wall_color_b = (u8)(g->wall_color_b + 0x10);
+            game_refresh_world_palette(g);
         } else if (key == 'v' || key == 'V') {
             cmd_view_stats(g, player);
         } else if (key == 'm' || key == 'M') {
@@ -4703,6 +6850,8 @@ void game_run(Game *g) {
             cmd_help(g);
         } else if (key == 'j' || key == 'J') {
             cmd_bestiary(g);
+        } else if (key == 'g' || key == 'G') {
+            cmd_game_stats(g, player);
         } else if (key == 'x' || key == 'X') {
             cmd_expand_map(g);
         } else if (key == 'f' || key == 'F') {
@@ -4711,17 +6860,19 @@ void game_run(Game *g) {
                 fight_monster(g, player, monster);
                 if (player->hp_cur <= 0) break;
             } else {
-                video_fill_rect(v, 0, LOGICAL_H / 2 - 10, LOGICAL_W, 20, 0);
-                video_draw_text(v, 200, LOGICAL_H / 2 - 7, "NO MONSTER HERE!", 6);
-                video_present(v);
-                SDL_Delay(800);
+                town_message(g, player, "YOU ARE NOT CURRENTLY",
+                             "ENGAGING ANY MONSTER.", "", 6);
             }
         } else if (key == 'c' || key == 'C') {
-            if (cmd_cast_spell(g, player) != 0)
+            if (cmd_cast_spell(g, player) != 0) {
+                mw_audio_play(&g->audio, MW_SFX_MAGIC);
                 game_advance_monsters(g, player);
+            }
         } else if (key == 'i' || key == 'I') {
-            if (cmd_use_item(g, player, NULL) != 0)
+            if (cmd_use_item(g, player, NULL) != 0) {
+                mw_audio_play(&g->audio, MW_SFX_MAGIC);
                 game_advance_monsters(g, player);
+            }
         } else if (key == 'l' || key == 'L') {
             cmd_drop_item(g, player);
         } else if (key == 'w' || key == 'W') {
@@ -4731,16 +6882,22 @@ void game_run(Game *g) {
         } else if (key == 'b' || key == 'B') {
             g->brick_speed = (g->brick_speed + 1) & 3;
             char line[64];
-            snprintf(line, sizeof(line), "BRICK SPEED SETTING %d OF 4",
-                     g->brick_speed + 1);
+            static const char *const speed_name[4] = {
+                "SLOW", "NORMAL", "FAST", "INSTANT"
+            };
+            snprintf(line, sizeof(line), "BRICK SPEED: %s (%d OF 4)",
+                     speed_name[g->brick_speed], g->brick_speed + 1);
             video_fill_rect(v, 0, 0, SX(0x2D3), SY(42), 0);
             video_draw_text(v, 8, 8, line, 4);
             video_present(v);
+            mw_audio_play(&g->audio, MW_SFX_UI);
             SDL_Delay(450);
         } else if (key == 'o' || key == 'O') {
             g->sound_enabled = !g->sound_enabled;
+            mw_audio_set_enabled(&g->audio, g->sound_enabled);
+            if (g->sound_enabled) mw_audio_play(&g->audio, MW_SFX_UI);
         } else if (key == 'z' || key == 'Z') {
-            g->view_mode = (g->view_mode + 1) % 3;
+            cmd_zoom(g, player);
         } else if (key == '1') {
             cmd_spells_in_effect(g, player, 0);
         } else if (key == '2') {
@@ -4752,10 +6909,25 @@ void game_run(Game *g) {
             int shop = game_shop_type(g, g->cur_x, g->cur_y);
             if (shop) enter_town_location(g, player, shop);
             else if (delta < 0) game_change_floor(g, player, g->cur_floor + delta);
+            else if (g->cheat_open_floor) {
+                if (g->cur_floor > 0)
+                    game_change_floor(g, player, g->cur_floor - 1);
+                else
+                    show_runtime_indicator(g, player,
+                        "OPEN FLOOR MODE: TOP REACHED.",
+                        "THERE IS NO FLOOR ABOVE TOWN.", 8);
+            }
         } else if (key == 'd' || key == 'D') {
             int delta = ladder_delta(g, g->cur_x, g->cur_y);
             if (delta > 0) {
                 game_change_floor(g, player, g->cur_floor + delta);
+            } else if (g->cheat_open_floor) {
+                if (g->cur_floor < game_dungeon_max_floor(g))
+                    game_change_floor(g, player, g->cur_floor + 1);
+                else
+                    show_runtime_indicator(g, player,
+                        "OPEN FLOOR MODE: BOTTOM REACHED.",
+                        "THERE IS NO DEEPER DUNGEON FLOOR.", 8);
             } else if (cmd_dig_hole(g, player) && player->hp_cur <= 0) {
                 goto game_over;
             }
@@ -4771,6 +6943,13 @@ void game_run(Game *g) {
                                 "THE TRAPDOOR DROPS YOU!", 12);
                 video_present(v);
                 SDL_Delay(800);
+            } else if (target < 0) {
+                town_message(g, player, "I DON'T SEE ANY TRAP DOOR HERE.",
+                             "KEEP SEARCHING.", "", 12);
+            } else {
+                draw_trapdoor_notice(g, player);
+                video_present(v);
+                input_wait_any_key(&g->input);
             }
         } else if (key == 's' || key == 'S') {
             player->x_pos = (u16)g->cur_x;
@@ -4799,54 +6978,32 @@ void game_run(Game *g) {
             break;
         } else if (key == 0) {
             int scan = input_getch(&g->input);
-            int nx = g->cur_x;
-            int ny = g->cur_y;
-            int moved = 0;
+            int direction = -1;
             switch (scan) {
+            case 0x3B: /* F1 is the printed Help synonym. */
+                cmd_help(g);
+                break;
             case 0x48: /* Up arrow = North (Y-1) */
-                ny--;
-                g->last_move_dir = 0;
-                moved = 1;
+                direction = 0;
                 break;
             case 0x50: /* Down arrow = South (Y+1) */
-                ny++;
-                g->last_move_dir = 1;
-                moved = 1;
+                direction = 1;
                 break;
             case 0x4B: /* Left arrow = West (X-1) */
-                nx--;
-                g->last_move_dir = 2;
-                moved = 1;
+                direction = 2;
                 break;
             case 0x4D: /* Right arrow = East (X+1) */
-                nx++;
-                g->last_move_dir = 3;
-                moved = 1;
+                direction = 3;
                 break;
             }
-            if (moved && game_can_move(g, g->cur_x, g->cur_y, nx, ny)) {
-                int monster = game_find_monster(g, nx, ny);
-                if (monster >= 0) {
-                    /* Walking toward an adjacent monster is the same direct
-                       engagement as F, including the rear/south pane. */
-                    fight_monster(g, player, monster);
-                    if (player->hp_cur <= 0) goto game_over;
-                } else {
-                    g->cur_x = nx;
-                    g->cur_y = ny;
-                    reveal_around_player(g);
-                    if (game_apply_pitfall(g, player)) {
-                        video_clear(v, 0);
-                        video_draw_text(v, 250, LOGICAL_H / 2,
-                                        "YOU FALL THROUGH A PIT!", 12);
-                        video_present(v);
-                        SDL_Delay(900);
-                    }
-                    game_advance_monsters(g, player);
-                    if (player->hp_cur <= 0) goto game_over;
-                }
-            }
+            if (direction >= 0 && game_try_step(g, player, direction) < 0)
+                goto game_over;
         }
+
+        /* Waiting, magic and item use can all advance monsters.  Route any
+         * resulting death through the same contract/permanent-death handler
+         * immediately instead of drawing another zero-HP exploration frame. */
+        if (player->hp_cur <= 0) goto game_over;
 
         if (g->cur_x < 0) g->cur_x = 0;
         if (g->cur_y < 0) g->cur_y = 0;
@@ -4861,28 +7018,29 @@ void game_run(Game *g) {
     }
 
 game_over:
+    ;
+    int death_raised = 0;
+    int permanent_death = 0;
     if (player->hp_cur <= 0) {
         video_clear(v, 0);
         video_draw_text(v, 160, 180, "YOU HAVE DIED!", 12);
         if (player->raise_x != 0xFFFFu) {
             video_draw_text(v, 80, 260, "YOUR RAISE CONTRACT SAVES YOU!", 10);
-            int return_floor = player->raise_floor < MAX_DUNGEON_FLOORS ?
-                               player->raise_floor : 0;
-            int return_x = player->raise_x < MAP_W ? player->raise_x : MAP_W / 2;
-            int return_y = player->raise_y < MAP_H ? player->raise_y : MAP_H / 2;
-            player->raise_x = 0xFFFFu;
-            if (player->stat_con > 1) player->stat_con--;
-            character_clear_battle_effects(player);
-            game_change_floor(g, player, return_floor);
-            g->cur_x = return_x;
-            g->cur_y = return_y;
-            player->x_pos = (u16)return_x;
-            player->y_pos = (u16)return_y;
-            player->floor_depth = (u16)return_floor;
-            player->hp_cur = player->hp_max;
-            player->sp_cur = player->sp_max;
+            int return_floor, return_x, return_y;
+            death_raised = character_apply_raise_contract(
+                player, &return_floor, &return_x, &return_y);
+            if (death_raised) {
+                game_change_floor(g, player, return_floor);
+                g->cur_x = return_x;
+                g->cur_y = return_y;
+                player->x_pos = (u16)return_x;
+                player->y_pos = (u16)return_y;
+                player->floor_depth = (u16)return_floor;
+                reveal_around_player(g);
+            }
         } else {
             video_draw_text(v, 100, 220, "YOUR ADVENTURE IS OVER...", 7);
+            permanent_death = 1;
         }
         video_draw_text(v, 160, 300, "PRESS ANY KEY...", 15);
         video_present(v);
@@ -4893,4 +7051,15 @@ game_over:
     player->dungeon_number = (u16)g->dungeon_number;
     game_save_character(g, slot);
     game_save_world_state(g);
+
+    /* Death is a session transition, never a process-exit request.  A raise
+     * resumes the restored character immediately.  Permanent death leaves a
+     * zero-HP tombstone on disk for legacy fidelity, exposes the slot for a
+     * replacement character, and returns through the normal launcher flow. */
+    if (death_raised && !input_poll_quit(&g->input))
+        goto resume_exploration;
+    if (permanent_death && !input_poll_quit(&g->input)) {
+        g->char_exists[slot] = 0;
+        goto title_screen;
+    }
 }

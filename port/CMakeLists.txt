@@ -21,11 +21,18 @@ set(SOURCES
     src/main.c
     src/mw_video.c
     src/mw_input.c
+    src/mw_audio.c
+    src/mw_wilderness.c
+    src/mw_model_viewer.c
     src/mw_game.c
     src/mw_combat.c
+    src/mw_trainer.c
+    src/mw_integrity.c
 )
 
-add_executable(moraffs_world ${SOURCES})
+# WIN32 selects the GUI subsystem and prevents a separate loader/status console
+# from appearing beside the actual game window.
+add_executable(moraffs_world WIN32 ${SOURCES})
 
 target_include_directories(moraffs_world PRIVATE include)
 target_link_libraries(moraffs_world PRIVATE SDL2::SDL2-static SDL2::SDL2main)
@@ -47,6 +54,8 @@ set(MORAFF_RUNTIME_FILES
     360X480.FNT
     320X200.FNT
     ROLL.TXT
+    MW.EXE
+    WORLD.EXE
 )
 
 foreach(MORAFF_DATA_FILE IN LISTS MORAFF_RUNTIME_FILES)
@@ -63,6 +72,15 @@ foreach(MORAFF_DATA_FILE IN LISTS MORAFF_RUNTIME_FILES)
 endforeach()
 
 add_custom_command(TARGET moraffs_world POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/HOTKEYS.md"
+        "$<TARGET_FILE_DIR:moraffs_world>/HOTKEYS.md"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/DEEP_DUNGEON.md"
+        "$<TARGET_FILE_DIR:moraffs_world>/DEEP_DUNGEON.md"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/EXPERIENCE_MODES.md"
+        "$<TARGET_FILE_DIR:moraffs_world>/EXPERIENCE_MODES.md"
     COMMAND ${CMAKE_COMMAND} -E echo
         "Build complete. Run moraffs_world with its local game data files."
 )

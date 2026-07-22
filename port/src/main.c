@@ -1,7 +1,16 @@
 #include "mw_game.h"
 #include "mw_combat.h"
+#include "mw_trainer.h"
+#include "mw_wilderness.h"
+#include "mw_model_viewer.h"
+#include "mw_integrity.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+/* Native launcher/test harness. It replaces original startup plumbing and
+ * the anti-copy routine func_08BDF; gameplay coverage starts in game_run's
+ * implementation of WORLD func_0F6E5. See PORT_STATUS.md. */
 
 #ifdef _WIN32
 #include <direct.h>
@@ -192,28 +201,188 @@ static int run_test_bestiary(const char *data_dir, int selected) {
     if (game_init(&game, data_dir) < 0) return 1;
     int failures = 0;
     int seen_pic[256] = {0};
+    int spawnable_count = 0;
     for (int i = 0; i < MONSTER_TYPE_COUNT; i++) {
         int pic = get_monster_pic_index_ext(i);
-        if (pic >= game.world_pic_count || (pic >= 0 && pic < 2)) failures++;
-        if (pic >= 0 && pic < 256) seen_pic[pic] = 1;
+        int spawnable = combat_monster_type_spawnable(i);
+        if (spawnable) {
+            spawnable_count++;
+            if (pic < 2 || pic >= game.world_pic_count) failures++;
+            if (pic >= 0 && pic < 256) seen_pic[pic] = 1;
+            game.bestiary_kills[i] = (u32)(i + 1);
+        } else if (pic >= 0) {
+            failures++;
+        }
         if (get_monster_color_ext(i) < 0) failures++;
-        game.bestiary_kills[i] = (u32)(i + 1);
     }
+    if (spawnable_count != BESTIARY_CATALOG_COUNT) failures++;
+    if (combat_monster_type_spawnable(6) ||
+        combat_monster_type_valid(6, 50)) failures++; /* dormant Hobbit row */
     for (int pic = 2; pic < game.world_pic_count; pic++)
         if (!seen_pic[pic]) failures++;
     failures += game_ui_self_test(&game);
     if (selected < 0) selected = 0;
     if (selected >= MONSTER_TYPE_COUNT) selected = MONSTER_TYPE_COUNT - 1;
+    /* The trainer unlock is distinct from fabricated kill counts. */
+    memset(game.bestiary_kills, 0, sizeof(game.bestiary_kills));
+    game.bestiary_unlock_all = 1;
     game_draw_bestiary_test(&game, selected);
     char bmp_path[300];
     snprintf(bmp_path, sizeof(bmp_path), "%s/test_bestiary_%d.bmp",
              data_dir, selected);
     int rc = save_framebuffer_bmp(&game.video, bmp_path);
-    printf("Beastiary picture/color coverage: %s (%d failures)\n",
+    printf("Beastiary spawn/picture/color coverage: %s (%d failures)\n",
            failures ? "FAIL" : "PASS", failures);
     if (rc == 0) printf("Saved: %s\n", bmp_path);
     game_shutdown(&game);
     return (failures || rc < 0) ? 1 : 0;
+}
+
+static int run_test_trainer(const char *data_dir) {
+    Game game;
+    if (game_init(&game, data_dir) < 0) return 1;
+    Character dummy;
+    memset(&dummy, 0, sizeof(dummy));
+    strncpy(dummy.name, "TRAINER TEST", sizeof(dummy.name) - 1);
+    dummy.race = RACE_ELF;
+    dummy.sex = 1;
+    dummy.class_id = CLASS_WIZARD;
+    dummy.level = 42;
+    dummy.hp_cur = 1234;
+    dummy.hp_max = 2345;
+    dummy.sp_cur = 3456.0f;
+    dummy.sp_max = 4567.0f;
+    dummy.x_pos = 31;
+    dummy.y_pos = 44;
+    dummy.floor_depth = 7;
+    dummy.stat_str = 101;
+    dummy.stat_int = 202;
+    dummy.stat_wis = 303;
+    dummy.stat_con = 404;
+    dummy.stat_agi = 505;
+    dummy.stat_luck = 606;
+    game.cur_x = dummy.x_pos;
+    game.cur_y = dummy.y_pos;
+    game.cur_floor = dummy.floor_depth;
+
+    /* Let trainer_run paint its initial page, then close it without requiring
+       interactive input so CI can verify the actual rendering path. */
+    game.input.keys[game.input.tail] = 0x1B;
+    game.input.tail = (game.input.tail + 1) % KEY_QUEUE_SIZE;
+    trainer_run(&game, &dummy);
+    int failures = trainer_self_test();
+
+    for (int row = 0; row < 4; row++) {
+        for (int col = 0; col < 30; col++) {
+            dummy.spells[row][col] = (u8)(((row + col) % 4) == 0);
+            dummy.scrolls[row][col] = (u8)(((row * 2 + col) % 5) == 0);
+            dummy.wands[row][col] = (u8)((row + col) % 10);
+            dummy.papers[row][col] = (u8)(((row + col * 2) % 7) == 0);
+        }
+    }
+    trainer_draw_grid_test(&game, &dummy, 2, SPELL_CAT_PREPARATION, 11);
+    char bmp_path[300];
+    snprintf(bmp_path, sizeof(bmp_path), "%s/test_trainer.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    game.active_save_slot = 3;
+    game.dungeon_number = 24680;
+    game.bestiary_kills[0] = 12;
+    game.bestiary_kills[1] = 34;
+    game.cheat_god_mode = 1;
+    game_draw_game_stats_test(&game, &dummy);
+    snprintf(bmp_path, sizeof(bmp_path), "%s/test_game_stats.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+    game.active_save_slot = -1;
+    game_shutdown(&game);
+    return failures ? 1 : 0;
+}
+
+static int run_test_wilderness(const char *data_dir) {
+    int failures = wilderness_self_test();
+    Game game;
+    if (game_init(&game, data_dir) < 0) return failures + 1;
+    Character p;
+    memset(&p, 0, sizeof(p));
+    snprintf(p.name, sizeof(p.name), "WILDERNESS TEST");
+    p.level = 12;
+    p.hp_cur = p.hp_max = 100;
+    p.sp_cur = p.sp_max = 50.0f;
+    p.stat_str = 20;
+    p.jewels_pocket = 25000;
+    wilderness_draw_test(&game, &p);
+    char bmp_path[300];
+    snprintf(bmp_path, sizeof(bmp_path), "%s/test_wilderness.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+    game_shutdown(&game);
+    return failures;
+}
+
+static int run_test_model_viewer(const char *data_dir) {
+    Game game;
+    int failures;
+    char bmp_path[300];
+    if (game_init(&game, data_dir) < 0) return 1;
+
+    failures = model_viewer_self_test(&game);
+    model_viewer_draw_test(&game, MODEL_VIEWER_WORLD,
+                           game.world_pic_count > 2 ? 2 : 0,
+                           1.15f, 17.5f);
+    snprintf(bmp_path, sizeof(bmp_path), "%s/test_model_viewer.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+    printf("Graphics/model viewer coverage: %s (%d failures)\n",
+           failures ? "FAIL" : "PASS", failures);
+    game_shutdown(&game);
+    return failures ? 1 : 0;
+}
+
+static int run_test_magic(const char *data_dir) {
+    int failures = combat_self_test();
+    Game *game = calloc(1, sizeof(*game));
+    if (!game) return 1;
+    if (game_init(game, data_dir) < 0) {
+        free(game);
+        return 1;
+    }
+
+    Character dummy;
+    memset(&dummy, 0, sizeof(dummy));
+    strncpy(dummy.name, "SPELL TEST", sizeof(dummy.name) - 1);
+    dummy.class_id = CLASS_WIZARD;
+    dummy.level = 40;
+    dummy.hp_cur = dummy.hp_max = 500;
+    dummy.sp_cur = dummy.sp_max = 999.0f;
+    dummy.floor_depth = 1;
+    dummy.x_pos = 19;
+    dummy.y_pos = 20;
+    for (int category = 0; category < 4; category++)
+        for (int index = 0; index < 30; index++)
+            dummy.spells[category][index] = 1;
+    game->cur_floor = dummy.floor_depth;
+    game->cur_x = dummy.x_pos;
+    game->cur_y = dummy.y_pos;
+    game_update_visibility(game);
+
+    /* Choose preparation spells, then leave the all-level selector visible
+       for the screenshot without casting or changing the test character. */
+    game->input.keys[game->input.tail] = '2';
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    game->input.keys[game->input.tail] = 0x1B;
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    cmd_cast_spell_menu(game, &dummy, NULL);
+
+    char bmp_path[300];
+    snprintf(bmp_path, sizeof(bmp_path), "%s/test_spell_selector.bmp", data_dir);
+    if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+    game->active_save_slot = -1;
+    game_shutdown(game);
+    free(game);
+    return failures ? 1 : 0;
 }
 
 static int run_test_frame(const char *data_dir, int test_x, int test_y,
@@ -384,8 +553,18 @@ static int run_test_state_roundtrip(const char *data_dir, int slot, int floor) {
             game.monster_map[game.monster_layer][i].x < MAP_W &&
             game.monster_map[game.monster_layer][i].y < MAP_H) { index = i; break; }
     if (index < 0) { game_shutdown(&game); return 2; }
+    int dormant_index = -1;
+    for (int i = 0; i < MONSTERS_PER_FLOOR; i++)
+        if (i != index && game_monster_hp(&game, i) > 0) {
+            dormant_index = i;
+            break;
+        }
+    if (dormant_index < 0) { game_shutdown(&game); return 2; }
     int hp = game_monster_hp(&game, index);
     game_set_monster_hp(&game, index, hp - 1);
+    game.monster_map[game.monster_layer][dormant_index].type = 6;
+    game.bestiary_kills[0] = 11;
+    game.bestiary_kills[6] = 77;
     game_save_world_state(&game);
     game_shutdown(&game);
 
@@ -394,6 +573,19 @@ static int run_test_state_roundtrip(const char *data_dir, int slot, int floor) {
     game_load_world_state(&game, slot);
     if (game_monster_hp(&game, index) != hp - 1) {
         fprintf(stderr, "MON.MAP HP roundtrip failed\n");
+        game_shutdown(&game);
+        return 4;
+    }
+    int dormant_type = game.monster_map[game.monster_layer][dormant_index].type;
+    int dormant_purged = dormant_type != 6 &&
+                         combat_monster_type_valid(dormant_type, floor);
+    int bestiary_compact = game.bestiary_kills[0] == 11 &&
+                           game.bestiary_kills[6] == 0;
+    printf("Dormant MON.MAP record migration: %s\n",
+           dormant_purged ? "PASS" : "FAIL");
+    printf("Compact Beastiary save migration: %s\n",
+           bestiary_compact ? "PASS" : "FAIL");
+    if (!dormant_purged || !bestiary_compact) {
         game_shutdown(&game);
         return 4;
     }
@@ -408,6 +600,7 @@ static int run_test_state_roundtrip(const char *data_dir, int slot, int floor) {
     printf("Persistent monster damage/death roundtrip: %s\n", ok ? "PASS" : "FAIL");
     Character dummy = {0};
     int pit_x = -1, pit_y = -1;
+    int pit_target = floor;
     for (int y = 1; ok && y < MAP_H - 1 && pit_x < 0; y++) {
         for (int x = 1; x < MAP_W - 1; x++) {
             game.cur_floor = floor;
@@ -416,6 +609,7 @@ static int run_test_state_roundtrip(const char *data_dir, int slot, int floor) {
             dummy.floor_depth = (u16)floor;
             if (game_apply_pitfall(&game, &dummy)) {
                 pit_x = x; pit_y = y;
+                pit_target = game.cur_floor;
                 break;
             }
         }
@@ -429,12 +623,16 @@ static int run_test_state_roundtrip(const char *data_dir, int slot, int floor) {
         game.cur_y = pit_y;
         dummy.floor_depth = (u16)floor;
         game_load_world_state(&game, slot);
+        int marked = game_is_known_pitfall(&game, pit_x, pit_y);
         int repeated = game_apply_pitfall(&game, &dummy);
-        printf("Previously-used pitfall tracking: %s\n", repeated ? "FAIL" : "PASS");
-        if (repeated) ok = 0;
+        int same_target = game.cur_floor == pit_target;
+        printf("Discovered pitfall map tracking: %s\n", marked ? "PASS" : "FAIL");
+        printf("Discovered pitfall retrigger: %s\n",
+               repeated && same_target ? "PASS" : "FAIL");
+        if (!marked || !repeated || !same_target) ok = 0;
         game_shutdown(&game);
     } else if (ok) {
-        printf("Previously-used pitfall tracking: SKIP (all candidates already used)\n");
+        printf("Discovered pitfall tracking: SKIP (no chute on test floor)\n");
     }
     return ok ? 0 : 6;
 }
@@ -453,6 +651,9 @@ int main(int argc, char *argv[]) {
     int test_magic_mode = 0;
     int test_economy_mode = 0;
     int test_bestiary_mode = 0;
+    int test_trainer_mode = 0;
+    int test_wilderness_mode = 0;
+    int test_model_viewer_mode = 0;
     int test_x = 19, test_y = 20, test_floor = 787;
     int test_monster_type = 57; /* default: ball */
 
@@ -501,6 +702,12 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--test-bestiary") == 0) {
             test_bestiary_mode = 1;
             if (i + 1 < argc) test_monster_type = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--test-trainer") == 0) {
+            test_trainer_mode = 1;
+        } else if (strcmp(argv[i], "--test-wilderness") == 0) {
+            test_wilderness_mode = 1;
+        } else if (strcmp(argv[i], "--test-model-viewer") == 0) {
+            test_model_viewer_mode = 1;
         }
     }
 
@@ -510,8 +717,19 @@ int main(int argc, char *argv[]) {
     printf("Data directory: %s\n", data_dir);
 
     if (!has_game_data(data_dir)) {
-        fprintf(stderr, "ERROR: Game data not found in '%s'\n", data_dir);
-        fprintf(stderr, "Place the required Moraff's World files beside the executable.\n");
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+            "Moraff's World files missing",
+            "Required original Moraff's World data files are missing beside the program.",
+            NULL);
+        SDL_Quit();
+        return 1;
+    }
+
+    char integrity_error[512];
+    if (!integrity_verify_original_executables(data_dir, integrity_error,
+                                               sizeof(integrity_error))) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+            "Original game verification failed", integrity_error, NULL);
         SDL_Quit();
         return 1;
     }
@@ -524,6 +742,24 @@ int main(int argc, char *argv[]) {
 
     if (test_bestiary_mode) {
         int rc = run_test_bestiary(data_dir, test_monster_type);
+        SDL_Quit();
+        return rc;
+    }
+
+    if (test_trainer_mode) {
+        int rc = run_test_trainer(data_dir);
+        SDL_Quit();
+        return rc;
+    }
+
+    if (test_wilderness_mode) {
+        int rc = run_test_wilderness(data_dir);
+        SDL_Quit();
+        return rc;
+    }
+
+    if (test_model_viewer_mode) {
+        int rc = run_test_model_viewer(data_dir);
         SDL_Quit();
         return rc;
     }
@@ -544,7 +780,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (test_magic_mode) {
-        int rc = combat_self_test();
+        int rc = run_test_magic(data_dir);
         SDL_Quit();
         return rc;
     }

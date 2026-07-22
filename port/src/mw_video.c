@@ -3,11 +3,137 @@
 #include <string.h>
 #include <stdlib.h>
 
+/*
+ * MW_PLATFORM_REPLACEMENT: SDL framebuffer/palette/text code replaces the
+ * DOS/BGI/VGA implementation in WORLD func_23FA6..func_25943 and
+ * func_28066..func_2B98A. Observable 1024x768 palette, font and PIC behavior
+ * is retained; hardware-bank switching and chipset drivers are not backlog.
+ * See PORT_STATUS.md.
+ */
+
 static u8 vga6_to_8(int v) {
     return (u8)((v * 255 + 31) / 63);
 }
 
-static void build_vga_palette(PaletteEntry pal[256]) {
+static void build_floor_low_ramp(u8 pal6[256][3], int floor) {
+    static const u8 surface_palette[16][3] = {
+        {15,  7,  7}, {20, 12, 12}, { 7, 15,  7}, {12, 20, 12},
+        { 7,  7, 15}, {12, 12, 20}, { 7,  7,  0}, {12, 12,  0},
+        {18, 18,  0}, { 0, 12,  0}, { 0, 20,  0}, { 7,  7,  7},
+        {12, 12, 12}, {17, 17, 17}, {22, 22, 22}, {27, 27, 27}
+    };
+    int family = floor % 11;
+    if (family < 0) family += 11;
+
+    /* WORLD far_2478E has a special hand-authored surface palette for
+     * floors divisible by eleven.  The other ten reachable switch arms are
+     * the generated RGB ramps below.  (Its eleventh generated blue arm is
+     * unreachable because the original divides by eleven.) */
+    if (family == 0) {
+        for (int i = 0; i < 16; i++)
+            for (int c = 0; c < 3; c++)
+                pal6[16 + i][c] = surface_palette[i][c];
+        return;
+    }
+
+    for (int i = 0; i < 8; i++) {
+        int even = 16 + i * 2;
+        int odd = even + 1;
+        u8 v = (u8)(i * 8);
+        u8 inverse = (u8)(60 - v);
+        u8 a[3] = {0, 0, 0};
+        u8 b[3] = {0, 0, 0};
+
+        switch (family) {
+        case 1: /* gray, inverse gray */
+            a[0] = a[1] = a[2] = v;
+            b[0] = b[1] = b[2] = inverse;
+            break;
+        case 2: /* gray, red */
+            a[0] = a[1] = a[2] = v;
+            b[0] = v;
+            break;
+        case 3: /* gray, green */
+            a[0] = a[1] = a[2] = v;
+            b[1] = v;
+            break;
+        case 4: /* gray, yellow */
+            a[0] = a[1] = a[2] = v;
+            b[0] = b[1] = v;
+            break;
+        case 5: /* gray, blue */
+            a[0] = a[1] = a[2] = v;
+            b[2] = v;
+            break;
+        case 6: /* green, red */
+            a[1] = v;
+            b[0] = v;
+            break;
+        case 7: /* green, blue */
+            a[1] = v;
+            b[2] = v;
+            break;
+        case 8: /* green */
+            a[1] = v;
+            b[1] = inverse;
+            break;
+        case 9: /* red */
+            a[0] = v;
+            b[0] = inverse;
+            break;
+        case 10: /* yellow */
+            a[0] = a[1] = v;
+            b[0] = b[1] = inverse;
+            break;
+        }
+        memcpy(pal6[even], a, sizeof(a));
+        memcpy(pal6[odd], b, sizeof(b));
+    }
+}
+
+static void build_floor_high_ramp(u8 pal6[256][3], int floor) {
+    int family = floor % 7;
+    if (family < 0) family += 7;
+    int step = family == 0 ? 1 : (family == 1 ? 2 : 3);
+    u8 *flat = &pal6[0][0];
+
+    /* These hexadecimal bounds are byte offsets in WORLD's 768-byte DAC
+     * buffer, not palette indices.  They cover the RGB components of colors
+     * 48..63.  Components skipped by a stride retain sub_2473D's warm base. */
+    for (int offset = 0x90; offset < 0xC0; offset += step) {
+        u8 rising = (u8)((offset - 0x82) / 2);
+        u8 falling = (u8)((0xC2 - offset) / 2);
+        switch (family) {
+        case 0:
+            flat[offset] = rising;
+            break;
+        case 1:
+        case 2:
+            flat[offset] = rising;
+            flat[offset + 1] = falling;
+            break;
+        case 3:
+            flat[offset] = rising;
+            flat[offset + 1] = rising;
+            break;
+        case 4:
+            flat[offset] = rising;
+            break;
+        case 5:
+            flat[offset + 1] = rising;
+            break;
+        case 6:
+            flat[offset] = rising;
+            flat[offset + 1] = rising;
+            flat[offset + 2] = falling;
+            break;
+        }
+    }
+}
+
+static void build_vga_palette(PaletteEntry pal[256], int floor,
+                              u8 background_r, u8 background_g,
+                              u8 background_b) {
     u8 pal6[256][3];
 
     /* Step 1: Base algorithm from sub_2473D (ASM line 70893).
@@ -59,6 +185,27 @@ static void build_vga_palette(PaletteEntry pal[256]) {
         pal6[17 + i * 2][2] = iv;
     }
 
+    /* The original 256-color path supplies a second hand-authored block at
+     * DAC indices 32..47 before it applies the floor%7 component band. */
+    static const u8 extended_colors[16][3] = {
+        { 0,  0,  0}, {63, 40, 20}, {63, 50, 30}, {63, 60, 40},
+        {11, 11,  0}, {24, 24,  0}, {37, 37,  0}, {50, 50,  0},
+        {63, 63,  0}, {56, 45,  0}, {49, 30,  0}, {43, 15,  0},
+        { 0, 40,  0}, {37, 37, 37}, {50, 50, 50}, {63, 63, 63}
+    };
+    for (int i = 0; i < 16; i++)
+        memcpy(pal6[32 + i], extended_colors[i], 3);
+
+    build_floor_low_ramp(pal6, floor);
+    build_floor_high_ramp(pal6, floor);
+
+    /* The *, (, and ) commands increment these preserved DAC bytes by 0x10.
+     * Real VGA hardware exposes only the low six bits, so four presses of a
+     * key return that channel to black even though WORLD stores a full byte. */
+    pal6[0][0] = background_r & 0x3F;
+    pal6[0][1] = background_g & 0x3F;
+    pal6[0][2] = background_b & 0x3F;
+
     /* Convert from VGA 6-bit (0-63) to 8-bit (0-255) */
     for (int i = 0; i < 256; i++) {
         pal[i].r = vga6_to_8(pal6[i][0]);
@@ -78,26 +225,35 @@ static void build_vga_palette(PaletteEntry pal[256]) {
      * mode-8 capture and are reserved by the native renderer for the same
      * ceiling, floor, wall, and status roles. */
     static const PaletteEntry svga_render_colors[] = {
-        {224, 224, 224}, /* 32: cracked wall face */
-        {192, 192, 192}, /* 33: wall highlight */
-        {  0,   0, 192}, /* 34: blue cracks/mortar */
-        { 32,  32,  92}, /* 35: ceiling navy 1 */
-        { 28,  28, 100}, /* 36: ceiling navy 2 */
-        { 80,  80,  44}, /* 37: dungeon olive 1 */
-        { 76,  76,  52}, /* 38: dungeon olive 2 */
-        { 68,  68,  56}, /* 39: dungeon olive 3 */
-        { 40,  40,  88}, /* 40: ceiling navy 3 */
-        { 92,  92,  32}, /* 41: floor olive 1 */
-        {100, 100,  28}, /* 42: floor olive 2 */
-        {104, 104,  20}, /* 43: floor olive 3 */
-        {112, 112,  16}, /* 44: floor olive 4 */
-        {116, 116,   8}, /* 45: floor olive 5 */
-        {252, 252, 252}, /* 46: map white */
-        { 81, 202, 255}, /* 47: status cyan */
-        {174,  60,   0}, /* 48: bottom prompt orange */
+        {224, 224, 224}, /* cracked wall face */
+        {192, 192, 192}, /* wall highlight */
+        {  0,   0, 192}, /* blue cracks/mortar */
+        { 32,  32,  92}, /* ceiling navy 1 */
+        { 28,  28, 100}, /* ceiling navy 2 */
+        { 80,  80,  44}, /* dungeon olive 1 */
+        { 76,  76,  52}, /* dungeon olive 2 */
+        { 68,  68,  56}, /* dungeon olive 3 */
+        { 40,  40,  88}, /* ceiling navy 3 */
+        { 92,  92,  32}, /* floor olive 1 */
+        {100, 100,  28}, /* floor olive 2 */
+        {104, 104,  20}, /* floor olive 3 */
+        {112, 112,  16}, /* floor olive 4 */
+        {116, 116,   8}, /* floor olive 5 */
+        {252, 252, 252}, /* map white */
+        { 81, 202, 255}, /* status cyan */
+        {174,  60,   0}, /* bottom prompt orange */
     };
     for (int i = 0; i < (int)(sizeof(svga_render_colors) / sizeof(svga_render_colors[0])); i++)
-        pal[32 + i] = svga_render_colors[i];
+        pal[MW_COLOR_WALL_FACE + i] = svga_render_colors[i];
+
+    /* The native wall sampler normalizes WALL.PIC's zero/transparent fill to
+     * the captured gray face at the default palette.  Once WORLD's hidden RGB
+     * controls are used, route that fill through their live DAC color so the
+     * characteristic red/green/blue wash appears in the same wall regions. */
+    if (((background_r | background_g | background_b) & 0x3F) != 0)
+        pal[MW_COLOR_WALL_TINT] = pal[0];
+    else
+        pal[MW_COLOR_WALL_TINT] = pal[MW_COLOR_WALL_FACE];
 }
 
 int video_init(Video *v, const char *title, int scale) {
@@ -183,8 +339,66 @@ void video_set_palette(Video *v, int index, u8 r, u8 g, u8 b) {
 }
 
 void video_load_vga_default_palette(Video *v) {
-    build_vga_palette(v->palette);
+    build_vga_palette(v->palette, 0, 0, 0, 0);
     v->dirty = 1;
+}
+
+void video_load_world_palette(Video *v, int floor,
+                              u8 background_r, u8 background_g,
+                              u8 background_b) {
+    build_vga_palette(v->palette, floor,
+                      background_r, background_g, background_b);
+    v->dirty = 1;
+}
+
+int video_world_palette_self_test(void) {
+    PaletteEntry pal[256];
+    int failures = 0;
+    static const u8 high_first[7][3] = {
+        { 7,  7,  8}, { 7, 25,  8}, { 7, 25,  0}, { 7,  7,  0},
+        { 7, 12,  0}, {27,  7,  0}, { 7,  7, 25}
+    };
+
+    for (int floor = 0; floor < 7; floor++) {
+        build_vga_palette(pal, floor, 0, 0, 0);
+        if (pal[48].r != vga6_to_8(high_first[floor][0]) ||
+            pal[48].g != vga6_to_8(high_first[floor][1]) ||
+            pal[48].b != vga6_to_8(high_first[floor][2])) failures++;
+    }
+
+    build_vga_palette(pal, 0, 0, 0, 0);
+    if (pal[16].r != vga6_to_8(15) ||
+        pal[16].g != vga6_to_8(7) ||
+        pal[16].b != vga6_to_8(7)) failures++;
+    if (pal[31].r != vga6_to_8(27) ||
+        pal[31].g != vga6_to_8(27) ||
+        pal[31].b != vga6_to_8(27)) failures++;
+
+    build_vga_palette(pal, 1, 0, 0, 0);
+    if (pal[16].r != 0 || pal[16].g != 0 || pal[16].b != 0) failures++;
+    if (pal[17].r != vga6_to_8(60) ||
+        pal[17].g != vga6_to_8(60) ||
+        pal[17].b != vga6_to_8(60)) failures++;
+
+    build_vga_palette(pal, 3, 0, 0, 0);
+    if (pal[31].r != 0 || pal[31].g != vga6_to_8(56) ||
+        pal[31].b != 0) failures++;
+
+    build_vga_palette(pal, 9, 0, 0, 0);
+    if (pal[31].r != vga6_to_8(4) || pal[31].g != 0 ||
+        pal[31].b != 0) failures++;
+
+    build_vga_palette(pal, 6, 0x10, 0x20, 0x30);
+    if (pal[0].r != vga6_to_8(0x10) ||
+        pal[0].g != vga6_to_8(0x20) ||
+        pal[0].b != vga6_to_8(0x30)) failures++;
+    if (pal[32].r != 0 || pal[32].g != 0 || pal[32].b != 0) failures++;
+    if (pal[47].r != 255 || pal[47].g != 255 || pal[47].b != 255) failures++;
+    if (pal[MW_COLOR_WALL_TINT].r != pal[0].r ||
+        pal[MW_COLOR_WALL_TINT].g != pal[0].g ||
+        pal[MW_COLOR_WALL_TINT].b != pal[0].b) failures++;
+
+    return failures;
 }
 
 void video_clear(Video *v, u8 color) {

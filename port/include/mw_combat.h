@@ -3,21 +3,23 @@
 
 #include "mw_game.h"
 
-/* ── Monster type stats (from DS:0x237, 35 bytes/entry, 112 types) ── */
+/* The first 112 rows come from the byte-oriented DOS table.  Native rows and
+ * all gameplay-facing fields are 16-bit so deep-floor enemies can exceed
+ * level/stat 255 without wrapping. */
 typedef struct {
     const char *name;
     s16 def;
     s16 dmg;
     s16 atk;
-    s8  defMod;
-    s8  agi;
+    s16 defMod;
+    s16 agi;
     s16 hpF;
-    u8  imm;        /* spell immunity threshold (100 = immune to hold/autokill/goaway) */
-    u8  minL;       /* minimum dungeon level to appear */
-    u8  maxL;       /* maximum dungeon level to appear */
-    u8  boss;       /* boss flag: HP gets +level*20 bonus */
-    u8  saveA;
-    u8  saveB;
+    u16 imm;        /* spell immunity threshold (100 = immune to hold/autokill/goaway) */
+    u16 minL;       /* minimum dungeon level to appear */
+    u16 maxL;       /* maximum dungeon level to appear */
+    u16 boss;       /* boss flag: HP gets +level*20 bonus */
+    u16 saveA;
+    u16 saveB;
 } MonsterType;
 
 /* ── Weapon stats (from DS:0x1C0, 7 bytes/entry, 12 weapons) ── */
@@ -29,7 +31,13 @@ typedef struct {
     s8  weight;
 } WeaponStats;
 
-#define MONSTER_TYPE_COUNT 112
+#define QUEST_MONSTER_FIRST 104
+#define QUEST_MONSTER_COUNT 10
+#define DEEP_MONSTER_FIRST 114
+#define DEEP_MONSTER_COUNT 64
+#define ASCENDED_BOSS_FIRST 174
+#define ASCENDED_BOSS_COUNT 4
+#define MONSTER_TYPE_COUNT (DEEP_MONSTER_FIRST + DEEP_MONSTER_COUNT)
 #define WEAPON_STAT_COUNT  12
 #define ARMOR_STAT_COUNT   8
 
@@ -61,6 +69,9 @@ typedef enum {
     SPELL_CAT_PRIEST = 3
 } SpellCategory;
 
+/* Canonical display name for one of the four 30-entry spell tables. */
+const char *combat_spell_name(int category, int index);
+
 /* Combat lifecycle */
 void combat_init_encounter(Game *g, CombatState *cs);
 void combat_init_entity(Game *g, CombatState *cs, int entity_index);
@@ -83,11 +94,14 @@ int  combat_self_test(void);
 
 /* Monster utilities */
 int  combat_calc_monster_hp(const MonsterType *mt, int level);
+int  combat_monster_type_spawnable(int type_idx);
 int  combat_monster_type_valid(int type_idx, int floor_depth);
 int  combat_pick_monster_type(Game *g, int floor_depth);
+int  combat_monster_max_floor(int type_idx);
 int  combat_monster_drain_amount(int type_idx);
 int  get_monster_pic_index_ext(int type_idx);
 int  get_monster_color_ext(int type_idx);
+int  get_monster_tint_ext(int type_idx);
 
 /* Equipment selection commands (non-combat) */
 void cmd_weapons(Game *g, Character *player);
