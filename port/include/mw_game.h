@@ -158,11 +158,15 @@ void game_draw_combat_overlay(Game *g, Character *player,
                               const char *msg3);
 void game_draw_bestiary_test(Game *g, int selected);
 void game_draw_game_stats_test(Game *g, Character *player);
+void game_draw_effects_test(Game *g, Character *player, int page);
 int  game_ui_self_test(Game *g);
+int  game_dialog_ui_self_test(Game *g, Character *player);
 void game_update_visibility(Game *g);
 const GameTraversalRules *game_traversal_rules(const Game *g);
 int  game_dungeon_max_floor(const Game *g);
 int  game_clamp_dungeon_floor(const Game *g, int floor);
+void game_max_character(Game *g, Character *player);
+void game_debug_max_character(Game *g, Character *player);
 /* Shared modal-menu mouse helpers.  SDL events carry window coordinates;
  * these reproduce DOS mouse hit maps in the port's 1024x768 logical space. */
 int  game_mouse_click_logical(Game *g, int *x, int *y);

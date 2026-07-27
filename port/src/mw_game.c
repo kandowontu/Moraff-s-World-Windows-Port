@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 
 /*
  * Original-routine coverage
@@ -32,6 +33,13 @@ static const u8 race_stat_base[RACE_COUNT][6];
 static void roll_character_stats(Game *g, int race, u16 stats[6]);
 static float starting_spell_points(const Character *p);
 static int character_creation_self_test(void);
+static void town_pane_begin(Game *g, Character *p);
+static int town_pane_text(Game *g, int y, const char *text, u8 color);
+static void left_column_begin(Game *g, Character *p);
+static int left_column_text(Game *g, int y, const char *text, u8 color);
+static int confirm_town_teleport(Game *g, Character *player);
+static int confirm_max_character(Game *g, Character *player);
+static int game_try_step(Game *g, Character *player, int direction);
 
 /* MW_PORT: WORLD build_filepath (0x277E7)/build_open_file (0x2792F) family,
  * expressed as safe local paths instead of DOS drive/path manipulation. */
@@ -122,7 +130,7 @@ int game_load_character(Game *g, int slot) {
         /* A zero-HP save is the original game's permanent-death tombstone.
          * Treat it as an available slot when the launcher is rebuilt instead
          * of allowing an unusable dead character back into exploration. */
-        if (g->chars[slot].hp_cur == 0) {
+        if (mw_hp_cur(&g->chars[slot]) == 0) {
             g->char_exists[slot] = 0;
             return -1;
         }
@@ -725,7 +733,18 @@ static void make_monster_map_name(char *out, int out_sz, int slot) {
     snprintf(out, out_sz, "%dMON.MAP", slot);
 }
 
-enum { QUEST_CHAIN_COUNT = 14 };
+enum {
+    QUEST_CHAIN_COUNT = 14,
+    LATE_GEAR_TIER_COUNT = 8
+};
+
+static const u16 late_gear_floor[LATE_GEAR_TIER_COUNT] = {
+    375, 500, 625, 750, 825, 875, 950, 1000
+};
+
+static const u16 deep_spell_unlock_floor[MW_DEEP_SPELL_COUNT] = {
+    100, 200, 300, 400, 500, 600, 700, 800, 900, 1000
+};
 
 static const u16 quest_floor_by_step[QUEST_CHAIN_COUNT] = {
     4, 8, 12, 16, 125, 150, 175, 200, 375, 500,
@@ -1074,18 +1093,24 @@ int game_find_monster(Game *g, int x, int y) {
     return -1;
 }
 
-int game_find_adjacent_monster(Game *g) {
+static int game_find_engaged_monster_in_direction(Game *g, int direction) {
     static const int dx[4] = {0, 0, -1, 1};
     static const int dy[4] = {-1, 1, 0, 0};
-    for (int d = 0; d < 4; d++) {
-        int x = g->cur_x + dx[d], y = g->cur_y + dy[d];
-        /* WORLD func_0C970 requires calc_damage's edge result to be exactly
-         * three before it considers the actor adjacent.  A value of one is
-         * a usable, auto-opening door, but it remains an opaque encounter
-         * boundary: the monster beyond it neither appears nor answers F. */
-        if (edge_between_cells(g, g->cur_x, g->cur_y, x, y) != 3)
-            continue;
-        int index = game_find_monster(g, x, y);
+    if (direction < 0 || direction > 3) return -1;
+    int x = g->cur_x + dx[direction];
+    int y = g->cur_y + dy[direction];
+    /* WORLD func_0C970 requires calc_damage's edge result to be exactly
+     * three before it considers the actor adjacent.  A value of one is
+     * a usable, auto-opening door, but it remains an opaque encounter
+     * boundary: the monster beyond it neither appears nor answers F. */
+    if (edge_between_cells(g, g->cur_x, g->cur_y, x, y) != 3)
+        return -1;
+    return game_find_monster(g, x, y);
+}
+
+int game_find_adjacent_monster(Game *g) {
+    for (int direction = 0; direction < 4; direction++) {
+        int index = game_find_engaged_monster_in_direction(g, direction);
         if (index >= 0) return index;
     }
     return -1;
@@ -2417,11 +2442,13 @@ static void draw_4way_view(Game *g) {
 static void draw_command_menu(Game *g) {
     Video *v = &g->video;
     const int menu_x = SX(0x48C);
-    /* One extra command row fits above the east viewport with the original
-       glyph proportions by tightening only the inter-row pitch slightly. */
-    const int spacing = SY(35);
+    int enhanced = game_dungeon_max_floor(g) > CLASSIC_DUNGEON_FLOOR;
+    /* Enhanced needs one additional passive-effect row. Tightening both its
+       pitch and glyph height slightly keeps Quit/Help above the east view;
+       Classic retains the existing original two-page geometry. */
+    const int spacing = SY(enhanced ? 33 : 35);
     const int xsn = 7, xsd = 6;
-    const int ysn = 12, ysd = 17;
+    const int ysn = enhanced ? 11 : 12, ysd = 17;
     int y = 0;
 
     video_draw_text_scaled_xy(v, menu_x, y, " RICKS   VIEW  ONEY", 8, xsn, xsd, ysn, ysd);
@@ -2460,6 +2487,13 @@ static void draw_command_menu(Game *g) {
     video_draw_text_scaled_xy(v, menu_x, y, "SPELLS IN EFFECT  ", 8, xsn, xsd, ysn, ysd);
     video_draw_text_scaled_xy(v, menu_x, y, "                 2", 4, xsn, xsd, ysn, ysd);
     y += spacing;
+    if (enhanced) {
+        video_draw_text_scaled_xy(v, menu_x, y, "SPELLS IN EFFECT  ", 8,
+                                  xsn, xsd, ysn, ysd);
+        video_draw_text_scaled_xy(v, menu_x, y, "                 3", 4,
+                                  xsn, xsd, ysn, ysd);
+        y += spacing;
+    }
     video_draw_text_scaled_xy(v, menu_x, y, " UIT-SAVE  ELP (  )", 8, xsn, xsd, ysn, ysd);
     video_draw_text_scaled_xy(v, menu_x, y, "Q         H     F1 ", 4, xsn, xsd, ysn, ysd);
 }
@@ -2492,28 +2526,37 @@ int game_mouse_row(Game *g, int x0, int x1, int y0, int row_height,
 }
 
 static int command_menu_click_key(Game *g, int window_x, int window_y) {
-    static const int command[12][2] = {
+    static const int classic_command[12][2] = {
         {'b','m'}, {'w','v'}, {'z','c'}, {'i','x'},
         {'a','l'}, {'f','p'}, {'t','e'}, {'o','o'},
         {'j','g'}, {'1','1'}, {'2','2'}, {'q','h'}
     };
+    static const int enhanced_command[13][2] = {
+        {'b','m'}, {'w','v'}, {'z','c'}, {'i','x'},
+        {'a','l'}, {'f','p'}, {'t','e'}, {'o','o'},
+        {'j','g'}, {'1','1'}, {'2','2'}, {'3','3'}, {'q','h'}
+    };
+    int enhanced = game_dungeon_max_floor(g) > CLASSIC_DUNGEON_FLOOR;
+    int row_count = enhanced ? 13 : 12;
     float logical_x, logical_y;
     SDL_RenderWindowToLogical(g->video.renderer, window_x, window_y,
                               &logical_x, &logical_y);
     const int menu_x = SX(0x48C);
-    const int spacing = SY(35);
+    const int spacing = SY(enhanced ? 33 : 35);
     int adv = g->video.font_advance ? g->video.font_advance
                                     : g->video.font_char_w;
     int scaled_advance = adv * 7 / 6;
-    int scaled_height = g->video.font_char_h * 12 / 17;
+    int scaled_height = g->video.font_char_h * (enhanced ? 11 : 12) / 17;
     int menu_right = menu_x + scaled_advance * 20;
     if (logical_x < menu_x || logical_x >= menu_right ||
-        logical_y < 0 || logical_y >= spacing * 11 + scaled_height)
+        logical_y < 0 ||
+        logical_y >= spacing * (row_count - 1) + scaled_height)
         return 0;
     int row = (int)logical_y / spacing;
-    if (row > 11) row = 11;
+    if (row >= row_count) row = row_count - 1;
     int right_column = logical_x >= menu_x + scaled_advance * 9;
-    return command[row][right_column];
+    return enhanced ? enhanced_command[row][right_column] :
+                      classic_command[row][right_column];
 }
 
 static int mouse_position_logical(Game *g, int *x, int *y, unsigned *serial) {
@@ -2540,10 +2583,14 @@ static void hover_frame(Video *v, int x, int y, int w, int h, u8 color) {
 static void draw_mouse_hover(Game *g) {
     int x, y;
     if (!mouse_position_logical(g, &x, &y, NULL)) return;
-    const int menu_x = SX(0x48C), spacing = SY(35);
+    int enhanced = game_dungeon_max_floor(g) > CLASSIC_DUNGEON_FLOOR;
+    int row_count = enhanced ? 13 : 12;
+    const int menu_x = SX(0x48C);
+    const int spacing = SY(enhanced ? 33 : 35);
     int adv = g->video.font_advance ? g->video.font_advance : g->video.font_char_w;
     int half = adv * 7 / 6 * 9;
-    if (x >= menu_x && x < menu_x + half * 2 && y >= 0 && y < spacing * 12) {
+    if (x >= menu_x && x < menu_x + half * 2 &&
+        y >= 0 && y < spacing * row_count) {
         int row = y / spacing;
         int column = x >= menu_x + half;
         hover_frame(&g->video, menu_x + column * half, row * spacing,
@@ -2635,8 +2682,8 @@ static void draw_status_bar(Game *g, Character *player) {
                               xsn, xsd, ysn, ysd);
     y += line_step;
 
-    snprintf(line, sizeof(line), "HEALTH POINTS: %d OF %d",
-             player->hp_cur, player->hp_max);
+    snprintf(line, sizeof(line), "HEALTH POINTS: %u OF %u",
+             mw_hp_cur(player), mw_hp_max(player));
     video_draw_text_scaled_xy(v, 0, y, line, 6, xsn, xsd, ysn, ysd);
     char action_line[64];
     const char *action = g->cur_floor <=
@@ -2682,22 +2729,48 @@ static void draw_status_bar(Game *g, Character *player) {
 static const char *weapon_names[] = {
     "FIST", "STICK", "CLUB", "MACE", "KNIFE",
     "SHORTSWORD", "LONG SWORD", "GREAT SWORD",
-    "POWER WEAPON 1", "POWER WEAPON 2", "POWER WEAPON 3", "POWER WEAPON 4"
+    "POWER WEAPON 1", "POWER WEAPON 2", "POWER WEAPON 3", "POWER WEAPON 4",
+    "WORLDFORGED BLADE", "RIFTCARVER", "STARFORGED SABER", "VOIDREAVER",
+    "ETERNITY EDGE", "CELESTIAL BRAND", "ASCENDANT EDGE", "MORAFF'S LEGACY"
 };
-#define WEAPON_COUNT 12
+#define WEAPON_COUNT 20
 
 static const char *armor_names[] = {
     "SKIN", "LEATHER", "CHAIN", "SCALE", "PLATE",
-    "FIELD PLATE", "TITANIUM", "OGRE"
+    "FIELD PLATE", "TITANIUM", "OGRE",
+    "PRISMATIC MAIL", "RIFTWARD PLATE", "STARFORGED MAIL", "VOID BASTION",
+    "ETERNITY PLATE", "CELESTIAL AEGIS", "ASCENDANT AEGIS",
+    "MORAFF'S BULWARK"
 };
-#define ARMOR_COUNT 8
+#define ARMOR_COUNT 16
 
-/* Exact final-byte weights from WORLD.EXE's DS:01C0 weapon records and
-   DS:0214 armor records.  Armor slot 7 is not part of the original seven
-   armor records and therefore contributes no weight. */
-static const u8 armor_weight[8] = {0, 14, 24, 40, 60, 72, 48, 0};
+typedef struct EnhancedRelicDef {
+    const char *name;
+    const char *effect;
+    int minimum_floor;
+} EnhancedRelicDef;
+
+static const EnhancedRelicDef enhanced_relics[MW_RELIC_COUNT] = {
+    {"RING OF ARCANE RENEWAL",
+     "RESTORES 1 SPELL POINT EVERY 4 PLAYER ACTIONS.", 350},
+    {"BLOODSTONE SIGNET",
+     "MELEE DAMAGE RESTORES 5 PERCENT HEALTH, WITH A LEVEL-BASED CAP.", 475},
+    {"DEEPWARD AMULET",
+     "REDUCES MONSTER DAMAGE 15 PERCENT AND DOUBLES TIME BETWEEN STATUS DRAINS.", 600},
+    {"SAGE'S PRISM",
+     "INCREASES EXPERIENCE FROM EVERY MONSTER KILL BY 25 PERCENT.", 750},
+    {"PHOENIX SEAL",
+     "SURVIVES ONE LETHAL MONSTER STRIKE; RECHARGES AFTER 300 ACTIONS.", 900}
+};
 
 unsigned long long game_loaded_weight(const Character *p) {
+    /* The destructive max-character shortcut deliberately grants a
+       permanent Feather effect alongside full inventories.  Treat that
+       combination as its zero-load sentinel so the shortcut does not turn
+       its own inventory grant into maximum encumbrance. */
+    if (mw_universal_access(p) && p->eff_feather == 100)
+        return 0;
+
     unsigned long long weight = p->eff_feather ? 0u : p->weight_pounds;
 
     /* WORLD divides each loose-stone denomination separately.  Jewel stones
@@ -2709,11 +2782,14 @@ unsigned long long game_loaded_weight(const Character *p) {
     weight += p->platinum_stones / 16u;
 
     for (int i = 0; i < 8; i++)
-        weight += (unsigned long long)p->weapon_inventory[i] *
+        weight += (unsigned long long)mw_weapon_inventory_count(p, i) *
                   (unsigned)weapon_stats[i].weight;
-    for (int i = 0; i < 7; i++)
-        weight += (unsigned long long)p->armor_inventory[i] *
-                  (unsigned)armor_weight[i];
+    for (int i = 12; i < WEAPON_STAT_COUNT; i++)
+        weight += (unsigned long long)mw_weapon_inventory_count(p, i) *
+                  (unsigned)weapon_stats[i].weight;
+    for (int i = 0; i < ARMOR_STAT_COUNT; i++)
+        weight += (unsigned long long)mw_armor_inventory_count(p, i) *
+                  (unsigned)combat_armor_weight(i);
     return weight;
 }
 
@@ -2736,120 +2812,106 @@ int game_weight_monster_turns(const Character *p) {
 
 static void cmd_view_stats(Game *g, Character *p) {
     Video *v = &g->video;
-    int fh = v->font_char_h + 2;
     char line[128];
+    int y = 0;
 
-    video_clear(v, 0);
-    int y = 4;
+    /* WORLD func_0DF4A uses the long-form left-column page: it replaces the
+       map/status column but leaves all three right-hand viewport regions
+       intact.  It never clears the complete framebuffer. */
+    left_column_begin(g, p);
 
     snprintf(line, sizeof(line), "VIEW STATS FOR %s", p->name);
-    video_draw_text(v, 8, y, line, 3);
-    y += fh + 2;
+    y = left_column_text(g, y, line, 3);
 
     const char *race_str = (p->race < RACE_COUNT) ? race_names[p->race] : "???";
     snprintf(line, sizeof(line), "RACE: %s", race_str);
-    video_draw_text(v, 8, y, line, 4);
-    y += fh;
+    y = left_column_text(g, y, line, 4);
 
     snprintf(line, sizeof(line), "SEX: %s", p->sex == 0 ? "MALE" : "FEMALE");
-    video_draw_text(v, 8, y, line, 4);
-    y += fh;
+    y = left_column_text(g, y, line, 4);
 
     const char *cls = (p->class_id < CLASS_COUNT) ? class_names[p->class_id] : "???";
     snprintf(line, sizeof(line), "CLASS: %s", cls);
-    video_draw_text(v, 8, y, line, 4);
-    y += fh;
+    y = left_column_text(g, y, line, 4);
 
     snprintf(line, sizeof(line), "MONEY IN POCKET: %u", p->jewels_pocket);
-    video_draw_text(v, 8, y, line, 8);
-    y += fh;
+    y = left_column_text(g, y, line, 8);
 
     snprintf(line, sizeof(line), "MONEY IN BANK: %u", p->jewels_bank);
-    video_draw_text(v, 8, y, line, 8);
-    y += fh;
+    y = left_column_text(g, y, line, 8);
 
     snprintf(line, sizeof(line), "TOTAL MONEY: %u",
              p->jewels_pocket + p->jewels_bank);
-    video_draw_text(v, 8, y, line, 8);
-    y += fh + 2;
+    y = left_column_text(g, y, line, 8);
 
     snprintf(line, sizeof(line), "LOADED WEIGHT: %llu",
              game_loaded_weight(p));
-    video_draw_text(v, 8, y, line, 5);
-    y += fh;
+    y = left_column_text(g, y, line, 5);
 
     snprintf(line, sizeof(line), "NAKED WEIGHT: %u", p->weight_pounds);
-    video_draw_text(v, 8, y, line, 5);
-    y += fh;
+    y = left_column_text(g, y, line, 5);
 
     snprintf(line, sizeof(line), "HEIGHT (INCHES): %u", p->height_inches);
-    video_draw_text(v, 8, y, line, 5);
-    y += fh + 2;
+    y = left_column_text(g, y, line, 5);
 
     snprintf(line, sizeof(line), "STRENGTH: %d", p->stat_str);
-    video_draw_text(v, 8, y, line, 6);
-    y += fh;
+    y = left_column_text(g, y, line, 6);
 
     snprintf(line, sizeof(line), "INTELLIGENCE: %d", p->stat_int);
-    video_draw_text(v, 8, y, line, 6);
-    y += fh;
+    y = left_column_text(g, y, line, 6);
 
     snprintf(line, sizeof(line), "WISDOM: %d", p->stat_wis);
-    video_draw_text(v, 8, y, line, 6);
-    y += fh;
+    y = left_column_text(g, y, line, 6);
 
     snprintf(line, sizeof(line), "CONSTITUTION: %d", p->stat_con);
-    video_draw_text(v, 8, y, line, 6);
-    y += fh;
+    y = left_column_text(g, y, line, 6);
 
     snprintf(line, sizeof(line), "AGILITY: %d", p->stat_agi);
-    video_draw_text(v, 8, y, line, 6);
-    y += fh;
+    y = left_column_text(g, y, line, 6);
 
     snprintf(line, sizeof(line), "LUCK: %d", p->stat_luck);
-    video_draw_text(v, 8, y, line, 6);
-    y += fh + 2;
+    y = left_column_text(g, y, line, 6);
 
     const char *wpn = (p->equipped_weapon < WEAPON_COUNT) ?
         weapon_names[p->equipped_weapon] : "UNKNOWN";
     snprintf(line, sizeof(line), "WEAPON IN HAND: %s", wpn);
-    video_draw_text(v, 8, y, line, 4);
-    y += fh;
+    y = left_column_text(g, y, line, 4);
 
     const char *arm = (p->equipped_armor < ARMOR_COUNT) ?
         armor_names[p->equipped_armor] : "UNKNOWN";
     snprintf(line, sizeof(line), "CURRENT ARMOR: %s", arm);
-    video_draw_text(v, 8, y, line, 4);
-    y += fh;
+    y = left_column_text(g, y, line, 4);
 
     snprintf(line, sizeof(line), "LEVEL: %d", p->level);
-    video_draw_text(v, 8, y, line, 5);
-    y += fh;
+    y = left_column_text(g, y, line, 5);
 
     snprintf(line, sizeof(line), "EXPERIENCE: %.0f", p->experience);
-    video_draw_text(v, 8, y, line, 5);
-    y += fh;
+    y = left_column_text(g, y, line, 5);
 
-    video_draw_text(v, 8, y,
-                    p->raise_x == 0xFFFFu ?
-                    "NO RAISE DEAD CONTRACT" : "RAISE DEAD CONTRACT IN EFFECT",
-                    p->raise_x == 0xFFFFu ? 8 : 3);
-    y += fh;
+    if (mw_experience_mode(p) == MW_EXPERIENCE_ENHANCED) {
+        snprintf(line, sizeof(line), "DEEP RELICS FOUND: %d OF %d",
+                 mw_relic_count(p), MW_RELIC_COUNT);
+        y = left_column_text(g, y, line, 11);
+    }
+
+    y = left_column_text(g, y,
+                         p->raise_x == 0xFFFFu ?
+                         "NO RAISE DEAD CONTRACT IS IN EFFECT" :
+                         "RAISE DEAD CONTRACT IS IN EFFECT",
+                         p->raise_x == 0xFFFFu ? 8 : 3);
 
     if (p->diseased_turns > 0) {
-        snprintf(line, sizeof(line), "YOU ARE DISEASED-MOVES LEFT: %d",
+        snprintf(line, sizeof(line), "YOU ARE DISEASED-MOVES LEFT UNTIL CONSTITUTION DRAINED: %d",
                  p->diseased_turns);
-        video_draw_text(v, 8, y, line, 8);
-        y += fh;
+        y = left_column_text(g, y, line, 8);
     }
     if (p->poisoned_turns > 0) {
-        snprintf(line, sizeof(line), "YOU ARE POISONED-MOVES LEFT: %d",
+        snprintf(line, sizeof(line), "YOU ARE POISONED-MOVES LEFT UNTIL STRENGTH DRAINED: %d",
                  p->poisoned_turns);
-        video_draw_text(v, 8, y, line, 6);
-        y += fh;
+        y = left_column_text(g, y, line, 6);
     }
 
-    video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
+    left_column_text(g, y, "HIT ANY KEY TO RETURN TO GAME...", 3);
     video_present(v);
     input_wait_any_key(&g->input);
 }
@@ -2897,17 +2959,22 @@ static void draw_game_stats(Game *g, Character *p) {
             if (monster_record_alive(g,
                     &g->monster_map[g->monster_layer][i]))
                 alive_monsters++;
+    int spell_catalog_count = mw_spell_catalog_count(p);
     for (int category = 0; category < 4; category++)
-        for (int spell = 0; spell < 30; spell++) {
+        for (int spell = 0; spell < spell_catalog_count; spell++) {
             if (p->spells[category][spell]) learned++;
             scrolls += p->scrolls[category][spell];
             wand_charges += p->wands[category][spell];
             papers += p->papers[category][spell];
         }
     for (int i = 0; i < 8; i++) {
-        weapons += p->weapon_inventory[i];
-        armor += p->armor_inventory[i];
+        weapons += mw_weapon_inventory_count(p, i);
+        armor += mw_armor_inventory_count(p, i);
     }
+    for (int i = 12; i < WEAPON_STAT_COUNT; i++)
+        weapons += mw_weapon_inventory_count(p, i);
+    for (int i = 8; i < ARMOR_STAT_COUNT; i++)
+        armor += mw_armor_inventory_count(p, i);
 
     video_clear(v, 0);
     snprintf(line, sizeof(line), "GAME STATS FOR %s", p->name);
@@ -2931,7 +2998,9 @@ static void draw_game_stats(Game *g, Character *p) {
                    "CLASSIC" : "ENHANCED", game_dungeon_max_floor(g));
     GAME_STAT_LEFT(7, "POSITION: FLOOR %d  X:%d Y:%d",
                    g->cur_floor, g->cur_x, g->cur_y);
-    GAME_STAT_LEFT(7, "CHARACTER AGE: %u DAYS", p->age / 86400u);
+    GAME_STAT_LEFT(7, "CHARACTER AGE: %u YEARS, %u DAYS",
+                   p->age / MW_AGE_YEAR_UNITS,
+                   (p->age % MW_AGE_YEAR_UNITS) / MW_AGE_DAY_UNITS);
     GAME_STAT_LEFT(7, "EXPERIENCE: %.0f", p->experience);
     GAME_STAT_LEFT(10, "BESTIARY DISCOVERED: %d / %d",
                    discovered, bestiary_total);
@@ -2946,7 +3015,8 @@ static void draw_game_stats(Game *g, Character *p) {
                    visited_cells, MAP_W * MAP_H);
     GAME_STAT_LEFT(12, "LIVING MONSTERS ON FLOOR: %d", alive_monsters);
 
-    GAME_STAT_RIGHT(3, "SPELLS LEARNED: %d / 120", learned);
+    GAME_STAT_RIGHT(3, "SPELLS LEARNED: %d / %d", learned,
+                    spell_catalog_count * 4);
     GAME_STAT_RIGHT(3, "SCROLLS CARRIED: %llu", scrolls);
     GAME_STAT_RIGHT(3, "WAND CHARGES CARRIED: %llu", wand_charges);
     GAME_STAT_RIGHT(3, "MAGIC PAPERS CARRIED: %llu", papers);
@@ -2957,6 +3027,13 @@ static void draw_game_stats(Game *g, Character *p) {
     GAME_STAT_RIGHT(8, "LOADED WEIGHT: %llu", game_loaded_weight(p));
     GAME_STAT_RIGHT(8, "MONSTER ACTIONS PER TURN: %d",
                     game_weight_monster_turns(p));
+    if (mw_experience_mode(p) == MW_EXPERIENCE_ENHANCED) {
+        GAME_STAT_RIGHT(11, "SUPER-RARE RELICS: %d / %d",
+                        mw_relic_count(p), MW_RELIC_COUNT);
+        if (mw_relic_owned(p, MW_RELIC_PHOENIX_SEAL))
+            GAME_STAT_RIGHT(14, "PHOENIX RECHARGE: %u ACTIONS",
+                            p->native.relic_phoenix_cooldown);
+    }
     GAME_STAT_RIGHT(g->cheat_noclip ? 4 : 7, "NOCLIP: %s",
                     g->cheat_noclip ? "ON" : "OFF");
     GAME_STAT_RIGHT(g->cheat_god_mode ? 4 : 7, "GOD MODE: %s",
@@ -2984,48 +3061,48 @@ static void cmd_game_stats(Game *g, Character *p) {
 
 static void cmd_view_money(Game *g, Character *p) {
     Video *v = &g->video;
-    int fh = v->font_char_h + 2;
     char line[128];
 
-    video_clear(v, 0);
-    int y = 4;
+    town_pane_begin(g, p);
+    int y = 0;
 
-    video_draw_text(v, 8, y, "YOUR FINANCIAL STATEMENT:", 4);
-    y += fh + 4;
+    y = town_pane_text(g, y, "YOUR FINANCIAL STATEMENT:", 4);
 
     snprintf(line, sizeof(line), "COPPER STONES:   %10u", p->copper_stones);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = town_pane_text(g, y, line, 7);
 
     snprintf(line, sizeof(line), "SILVER STONES:   %10u", p->silver_stones);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = town_pane_text(g, y, line, 7);
 
     snprintf(line, sizeof(line), "IVORY STONES:    %10u", p->ivory_stones);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = town_pane_text(g, y, line, 7);
 
     snprintf(line, sizeof(line), "GOLD STONES:     %10u", p->gold_stones);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = town_pane_text(g, y, line, 7);
 
     snprintf(line, sizeof(line), "PLATINUM STONES: %10u", p->platinum_stones);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = town_pane_text(g, y, line, 7);
 
     snprintf(line, sizeof(line), "JEWEL STONES:    %10u", p->jewel_stones);
-    video_draw_text(v, 8, y, line, 7); y += fh + 2;
+    y = town_pane_text(g, y, line, 7);
 
     snprintf(line, sizeof(line), "JEWELS IN POCKET:%10u", p->jewels_pocket);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = town_pane_text(g, y, line, 7);
 
     snprintf(line, sizeof(line), "JEWELS IN BANK:  %10u", p->jewels_bank);
-    video_draw_text(v, 8, y, line, 7);
+    y = town_pane_text(g, y, line, 7);
 
-    video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
+    town_pane_text(g, y, "HIT ANY KEY...", 15);
     video_present(v);
     input_wait_any_key(&g->input);
 }
 
 /* ── Spell name tables (extracted from WORLD.EXE pointer tables) ── */
-/* 4 spell categories, 30 spells each, 3 per level (level = index/3 + 1) */
+/* The first 30 entries are the exact original catalog.  Enhanced adds ten
+ * deep-dungeon spells per family in the save format's previously unused
+ * slots 30-39. */
 
-static const char *perm_names[30] = {
+static const char *perm_names[MW_ENHANCED_SPELL_COUNT] = {
     "ENCHANT WEAPON LEVEL 1","EXTRA HEALTH POINT","WRITE SCROLL TO LEVEL 3",
     "ENCHANT ARMOR LEVEL 1","EXTRA 3 HEALTH POINTS","ENCHANT WAND LEVEL 3",
     "ENCHANT WEAPON LEVEL 2","EXTRA 5 HEALTH POINTS","ENCHANT RING LEVEL 1",
@@ -3036,8 +3113,13 @@ static const char *perm_names[30] = {
     "ENCHANT WEAPON LEVEL 4","ENCHANT ARMOR LEVEL 4","ENCHANT WAND ANY LEVEL",
     "PERMANENT FEATHER","ANTI-MAGIC RING LEVEL 5","EXTRA 25 HEALTH POINTS",
     "PERMANENT INVISIBILITY","YOUTH","BODY ARMOR LEVEL 4",
+    "ENCHANT WEAPON LEVEL 150","ENCHANT ARMOR LEVEL 100",
+    "BODY ARMOR LEVEL 100","WRITE DEEP SCROLL","CHARGE DEEP WAND",
+    "ENCHANT WEAPON LEVEL 500","ENCHANT ARMOR LEVEL 350",
+    "BODY ARMOR LEVEL 300","WRITE ASCENDANT SCROLL",
+    "CHARGE ASCENDANT WAND",
 };
-static const char *prep_names[30] = {
+static const char *prep_names[MW_ENHANCED_SPELL_COUNT] = {
     "ENCHANT ARMOR LEVEL 1","ENCHANT WEAPON LEVEL 1","LITTLE CURE",
     "ENCHANT WEAPON LEVEL 2","RELOCATE","DETECT LEVEL",
     "CURE","ENCHANT ARMOR LEVEL 2","STRENGTH",
@@ -3048,8 +3130,12 @@ static const char *prep_names[30] = {
     "SUPER STRENGTH","ENCHANT WEAPON LEVEL 5","MAJOR DESCEND",
     "SUPER AGILITY","CURE POISON","HEAL ALL WOUNDS",
     "MAJOR ASCEND","CURE DISEASE","ENCHANT ARMOR LEVEL 4",
+    "ABYSS DESCEND","ABYSS ASCEND","DEEP SANCTUARY",
+    "CARTOGRAPHER'S EYE","TOWN PORTAL",
+    "RIFT DESCEND","RIFT ASCEND","ETERNAL SANCTUARY",
+    "WORLD REVEAL","FULL RESTORATION",
 };
-static const char *wiz_names[30] = {
+static const char *wiz_names[MW_ENHANCED_SPELL_COUNT] = {
     "SLEEP","MAGIC ZAP","MINOR PROTECTION",
     "SLOW ENEMIES","STRENGTH","MINOR SHOCK",
     "LIGHTNING","MAGIC MISSLE","SPEED",
@@ -3060,8 +3146,11 @@ static const char *wiz_names[30] = {
     "MAGIC BOLT","MAJOR PROTECTION","POWER WEAPON II",
     "HOLD MONSTER","DRAIN MONSTER","MAJOR SHOCK",
     "MAJOR EXPLOSION","AUTOKILL","POWER WEAPON III",
+    "ABYSSAL LANCE","TIME STOP","VOID NOVA","SOUL REND","OBLIVION",
+    "STARFIRE","CHRONO LOCK","REALITY RUPTURE",
+    "MANA TEMPEST","ANNIHILATION",
 };
-static const char *priest_names[30] = {
+static const char *priest_names[MW_ENHANCED_SPELL_COUNT] = {
     "SLEEP","MINOR PROTECTION","STRENGTH",
     "RESIST POISON","SPEED","FAST CURE",
     "RESIST DISEASE","RELOCATE","SLOW ENEMIES",
@@ -3072,6 +3161,10 @@ static const char *priest_names[30] = {
     "MAJOR PROTECTION","EXPLOSION","MAGIC ZOT",
     "AUTOKILL","POWER WEAPON III","STRENGTH AND SPEED",
     "ULTRA PROTECTION","FAST HEAL","MAJOR SHOCK",
+    "GREATER RESTORATION","DIVINE AEGIS","HOLY CATACLYSM",
+    "CELESTIAL STASIS","FINAL JUDGMENT",
+    "MASS RESTORATION","ETERNAL WARD","WRATH OF HEAVEN",
+    "PHOENIX PRAYER","DIVINE VERDICT",
 };
 
 static const char **spell_type_names[4] = { perm_names, prep_names, wiz_names, priest_names };
@@ -3080,48 +3173,62 @@ static const char *type_headers[4] = {
     "WIZARD BATTLE SPELLS", "PRIEST BATTLE SPELLS"
 };
 
-/* Color per level: cycles through 6,8,3,4,5,7,6,8,3,4 */
-static const u8 level_colors[10] = { 6, 8, 3, 4, 5, 7, 6, 8, 3, 4 };
+/* Color per level: preserve the native cycle through the Enhanced levels. */
+static const u8 level_colors[14] = {
+    6, 8, 3, 4, 5, 7, 6, 8, 3, 4, 5, 7, 6, 8
+};
 
-/* ── Command: Pockets - Spell list display (2 pages) ── */
-/* Shows spells/scrolls/wands/papers with names, 2 types per page */
+/* ── Command: Pockets - Spell list display ── */
+/* Classic keeps the original two pages. Enhanced adds two deep-spell pages. */
 /* is_wand: if true, show charge count next to name instead of just color */
 
 static void cmd_pockets_spells(Game *g, Character *p, u8 data[4][45], int is_wand, const char *title) {
     Video *v = &g->video;
     int fh = v->font_char_h * 3 / 4;
-    int fa = v->font_advance * 3 / 4;
     char line[80];
 
-    for (int page = 0; page < 2; page++) {
-        int t0 = page * 2;
+    int pages = mw_spell_catalog_count(p) > MW_ORIGINAL_SPELL_COUNT ? 4 : 2;
+    for (int page = 0; page < pages; page++) {
+        int deep = page >= 2;
+        int t0 = (page % 2) * 2;
         int t1 = t0 + 1;
+        int first_spell = deep ? MW_DEEP_SPELL_FIRST : 0;
+        int spell_count = deep ? MW_DEEP_SPELL_COUNT :
+                                 MW_ORIGINAL_SPELL_COUNT;
         const char **names0 = spell_type_names[t0];
         const char **names1 = spell_type_names[t1];
 
         video_clear(v, 0);
 
-        int header_h = fh + 2;
-        int avail = LOGICAL_H - header_h * 2 - fh - 4;
-        int row_h = avail / 30;
-        if (row_h < fh) row_h = fh;
-
+        /* WORLD func_1E77B is the intentional full-display POCKETS VIEW.
+           Casting or using these items instead uses a full-width top strip
+           and retains the lower viewports/status.  These read-only 30-row
+           tables use exact 1600x1200 source coordinates. */
         int y = 0;
-        int col_level = 2;
-        int col_left = 6 * fa;
-        int col_right = 34 * fa;
+        int row_h = SY(0x26);
+        int col_level = SX(0x1E);
+        int col_left = SX(0xB4);
+        int col_right = SX(0x384);
 
         video_draw_text_scaled(v, col_level, y, "LEVEL", 4, 3, 4);
-        video_draw_text_scaled(v, col_left, y, type_headers[t0], 4, 3, 4);
-        video_draw_text_scaled(v, col_right, y, type_headers[t1], 4, 3, 4);
-        y += header_h;
+        if (deep) {
+            snprintf(line, sizeof(line), "DEEP %s", type_headers[t0]);
+            video_draw_text_scaled(v, col_left, y, line, 4, 3, 4);
+            snprintf(line, sizeof(line), "DEEP %s", type_headers[t1]);
+            video_draw_text_scaled(v, col_right, y, line, 4, 3, 4);
+        } else {
+            video_draw_text_scaled(v, col_left, y, type_headers[t0], 4, 3, 4);
+            video_draw_text_scaled(v, col_right, y, type_headers[t1], 4, 3, 4);
+        }
+        y = SY(0x3C);
 
-        for (int i = 0; i < 30; i++) {
+        for (int row = 0; row < spell_count; row++) {
+            int i = first_spell + row;
             int lv = i / 3 + 1;
             u8 color = level_colors[lv - 1];
 
             snprintf(line, sizeof(line), "%2d", lv);
-            video_draw_text_scaled(v, col_level + fa, y, line, 10, 3, 4);
+            video_draw_text_scaled(v, col_level, y, line, 10, 3, 4);
 
             u8 val0 = data[t0][i];
             if (val0) {
@@ -3144,8 +3251,15 @@ static void cmd_pockets_spells(Game *g, Character *p, u8 data[4][45], int is_wan
             y += row_h;
         }
 
-        snprintf(line, sizeof(line), "%s PAGE %d/2 - HIT ANY KEY...", title, page + 1);
-        video_draw_text_scaled(v, col_level, LOGICAL_H - fh - 2, line, 15, 3, 4);
+        /* The original two Classic tables simply wait after the final row.
+           Only the native Enhanced continuation needs an explicit page cue,
+           placed in otherwise-unused space on its short deep-spell pages. */
+        if (deep) {
+            snprintf(line, sizeof(line), "%s PAGE %d/%d - HIT ANY KEY...",
+                     title, page + 1, pages);
+            video_draw_text_scaled(v, col_level, SY(0x1E0), line,
+                                   15, 3, 4);
+        }
         video_present(v);
         input_wait_any_key(&g->input);
     }
@@ -3155,57 +3269,79 @@ static void cmd_pockets_spells(Game *g, Character *p, u8 data[4][45], int is_wan
 
 static void cmd_pockets_misc(Game *g, Character *p) {
     Video *v = &g->video;
-    int fh = v->font_char_h + 2;
     char line[128];
 
-    video_clear(v, 0);
-    int y = 4;
+    /* The original long miscellaneous inventory replaces the left column,
+       not the 3-D views and command/status area to its right. */
+    left_column_begin(g, p);
+    int y = 0;
 
-    video_draw_text(v, 8, y, "MISC. MAGIC ITEMS:", 14);
-    y += fh + 2;
+    y = left_column_text(g, y, "MISC. MAGIC ITEMS:", 14);
 
-    video_draw_text(v, 8, y, "HIT 'I' AND '5' TO USE THESE:", 14);
-    y += fh;
+    y = left_column_text(g, y, "HIT 'I' AND '5' TO USE THESE:", 14);
     snprintf(line, sizeof(line), "1) HOLY HAND GRENADES: %d", p->holy_grenade);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "2) STONES OF TELEPORTATION: %d", p->stone_teleport);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "3) STONES OF SEEING: %d", p->stone_see);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "4) FLOOR SLOSHERS: %d", p->floor_slosher);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "5) POTION OF HEALING: %d", p->potion_heal);
-    video_draw_text(v, 8, y, line, 7); y += fh + 2;
+    y = left_column_text(g, y, line, 7);
 
-    video_draw_text(v, 8, y, "HIT 'I' AND '4' TO USE THESE:", 14);
-    y += fh;
+    y = left_column_text(g, y, "HIT 'I' AND '4' TO USE THESE:", 14);
     snprintf(line, sizeof(line), "6) GREEN PILLS: %d", p->green_pill);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "7) ORANGE PILLS: %d", p->orange_pill);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "8) YELLOW PILLS: %d", p->yellow_pill);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "9) RED PILLS: %d", p->red_pill);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "10) BLUE PILLS: %d", p->blue_pill);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "11) WHITE PILLS: %d", p->white_pill);
-    video_draw_text(v, 8, y, line, 7); y += fh + 2;
+    y = left_column_text(g, y, line, 7);
 
-    video_draw_text(v, 8, y, "THESE ARE AUTOMATICALLY IN USE:", 14);
-    y += fh;
+    y = left_column_text(g, y, "THESE ARE AUTOMATICALLY IN USE:", 14);
     snprintf(line, sizeof(line), "12) RINGS OF REGENERATION: %d", p->ring_regen);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "13) RING OF PROTECTION, PLUS %d", mw_ring_prot_plus(p));
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "14) ANTI MAGIC RING, PLUS %d", p->antimagic_ring);
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "15) BODY ARMOR, LEVEL %d", mw_body_armor_plus(p));
-    video_draw_text(v, 8, y, line, 7); y += fh;
+    y = left_column_text(g, y, line, 7);
     snprintf(line, sizeof(line), "16) GAUNTLET, PLUS %d", mw_gauntlet(p));
-    video_draw_text(v, 8, y, line, 7);
+    y = left_column_text(g, y, line, 7);
 
-    video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
+    left_column_text(g, y,
+                     mw_experience_mode(p) == MW_EXPERIENCE_ENHANCED ?
+                     "ANY KEY: VIEW ENHANCED RELICS..." : "HIT ANY KEY...",
+                     15);
+    video_present(v);
+    input_wait_any_key(&g->input);
+
+    if (mw_experience_mode(p) != MW_EXPERIENCE_ENHANCED) return;
+    left_column_begin(g, p);
+    y = 0;
+    y = left_column_text(g, y, "ENHANCED SUPER-RARE RELICS:", 11);
+    for (int relic = 0; relic < MW_RELIC_COUNT; relic++) {
+        snprintf(line, sizeof(line), "%d) %s: %s", relic + 1,
+                 enhanced_relics[relic].name,
+                 mw_relic_owned(p, relic) ? "OWNED" : "NOT FOUND");
+        y = left_column_text(g, y, line,
+                             mw_relic_owned(p, relic) ? 10 : 8);
+        y = left_column_text(g, y, enhanced_relics[relic].effect, 7);
+    }
+    if (mw_relic_owned(p, MW_RELIC_PHOENIX_SEAL)) {
+        snprintf(line, sizeof(line), "PHOENIX RECHARGE: %u ACTIONS",
+                 p->native.relic_phoenix_cooldown);
+        y = left_column_text(g, y, line,
+                             p->native.relic_phoenix_cooldown ? 14 : 10);
+    }
+    left_column_text(g, y, "HIT ANY KEY...", 15);
     video_present(v);
     input_wait_any_key(&g->input);
 }
@@ -3217,7 +3353,7 @@ static void cmd_pockets(Game *g, Character *p) {
     Video *v = &g->video;
     int fh = v->font_char_h + 2;
 
-    video_clear(v, 0);
+    town_pane_begin(g, p);
     int y = 4;
 
     video_draw_text(v, 8, y, "WHICH DO YOU WISH TO SEE?", 14);
@@ -3231,9 +3367,11 @@ static void cmd_pockets(Game *g, Character *p) {
     video_draw_text(v, 8, y, "ANY OTHER KEY TO RETURNS...", 7);
     video_present(v);
 
-    int key = input_getch(&g->input);
+    /* This menu accepts ASCII choices only.  Drain both bytes of DOS-style
+     * extended keys so Page Down's 0x51 scan code cannot escape as 'Q'. */
+    int key = input_wait_any_key(&g->input);
     if (key == INPUT_MOUSE_CLICK) {
-        int choice = game_mouse_row(g, 0, LOGICAL_W, option_y, fh, 5);
+        int choice = game_mouse_row(g, 0, SX(0x2D3), option_y, fh, 5);
         key = choice >= 0 ? '1' + choice : 0x1B;
     }
     switch (key) {
@@ -3251,46 +3389,39 @@ static void cmd_pockets(Game *g, Character *p) {
 
 static void cmd_exp_needed(Game *g, Character *p) {
     Video *v = &g->video;
-    int fh = v->font_char_h + 2;
     char line[128];
 
-    video_clear(v, 0);
-    int y = 4;
+    town_pane_begin(g, p);
+    int y = 0;
 
     snprintf(line, sizeof(line), "EXPERIENCE NEEDED FOR LEVEL: %d",
              p->level + 1);
-    video_draw_text(v, 8, y, line, 3);
-    y += fh + 4;
+    y = town_pane_text(g, y, line, 3);
 
     snprintf(line, sizeof(line), "CURRENT LEVEL: %d", p->level);
-    video_draw_text(v, 8, y, line, 7);
-    y += fh;
+    y = town_pane_text(g, y, line, 7);
 
     snprintf(line, sizeof(line), "CURRENT EXPERIENCE: %.0f", p->experience);
-    video_draw_text(v, 8, y, line, 7);
-    y += fh;
+    y = town_pane_text(g, y, line, 7);
 
     double target = experience_for_level((int)p->level + 1);
     snprintf(line, sizeof(line), "EXPERIENCE REQUIRED: %.0f", target);
-    video_draw_text(v, 8, y, line, 7);
-    y += fh;
+    y = town_pane_text(g, y, line, 7);
 
     double needed = target - p->experience;
     if (needed < 0.0) needed = 0.0;
     snprintf(line, sizeof(line), "EXPERIENCE STILL NEEDED: %.0f", needed);
-    video_draw_text(v, 8, y, line, needed <= 0.0 ? 10 : 7);
-    y += fh;
+    y = town_pane_text(g, y, line, needed <= 0.0 ? 10 : 7);
 
-    snprintf(line, sizeof(line), "HEALTH POINTS: %d OF %d",
-             p->hp_cur, p->hp_max);
-    video_draw_text(v, 8, y, line, 7);
-    y += fh;
+    snprintf(line, sizeof(line), "HEALTH POINTS: %u OF %u",
+             mw_hp_cur(p), mw_hp_max(p));
+    y = town_pane_text(g, y, line, 7);
 
     snprintf(line, sizeof(line), "SPELL POINTS: %.0f OF %.0f",
              p->sp_cur, p->sp_max);
-    video_draw_text(v, 8, y, line, 7);
+    y = town_pane_text(g, y, line, 7);
 
-    video_draw_text(v, 8, LOGICAL_H - fh - 4, "HIT ANY KEY...", 15);
+    town_pane_text(g, y, "HIT ANY KEY...", 15);
     video_present(v);
     input_wait_any_key(&g->input);
 }
@@ -3311,10 +3442,15 @@ static void town_pane_begin(Game *g, Character *p) {
     video_fill_rect(&g->video, 0, 0, SX(0x2D3), SY(0x1AE), 0);
 }
 
-static int town_pane_text(Game *g, int y, const char *text, u8 color) {
+static void left_column_begin(Game *g, Character *p) {
+    game_draw_exploration(g, p);
+    video_fill_rect(&g->video, 0, 0, SX(0x2D3), LOGICAL_H, 0);
+}
+
+static int pane_text(Game *g, int y, int bottom,
+                     const char *text, u8 color) {
     enum { MAX_CHARS = 32 };
     const int row_h = SY(38);
-    const int bottom = SY(0x1AE);
     const char *p = text;
     char line[MAX_CHARS + 1];
 
@@ -3338,6 +3474,14 @@ static int town_pane_text(Game *g, int y, const char *text, u8 color) {
         while (*p == ' ') p++;
     }
     return y;
+}
+
+static int town_pane_text(Game *g, int y, const char *text, u8 color) {
+    return pane_text(g, y, SY(0x1AE), text, color);
+}
+
+static int left_column_text(Game *g, int y, const char *text, u8 color) {
+    return pane_text(g, y, LOGICAL_H, text, color);
 }
 
 static void town_message(Game *g, Character *p, const char *title, const char *line1,
@@ -3379,7 +3523,7 @@ static int town_menu(Game *g, Character *p, const char *title, const char *subti
     town_pane_text(g, y, "SELECT OPTION (ESC LEAVES)", 15);
     video_present(v);
     for (;;) {
-        int key = input_getch(&g->input);
+        int key = input_wait_any_key(&g->input);
         if (input_poll_quit(&g->input) || key == 0x1B) return -1;
         if (key == INPUT_MOUSE_CLICK) {
             int x, click_y;
@@ -3429,7 +3573,7 @@ static u32 town_prompt_amount(Game *g, Character *p, const char *title,
         }
         video_present(v);
 
-        int key = input_getch(&g->input);
+        int key = input_wait_any_key(&g->input);
         if (key == INPUT_MOUSE_CLICK) {
             int x, click_y;
             if (game_mouse_click_logical(g, &x, &click_y) &&
@@ -3473,12 +3617,19 @@ static int spend_jewels(Game *g, Character *p, u32 price) {
  * denomination of carried money.  Negative enchant bytes are cursed items;
  * when equipped they cannot be removed or dropped. */
 static void cmd_drop_item(Game *g, Character *p) {
-    static const char *const categories[] = {
+    static const char *const classic_categories[] = {
         "ARMOR", "WEAPON", "MONEY", "RETURN TO GAME"
     };
+    static const char *const enhanced_categories[] = {
+        "ARMOR", "WEAPON", "DEEP EQUIPMENT", "MONEY", "RETURN TO GAME"
+    };
+    int enhanced = mw_experience_mode(p) == MW_EXPERIENCE_ENHANCED;
+    const char *const *categories =
+        enhanced ? enhanced_categories : classic_categories;
+    int category_count = enhanced ? 5 : 4;
     int category = town_menu(g, p, "WHICH TYPE OF ITEM WOULD YOU LIKE TO DROP?",
-                             "", categories, 4, 14, UINT32_MAX);
-    if (category < 0 || category == 3) return;
+                             "", categories, category_count, 14, UINT32_MAX);
+    if (category < 0 || category == category_count - 1) return;
 
     if (category == 0 || category == 1) {
         char labels[8][64];
@@ -3526,6 +3677,59 @@ static void cmd_drop_item(Game *g, Character *p) {
         char line[96];
         snprintf(line, sizeof(line), "YOU DROP THE %s.",
                  category == 0 ? armor_names[selected] : weapon_names[selected]);
+        town_message(g, p, "ITEM DROPPED", line, "", 8);
+        return;
+    }
+
+    if (enhanced && category == 2) {
+        static const char *const kinds[] = {
+            "LATE-GAME WEAPONS", "LATE-GAME ARMOR", "RETURN"
+        };
+        int kind = town_menu(g, p, "SELECT DEEP EQUIPMENT TYPE",
+                             "", kinds, 3, 5, UINT32_MAX);
+        if (kind < 0 || kind == 2) return;
+        int armor = kind == 1;
+        char labels[LATE_GEAR_TIER_COUNT][64];
+        const char *items[LATE_GEAR_TIER_COUNT];
+        for (int i = 0; i < LATE_GEAR_TIER_COUNT; i++) {
+            int slot = (armor ? 8 : 12) + i;
+            int count = armor ? mw_armor_inventory_count(p, slot) :
+                                mw_weapon_inventory_count(p, slot);
+            int enchant = armor ? mw_armor_enchant(p, slot) :
+                                  mw_weapon_enchant(p, slot);
+            const char *name = armor ? armor_names[slot] : weapon_names[slot];
+            if (count)
+                snprintf(labels[i], sizeof(labels[i]), "%-18s X%d %+d",
+                         name, count, enchant);
+            else
+                snprintf(labels[i], sizeof(labels[i]), "--------");
+            items[i] = labels[i];
+        }
+        int selected = town_menu(g, p, "SELECT DEEP EQUIPMENT TO DROP",
+                                 "", items, LATE_GEAR_TIER_COUNT,
+                                 armor ? 5 : 4, UINT32_MAX);
+        if (selected < 0 || selected >= LATE_GEAR_TIER_COUNT) return;
+        int slot = (armor ? 8 : 12) + selected;
+        int count = armor ? mw_armor_inventory_count(p, slot) :
+                            mw_weapon_inventory_count(p, slot);
+        if (!count) return;
+        int enchant = armor ? mw_armor_enchant(p, slot) :
+                              mw_weapon_enchant(p, slot);
+        int equipped = armor ? p->equipped_armor : p->equipped_weapon;
+        if (equipped == slot && enchant < 0) {
+            town_message(g, p, "OWE! IT JUST WON'T COME OFF!",
+                         "THE ITEM IS CURSED.", "", 4);
+            return;
+        }
+        if (armor) mw_set_armor_inventory_count(p, slot, count - 1);
+        else mw_set_weapon_inventory_count(p, slot, count - 1);
+        if (equipped == slot && count == 1) {
+            if (armor) p->equipped_armor = 0;
+            else p->equipped_weapon = 0;
+        }
+        char line[96];
+        snprintf(line, sizeof(line), "YOU DROP THE %s.",
+                 armor ? armor_names[slot] : weapon_names[slot]);
         town_message(g, p, "ITEM DROPPED", line, "", 8);
         return;
     }
@@ -3752,17 +3956,17 @@ static void town_temple(Game *g, Character *p) {
         char result[96];
         if (choice == 0) {
             int heal = 1 + game_rand(g) % 10;
-            p->hp_cur = (u16)((p->hp_cur + heal > p->hp_max) ?
-                              p->hp_max : p->hp_cur + heal);
+            uint64_t hp = (uint64_t)mw_hp_cur(p) + (unsigned)heal;
+            mw_set_hp_cur(p, hp > mw_hp_max(p) ? mw_hp_max(p) : hp);
             snprintf(result, sizeof(result), "THE TEMPLE RESTORES %d HEALTH POINTS.", heal);
         } else if (choice == 1) {
             int heal = 10;
             for (int i = 0; i < 5; i++) heal += game_rand(g) % 15;
-            p->hp_cur = (u16)((p->hp_cur + heal > p->hp_max) ?
-                              p->hp_max : p->hp_cur + heal);
+            uint64_t hp = (uint64_t)mw_hp_cur(p) + (unsigned)heal;
+            mw_set_hp_cur(p, hp > mw_hp_max(p) ? mw_hp_max(p) : hp);
             snprintf(result, sizeof(result), "THE TEMPLE RESTORES %d HEALTH POINTS.", heal);
         } else if (choice == 2) {
-            p->hp_cur = p->hp_max;
+            mw_set_hp_cur(p, mw_hp_max(p));
             snprintf(result, sizeof(result), "ALL OF YOUR WOUNDS ARE HEALED.");
         } else if (choice == 3) {
             p->poisoned_turns = 0;
@@ -3858,15 +4062,17 @@ static double experience_for_level(int level) {
 static int inn_apply_levels(Game *g, Character *p) {
     int gained = 0;
     if (!isfinite(p->experience) || p->experience < 0.0) p->experience = 0.0;
-    while (p->level < 1000 &&
+    while (p->level < MW_PLAYER_LEVEL_MAX &&
            p->experience >= experience_for_level((int)p->level + 1)) {
         int hp_gain = 1 + p->stat_con / 5 +
                       game_rand(g) % (p->stat_con / 4 + 1);
-        unsigned hp = (unsigned)p->hp_max + (unsigned)hp_gain;
-        p->hp_max = (u16)(hp > 0xFFFFu ? 0xFFFFu : hp);
+        uint64_t hp = (uint64_t)mw_hp_max(p) + (unsigned)hp_gain;
+        u32 hp_cap = mw_player_hp_cap(p);
+        mw_set_hp_max(p, hp > hp_cap ? hp_cap : hp);
         if (p->class_id != CLASS_FIGHTER) {
             float sp_gain = (float)(1 + (p->stat_int + p->stat_wis) / 10);
-            p->sp_max += sp_gain;
+            p->sp_max = p->sp_max > MW_PLAYER_SP_MAX - sp_gain ?
+                        MW_PLAYER_SP_MAX : p->sp_max + sp_gain;
         }
         p->level++;
         gained++;
@@ -3887,10 +4093,10 @@ static void town_inn(Game *g, Character *p) {
                      "BECAUSE YOU CAN'T PAY YOUR BILL.", "", 12);
         return;
     }
-    p->age += 8u * 3600u;
+    add_u32_sat(&p->age, 8u * 3600u);
     character_clear_town_effects(p);
     int gained = inn_apply_levels(g, p);
-    p->hp_cur = p->hp_max;
+    mw_set_hp_cur(p, mw_hp_max(p));
     p->sp_cur = p->sp_max;
     if (gained) {
         char line[96];
@@ -3930,6 +4136,39 @@ static void inc_u8_sat(u8 *value, int amount) {
     *value = (u8)(total > 255 ? 255 : total);
 }
 
+static int grant_enhanced_relic(Character *p, int relic) {
+    if (!p || mw_experience_mode(p) != MW_EXPERIENCE_ENHANCED ||
+        relic < 0 || relic >= MW_RELIC_COUNT || mw_relic_owned(p, relic))
+        return 0;
+    mw_set_relic_owned(p, relic, 1);
+    if (relic == MW_RELIC_PHOENIX_SEAL)
+        p->native.relic_phoenix_cooldown = 0;
+    return 1;
+}
+
+/* MW_EXTENSION: Enhanced's second equipment page is a complete eight-step
+ * progression.  Ownership and unlock state are deliberately separate, so a
+ * dropped or acid-destroyed item does not make its one-time cache reappear. */
+static int grant_late_gear(Character *p, int tier) {
+    if (!p || mw_experience_mode(p) != MW_EXPERIENCE_ENHANCED ||
+        tier < 0 || tier >= LATE_GEAR_TIER_COUNT ||
+        mw_late_gear_unlocked(p, tier))
+        return 0;
+    mw_set_late_gear_unlocked(p, tier);
+    mw_set_weapon_inventory_count(p, 12 + tier, 1);
+    mw_set_armor_inventory_count(p, 8 + tier, 1);
+    if (tier == 6)
+        mw_set_quest_flags(p, (u16)(mw_quest_flags(p) |
+                                    MW_FINAL_GEAR_QUEST_FLAG));
+    return 1;
+}
+
+/* Retained as a focused test/helper name from the earlier three-item
+   implementation; the former "final" cache is now progression tier seven. */
+static int grant_final_gear(Character *p, int depth) {
+    return depth >= late_gear_floor[6] ? grant_late_gear(p, 6) : 0;
+}
+
 static void grant_quest_reward(Character *p, const CombatState *cs,
                                char *out, size_t out_size) {
     int step = quest_step_for_type(cs->monster_type_idx);
@@ -3938,50 +4177,60 @@ static void grant_quest_reward(Character *p, const CombatState *cs,
         (int)p->floor_depth != quest_floor_by_step[step] ||
         (flags & (1u << step))) return;
     mw_set_quest_flags(p, (u16)(flags | (1u << step)));
+    int equipped_weapon =
+        p->equipped_weapon < WEAPON_STAT_COUNT &&
+        !(p->equipped_weapon >= 8 && p->equipped_weapon <= 11) ?
+        p->equipped_weapon : 0;
     switch (step) {
     case 0: mw_set_body_armor_plus(p, 9); snprintf(out, out_size, "QUEST: PLUS 9 BODY ARMOR!"); break;
     case 1: mw_set_gauntlet(p, 12); snprintf(out, out_size, "QUEST: PLUS 12 GAUNTLET!"); break;
     case 2: mw_set_ring_prot_plus(p, 15); snprintf(out, out_size, "QUEST: PLUS 15 RING OF PROTECTION!"); break;
     case 3:
-        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 25);
+        mw_set_weapon_enchant(p, equipped_weapon, 25);
         snprintf(out, out_size, "QUEST: YOUR EQUIPPED WEAPON IS NOW PLUS 25!");
         break;
     case 4: mw_set_body_armor_plus(p, 25); snprintf(out, out_size, "QUEST: PLUS 25 BODY ARMOR!"); break;
     case 5: mw_set_gauntlet(p, 50); snprintf(out, out_size, "QUEST: PLUS 50 GAUNTLET!"); break;
     case 6: mw_set_ring_prot_plus(p, 50); snprintf(out, out_size, "QUEST: PLUS 50 RING OF PROTECTION!"); break;
     case 7:
-        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 100);
+        mw_set_weapon_enchant(p, equipped_weapon, 100);
         snprintf(out, out_size, "QUEST: YOUR EQUIPPED WEAPON IS NOW PLUS 100!");
         break;
     case 8:
-        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 200);
+        mw_set_weapon_enchant(p, equipped_weapon, 200);
+        grant_late_gear(p, 0);
         snprintf(out, out_size,
-                 "QUEST: THE ABYSSAL ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 200!");
+                 "QUEST: PLUS 200 ABYSSAL ORB! WORLDFORGED GEAR UNLOCKED!");
         break;
     case 9:
-        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 300);
+        mw_set_weapon_enchant(p, equipped_weapon, 300);
+        grant_late_gear(p, 1);
         snprintf(out, out_size,
-                 "QUEST: THE WORLD ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 300!");
+                 "QUEST: PLUS 300 WORLD ORB! RIFTWARD GEAR UNLOCKED!");
         break;
     case 10:
-        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 450);
+        mw_set_weapon_enchant(p, equipped_weapon, 450);
+        grant_late_gear(p, 2);
         snprintf(out, out_size,
-                 "QUEST: THE RIFT ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 450!");
+                 "QUEST: PLUS 450 RIFT ORB! STARFORGED GEAR UNLOCKED!");
         break;
     case 11:
-        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 600);
+        mw_set_weapon_enchant(p, equipped_weapon, 600);
+        grant_late_gear(p, 3);
         snprintf(out, out_size,
-                 "QUEST: THE STAR ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 600!");
+                 "QUEST: PLUS 600 STAR ORB! VOID GEAR UNLOCKED!");
         break;
     case 12:
-        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 800);
+        mw_set_weapon_enchant(p, equipped_weapon, 800);
+        grant_late_gear(p, 5);
         snprintf(out, out_size,
-                 "QUEST: THE ETERNITY ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 800!");
+                 "QUEST: PLUS 800 ETERNITY ORB! CELESTIAL GEAR UNLOCKED!");
         break;
     case 13:
-        mw_set_weapon_enchant(p, p->equipped_weapon < 12 ? p->equipped_weapon : 0, 1000);
+        mw_set_weapon_enchant(p, equipped_weapon, 1000);
+        grant_late_gear(p, 7);
         snprintf(out, out_size,
-                 "QUEST: THE ASCENDANT ORB ENCHANTS YOUR EQUIPPED WEAPON PLUS 1000!");
+                 "QUEST: PLUS 1000 ASCENDANT ORB! MORAFF'S GEAR UNLOCKED!");
         break;
     }
 }
@@ -4026,27 +4275,27 @@ static int award_random_magic_item(Game *g, Character *p,
         snprintf(loot, loot_size, "A RING OF REGENERATION!");
         break;
     case 6:
-        if (p->stat_str != UINT16_MAX) p->stat_str++;
+        if (p->stat_str < MW_PLAYER_STAT_MAX) p->stat_str++;
         snprintf(loot, loot_size, "A BOOK OF STRENGTH!");
         break;
     case 7:
-        if (p->stat_int != UINT16_MAX) p->stat_int++;
+        if (p->stat_int < MW_PLAYER_STAT_MAX) p->stat_int++;
         snprintf(loot, loot_size, "A BOOK OF INTELLIGENCE!");
         break;
     case 8:
-        if (p->stat_wis != UINT16_MAX) p->stat_wis++;
+        if (p->stat_wis < MW_PLAYER_STAT_MAX) p->stat_wis++;
         snprintf(loot, loot_size, "A BOOK OF WISDOM!");
         break;
     case 9:
-        if (p->stat_con != UINT16_MAX) p->stat_con++;
+        if (p->stat_con < MW_PLAYER_STAT_MAX) p->stat_con++;
         snprintf(loot, loot_size, "A BOOK OF CONSTITUTION!");
         break;
     case 10:
-        if (p->stat_agi != UINT16_MAX) p->stat_agi++;
+        if (p->stat_agi < MW_PLAYER_STAT_MAX) p->stat_agi++;
         snprintf(loot, loot_size, "A BOOK OF DEXTERITY!");
         break;
     default:
-        if (p->stat_luck != UINT16_MAX) p->stat_luck++;
+        if (p->stat_luck < MW_PLAYER_STAT_MAX) p->stat_luck++;
         snprintf(loot, loot_size, "A BOOK OF LUCK!");
         break;
     }
@@ -4058,13 +4307,25 @@ static int award_random_magic_item(Game *g, Character *p,
  * one of the three spells at the selected level. */
 static int award_spell_item(Game *g, Character *p, int depth, int source,
                             char *loot, size_t loot_size) {
-    int divisor = source == 0 ? 3 : (source == 1 ? 60 : 8);
-    int level = depth / divisor;
-    if (level > 9) level = 9;
-    if (level < 0) level = 0;
-    level = reward_random_below(g, level + 1);
     int category = game_rand(g) % 4;
-    int spell = level * 3 + game_rand(g) % 3;
+    int spell;
+    int deep_count = 0;
+    if (mw_experience_mode(p) == MW_EXPERIENCE_ENHANCED && depth >= 100) {
+        deep_count = depth / 100;
+        if (deep_count > MW_DEEP_SPELL_COUNT)
+            deep_count = MW_DEEP_SPELL_COUNT;
+    }
+    if (deep_count && game_rand(g) % 2 == 0) {
+        spell = MW_DEEP_SPELL_FIRST +
+                reward_random_below(g, deep_count);
+    } else {
+        int divisor = source == 0 ? 3 : (source == 1 ? 60 : 8);
+        int level = depth / divisor;
+        if (level > 9) level = 9;
+        if (level < 0) level = 0;
+        level = reward_random_below(g, level + 1);
+        spell = level * 3 + game_rand(g) % 3;
+    }
     if (source == 0) {
         inc_u8_sat(&p->scrolls[category][spell], 1);
         snprintf(loot, loot_size, "YOU HAVE FOUND A SCROLL OF %s.",
@@ -4253,7 +4514,7 @@ static void reward_offer_stones(Game *g, Character *p,
 
     int key;
     for (;;) {
-        key = input_getch(&g->input);
+        key = input_wait_any_key(&g->input);
         if (input_poll_quit(&g->input) || key == 0x1B) key = 'L';
         if (key == INPUT_MOUSE_CLICK) {
             static const char click_key[3][2] = {
@@ -4277,11 +4538,11 @@ static void reward_offer_stones(Game *g, Character *p,
 
 static void reward_health_cup(Game *g, Character *p) {
     if (p->class_id == CLASS_MONK) return;
-    if (game_rand(g) % 5 != 0 || p->hp_cur >= p->hp_max) return;
+    if (game_rand(g) % 5 != 0 || mw_hp_cur(p) >= mw_hp_max(p)) return;
     int gain = 3 + game_rand(g) % 11;
     if (g->cur_floor > 6) gain += game_rand(g) % 4;
-    unsigned hp = (unsigned)p->hp_cur + (unsigned)gain;
-    p->hp_cur = (u16)(hp > p->hp_max ? p->hp_max : hp);
+    uint64_t hp = (uint64_t)mw_hp_cur(p) + (unsigned)gain;
+    mw_set_hp_cur(p, hp > mw_hp_max(p) ? mw_hp_max(p) : hp);
     town_message(g, p, "YOU FOUND A CUP OF HEALTH!",
                  "YOU DRINK THE WONDERFUL LIQUID",
                  "AND GAIN A FEW HEALTH POINTS.", 10);
@@ -4297,17 +4558,29 @@ static void reward_spell_orb(Game *g, Character *p) {
                  "A SPELL POINT.", 11);
 }
 
+static void reward_find_pause(Game *g, Character *p) {
+    /* WORLD func_21F9C calls far_022A2(0x2EE), then shows only
+       "YOU FIND...", and calls far_022A2(0xBB8) before clearing the pane
+       for the actual result: 750 ms of lead-in plus a 3000 ms reveal hold. */
+    SDL_Delay(0x2EE);
+    town_pane_begin(g, p);
+    town_pane_text(g, 0, "YOU FIND...", 8);
+    video_present(&g->video);
+    SDL_Delay(0xBB8);
+}
+
 static void reward_misc_stage(Game *g, Character *p, int depth) {
     if (p->class_id == CLASS_MONK) return;
     if (reward_random_below(g, 950) >= depth + 40 ||
         reward_random_below(g, 20) >= depth) return;
+    reward_find_pause(g, p);
     if (game_rand(g) & 1) {
-        town_message(g, p, "YOU FIND...", "NOTHING!", "", 8);
+        town_message(g, p, "NOTHING!", "", "", 8);
         return;
     }
     char loot[160];
     award_random_magic_item(g, p, loot, sizeof(loot));
-    town_message(g, p, "YOU FIND...", loot, "HIT 'I' TO USE MAGIC ITEMS.", 14);
+    town_message(g, p, loot, "HIT 'I' TO USE MAGIC ITEMS.", "", 14);
 }
 
 static void reward_spell_item_stage(Game *g, Character *p, int depth) {
@@ -4328,10 +4601,94 @@ static void reward_spell_item_stage(Game *g, Character *p, int depth) {
                  description, 14);
 }
 
-static void grant_battle_rewards(Game *g, Character *p, const CombatState *cs) {
+/* MW_EXTENSION: super-rare Enhanced relics are an additional final random
+ * treasure stage.  They never replace or reorder WORLD's original rewards,
+ * never duplicate, and cannot enter a Classic character's inventory. */
+static void reward_relic_stage(Game *g, Character *p, int depth,
+                               const CombatState *cs) {
+    if (mw_experience_mode(p) != MW_EXPERIENCE_ENHANCED || depth < 350)
+        return;
+    int eligible[MW_RELIC_COUNT];
+    int eligible_count = 0;
+    for (int relic = 0; relic < MW_RELIC_COUNT; relic++)
+        if (depth >= enhanced_relics[relic].minimum_floor &&
+            !mw_relic_owned(p, relic))
+            eligible[eligible_count++] = relic;
+    if (!eligible_count) return;
+
+    /* Roughly one roll in 4,200 at the first eligible floor, improving to
+       one in ~2,250 at floor 1,000.  Quest bosses receive six rolls' worth
+       of opportunity but still do not guarantee a relic. */
+    int rarity = 4200 - (depth - 350) * 3;
+    if (rarity < 1800) rarity = 1800;
+    if (monster_types[cs->monster_type_idx].boss) {
+        rarity /= 6;
+        if (rarity < 250) rarity = 250;
+    }
+    if (reward_random_below(g, rarity) != 0) return;
+
+    int relic = eligible[reward_random_below(g, eligible_count)];
+    if (!grant_enhanced_relic(p, relic)) return;
+    town_message(g, p, "YOU FOUND A SUPER-RARE RELIC!",
+                 enhanced_relics[relic].name,
+                 enhanced_relics[relic].effect, 11);
+}
+
+static void reward_late_gear_stage(Game *g, Character *p, int depth) {
+    /* Boss-linked tiers are awarded by grant_quest_reward.  The two
+       intermediate forge caches fill the progression gaps at 825 and 950. */
+    static const int forge_tier[2] = {4, 6};
+    for (int i = 0; i < 2; i++) {
+        int tier = forge_tier[i];
+        if (depth < late_gear_floor[tier] || !grant_late_gear(p, tier))
+            continue;
+        char gear[128];
+        snprintf(gear, sizeof(gear), "%s AND %s UNLOCKED!",
+                 weapon_stats[12 + tier].name,
+                 combat_armor_name(8 + tier));
+        town_message(g, p, "YOU DISCOVER A DEEP FORGE CACHE!", gear,
+                     "HIT 'W' OR 'A', THEN PAGE DOWN, TO EQUIP THEM.", 11);
+    }
+}
+
+static void reward_deep_spell_stage(Game *g, Character *p, int depth) {
+    if (mw_experience_mode(p) != MW_EXPERIENCE_ENHANCED) return;
+    int first = -1;
+    int last = -1;
+    for (int deep = 0; deep < MW_DEEP_SPELL_COUNT; deep++) {
+        if (depth < deep_spell_unlock_floor[deep] ||
+            (mw_deep_spell_unlocks(p) & (1u << deep)))
+            continue;
+        mw_unlock_deep_spell_tier(p, deep);
+        if (first < 0) first = deep;
+        last = deep;
+    }
+    if (first < 0) return;
+    char line[128];
+    if (first == last)
+        snprintf(line, sizeof(line),
+                 "DEEP SPELL TIER %d (LEVEL %d MAGIC) UNLOCKED!",
+                 first + 1, (MW_DEEP_SPELL_FIRST + first) / 3 + 1);
+    else
+        snprintf(line, sizeof(line),
+                 "DEEP SPELL TIERS %d THROUGH %d UNLOCKED!",
+                 first + 1, last + 1);
+    town_message(g, p, "YOUR JOURNEY REVEALS DEEPER MAGIC!",
+                 line, "ALL FOUR SPELL FAMILIES HAVE GROWN.", 11);
+}
+
+static int battle_reward_experience(const Character *p,
+                                    const CombatState *cs) {
     const MonsterType *mt = &monster_types[cs->monster_type_idx];
-    int xp = cs->monster_level * mt->hpF + mt->atk + mt->def;
-    if (xp < 1) xp = 1;
+    int64_t value = (int64_t)cs->monster_level * mt->hpF + mt->atk + mt->def;
+    if (value < 1) value = 1;
+    if (mw_relic_owned(p, MW_RELIC_SAGE_PRISM))
+        value += (value + 3) / 4;
+    return value > INT_MAX ? INT_MAX : (int)value;
+}
+
+static void grant_battle_rewards(Game *g, Character *p, const CombatState *cs) {
+    int xp = battle_reward_experience(p, cs);
     if (!isfinite(p->experience) || p->experience < 0.0) p->experience = 0.0;
     p->experience += (double)xp;
     int depth = g->cur_floor;
@@ -4349,6 +4706,9 @@ static void grant_battle_rewards(Game *g, Character *p, const CombatState *cs) {
     reward_spell_orb(g, p);
     reward_misc_stage(g, p, depth);
     reward_spell_item_stage(g, p, depth);
+    reward_relic_stage(g, p, depth, cs);
+    reward_deep_spell_stage(g, p, depth);
+    reward_late_gear_stage(g, p, depth);
 
     char quest[128] = "";
     p->floor_depth = (u16)g->cur_floor;
@@ -4386,6 +4746,40 @@ int game_economy_self_test(void) {
         seen |= 1 << award_spell_item(&g, &p, 200, source,
                                      loot, sizeof(loot));
     if (seen != 0x7) failures++;
+    memset(p.scrolls, 0, sizeof(p.scrolls));
+    memset(p.wands, 0, sizeof(p.wands));
+    memset(p.papers, 0, sizeof(p.papers));
+    mw_set_experience_mode(&p, MW_EXPERIENCE_ENHANCED);
+    for (int source = 0; source < 3; source++)
+        for (int i = 0; i < 256; i++)
+            award_spell_item(&g, &p, 1000, source,
+                             loot, sizeof(loot));
+    int deep_source_found[3] = {0, 0, 0};
+    for (int category = 0; category < 4; category++)
+        for (int spell = MW_DEEP_SPELL_FIRST;
+             spell < MW_ENHANCED_SPELL_COUNT; spell++) {
+            deep_source_found[0] |= p.scrolls[category][spell] != 0;
+            deep_source_found[1] |= p.wands[category][spell] != 0;
+            deep_source_found[2] |= p.papers[category][spell] != 0;
+        }
+    if (!deep_source_found[0] || !deep_source_found[1] ||
+        !deep_source_found[2])
+        failures++;
+    memset(p.scrolls, 0, sizeof(p.scrolls));
+    memset(p.wands, 0, sizeof(p.wands));
+    memset(p.papers, 0, sizeof(p.papers));
+    mw_set_experience_mode(&p, MW_EXPERIENCE_CLASSIC);
+    for (int source = 0; source < 3; source++)
+        for (int i = 0; i < 256; i++)
+            award_spell_item(&g, &p, 1000, source,
+                             loot, sizeof(loot));
+    for (int category = 0; category < 4; category++)
+        for (int spell = MW_DEEP_SPELL_FIRST;
+             spell < MW_ENHANCED_SPELL_COUNT; spell++)
+            if (p.scrolls[category][spell] ||
+                p.wands[category][spell] ||
+                p.papers[category][spell])
+                failures++;
 
     RewardStones pile = {{200, 12, 4, 2, 1, 1}};
     unsigned long long pile_value = pile.amount[0] / 200u +
@@ -4436,24 +4830,32 @@ int game_economy_self_test(void) {
         Character hero = {0};
         CombatState boss = {0};
         char reward[160] = "";
+        mw_set_experience_mode(&hero, MW_EXPERIENCE_ENHANCED);
         hero.equipped_weapon = 1;
         hero.floor_depth = 375;
         boss.monster_type_idx = 112;
         boss.monster_level = 375;
         grant_quest_reward(&hero, &boss, reward, sizeof(reward));
         if (mw_weapon_enchant(&hero, 1) != 200 ||
-            !(mw_quest_flags(&hero) & (1u << 8)) || !strstr(reward, "PLUS 200"))
+            !(mw_quest_flags(&hero) & (1u << 8)) ||
+            mw_weapon_inventory_count(&hero, 12) != 1 ||
+            mw_armor_inventory_count(&hero, 8) != 1 ||
+            !strstr(reward, "PLUS 200"))
             failures++;
         hero.floor_depth = 500;
         boss.monster_type_idx = 113;
         boss.monster_level = 500;
         grant_quest_reward(&hero, &boss, reward, sizeof(reward));
         if (mw_weapon_enchant(&hero, 1) != 300 ||
-            !(mw_quest_flags(&hero) & (1u << 9)) || !strstr(reward, "PLUS 300"))
+            !(mw_quest_flags(&hero) & (1u << 9)) ||
+            mw_weapon_inventory_count(&hero, 13) != 1 ||
+            mw_armor_inventory_count(&hero, 9) != 1 ||
+            !strstr(reward, "PLUS 300"))
             failures++;
         static const int deep_floor[4] = {625, 750, 875, 1000};
         static const int deep_type[4] = {174, 175, 176, 177};
         static const int deep_orb[4] = {450, 600, 800, 1000};
+        static const int deep_gear_tier[4] = {2, 3, 5, 7};
         for (int i = 0; i < 4; i++) {
             hero.floor_depth = (u16)deep_floor[i];
             boss.monster_type_idx = deep_type[i];
@@ -4463,9 +4865,68 @@ int game_economy_self_test(void) {
             snprintf(amount, sizeof(amount), "PLUS %d", deep_orb[i]);
             if (mw_weapon_enchant(&hero, 1) != deep_orb[i] ||
                 !(mw_quest_flags(&hero) & (1u << (10 + i))) ||
+                mw_weapon_inventory_count(
+                    &hero, 12 + deep_gear_tier[i]) != 1 ||
+                mw_armor_inventory_count(
+                    &hero, 8 + deep_gear_tier[i]) != 1 ||
                 !strstr(reward, amount))
                 failures++;
         }
+        for (int deep = 0; deep < MW_DEEP_SPELL_COUNT; deep++)
+            mw_unlock_deep_spell_tier(&hero, deep);
+        if (mw_deep_spell_unlocks(&hero) !=
+            (u16)((1u << MW_DEEP_SPELL_COUNT) - 1u))
+            failures++;
+        for (int category = 0; category < 4; category++)
+            if (!hero.spells[category][MW_ENHANCED_SPELL_COUNT - 1])
+                failures++;
+    }
+    {
+        Character final_hero = {0};
+        mw_set_experience_mode(&final_hero, MW_EXPERIENCE_ENHANCED);
+        if (grant_final_gear(&final_hero, 949) ||
+            mw_weapon_inventory_count(&final_hero, 18) ||
+            mw_armor_inventory_count(&final_hero, 14))
+            failures++;
+        if (!grant_final_gear(&final_hero, 950) ||
+            mw_weapon_inventory_count(&final_hero, 18) != 1 ||
+            mw_armor_inventory_count(&final_hero, 14) != 1 ||
+            !(mw_quest_flags(&final_hero) & MW_FINAL_GEAR_QUEST_FLAG) ||
+            grant_final_gear(&final_hero, 1000))
+            failures++;
+        Character classic_final = {0};
+        mw_set_experience_mode(&classic_final, MW_EXPERIENCE_CLASSIC);
+        if (grant_final_gear(&classic_final, 1000) ||
+            mw_weapon_inventory_count(&classic_final, 18) ||
+            mw_armor_inventory_count(&classic_final, 14))
+            failures++;
+    }
+    {
+        Character relic_hero = {0};
+        CombatState target = {0};
+        target.monster_type_idx = 0;
+        target.monster_level = 400;
+        int plain_xp = battle_reward_experience(&relic_hero, &target);
+        mw_set_experience_mode(&relic_hero, MW_EXPERIENCE_ENHANCED);
+        for (int relic = 0; relic < MW_RELIC_COUNT; relic++) {
+            if (!grant_enhanced_relic(&relic_hero, relic) ||
+                grant_enhanced_relic(&relic_hero, relic))
+                failures++;
+        }
+        if (mw_relic_count(&relic_hero) != MW_RELIC_COUNT ||
+            battle_reward_experience(&relic_hero, &target) !=
+                plain_xp + (plain_xp + 3) / 4)
+            failures++;
+        Character classic_relic = {0};
+        mw_set_experience_mode(&classic_relic, MW_EXPERIENCE_CLASSIC);
+        if (grant_enhanced_relic(&classic_relic,
+                                 MW_RELIC_ARCANE_RING) ||
+            mw_relic_count(&classic_relic))
+            failures++;
+        for (int relic = 1; relic < MW_RELIC_COUNT; relic++)
+            if (enhanced_relics[relic].minimum_floor <=
+                enhanced_relics[relic - 1].minimum_floor)
+                failures++;
     }
     failures += character_creation_self_test();
     failures += game_weight_self_test();
@@ -4522,12 +4983,61 @@ static void bestiary_floor_text(int type, char *out, size_t out_size) {
     }
     int min_floor = mt->minL < 1 ? 1 : mt->minL;
     int max_floor = combat_monster_max_floor(type);
+    if (type < DEEP_MONSTER_FIRST && max_floor > CLASSIC_DUNGEON_FLOOR)
+        max_floor = CLASSIC_DUNGEON_FLOOR;
     if (min_floor > max_floor)
         snprintf(out, out_size, "FLOORS: NOT IN RANDOM SPAWNS");
     else if (min_floor == max_floor)
         snprintf(out, out_size, "FLOOR: %d", min_floor);
     else
         snprintf(out, out_size, "FLOORS: %d-%d", min_floor, max_floor);
+}
+
+typedef struct BestiaryAverages {
+    int minimum_level;
+    int maximum_level;
+    double average_level;
+    double average_hp;
+    int maximum_hp_at_average_level;
+} BestiaryAverages;
+
+/* MON.MAP generation rolls floor-2 through floor+2 (clamped at level one),
+   then rolls HP uniformly from one through that level's HP cap.  Reporting
+   those actual distributions is more useful than exposing only hpF. */
+static BestiaryAverages bestiary_average_stats(int type) {
+    BestiaryAverages result = {INT_MAX, 0, 0.0, 0.0, 0};
+    const MonsterType *mt = &monster_types[type];
+    int quest_step = quest_step_for_type(type);
+    int first_floor = quest_step >= 0 ? quest_floor_by_step[quest_step] :
+                      (mt->minL < 1 ? 1 : mt->minL);
+    int last_floor = quest_step >= 0 ? first_floor :
+                     combat_monster_max_floor(type);
+    if (quest_step < 0 && type < DEEP_MONSTER_FIRST &&
+        last_floor > CLASSIC_DUNGEON_FLOOR)
+        last_floor = CLASSIC_DUNGEON_FLOOR;
+    uint64_t level_total = 0;
+    double hp_total = 0.0;
+    uint64_t samples = 0;
+    if (last_floor < first_floor) last_floor = first_floor;
+    for (int floor = first_floor; floor <= last_floor; floor++)
+        for (int jitter = -2; jitter <= 2; jitter++) {
+            int level = floor + jitter;
+            if (level < 1) level = 1;
+            int hp_cap = combat_calc_monster_hp(mt, level);
+            if (level < result.minimum_level) result.minimum_level = level;
+            if (level > result.maximum_level) result.maximum_level = level;
+            level_total += (unsigned)level;
+            hp_total += ((double)hp_cap + 1.0) / 2.0;
+            samples++;
+        }
+    if (!samples) samples = 1;
+    result.average_level = (double)level_total / (double)samples;
+    result.average_hp = hp_total / (double)samples;
+    int rounded_level = (int)(result.average_level + 0.5);
+    result.maximum_hp_at_average_level =
+        combat_calc_monster_hp(mt, rounded_level);
+    if (result.minimum_level == INT_MAX) result.minimum_level = 1;
+    return result;
 }
 
 static void draw_bestiary_fullscreen(Game *g, int type) {
@@ -4617,38 +5127,56 @@ static void draw_bestiary_page(Game *g, int selected) {
                            350, NULL, get_monster_color_ext(selected_type),
                            get_monster_tint_ext(selected_type));
 
-        int y = 390;
+        BestiaryAverages average = bestiary_average_stats(selected_type);
+        int y = 375;
+        const int step = 25;
         bestiary_floor_text(selected_type, line, sizeof(line));
-        video_draw_text_scaled(v, 430, y, line, 10, 3, 4); y += 32;
+        video_draw_text_scaled(v, 430, y, line, 10, 3, 4); y += step;
         snprintf(line, sizeof(line), "KILLED: %u",
                  g->bestiary_kills[selected_type]);
-        video_draw_text_scaled(v, 430, y, line, 15, 3, 4); y += 32;
+        video_draw_text_scaled(v, 430, y, line, 15, 3, 4); y += step;
+        snprintf(line, sizeof(line), "AVERAGE LEVEL: %.1f",
+                 average.average_level);
+        video_draw_text_scaled(v, 430, y, line, 11, 3, 4); y += step;
+        snprintf(line, sizeof(line), "LEVEL RANGE: %d-%d",
+                 average.minimum_level, average.maximum_level);
+        video_draw_text_scaled(v, 430, y, line, 11, 3, 4); y += step;
+        snprintf(line, sizeof(line), "AVERAGE SPAWN HP: %.1f",
+                 average.average_hp);
+        video_draw_text_scaled(v, 430, y, line, 10, 3, 4); y += step;
+        snprintf(line, sizeof(line), "MAX HP AT AVG LEVEL: %d",
+                 average.maximum_hp_at_average_level);
+        video_draw_text_scaled(v, 430, y, line, 10, 3, 4); y += step;
         snprintf(line, sizeof(line), "DEFENSE: %d       ATTACK: %d",
                  mt->def, mt->atk);
-        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += 32;
+        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += step;
         snprintf(line, sizeof(line), "DAMAGE: %d        AGILITY: %d",
                  mt->dmg, mt->agi);
-        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += 32;
+        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += step;
         snprintf(line, sizeof(line), "DEFENSE MOD: %d   HP FACTOR: %d",
                  mt->defMod, mt->hpF);
-        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += 32;
+        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += step;
         snprintf(line, sizeof(line), "IMMUNITY: %u      SAVES: %u / %u",
                  mt->imm, mt->saveA, mt->saveB);
-        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += 32;
-        snprintf(line, sizeof(line), "BOSS: %s", mt->boss ? "YES" : "NO");
+        video_draw_text_scaled(v, 430, y, line, 7, 3, 4); y += step;
+        int drain = combat_monster_drain_amount(selected_type);
+        snprintf(line, sizeof(line), "BOSS: %s       LEVEL DRAIN: %d",
+                 mt->boss ? "YES" : "NO", drain);
         video_draw_text_scaled(v, 430, y, line, mt->boss ? 12 : 7, 3, 4);
-        video_draw_text_scaled(v, 430, 636,
-                               "HP: 1 TO (HP FACTOR X MONSTER LEVEL)", 8,
-                               3, 4);
-        if (mt->boss)
-            video_draw_text_scaled(v, 430, 663,
-                                   "BOSS BONUS: +20 HP X MONSTER LEVEL", 8,
-                                   3, 4);
+        y += step;
+        int spell_chance = combat_monster_spell_chance(selected_type);
+        if (spell_chance)
+            snprintf(line, sizeof(line), "MAGIC: %s (1 IN %d RESPONSES)",
+                     combat_monster_spell_name(selected_type), spell_chance);
+        else
+            snprintf(line, sizeof(line), "MAGIC: NONE");
+        video_draw_text_scaled(v, 430, y, line,
+                               spell_chance ? 3 : 7, 3, 4);
     }
 
     video_hline(v, 4, LOGICAL_H - 42, LOGICAL_W - 8, 8);
     video_draw_text_scaled(v, 10, LOGICAL_H - 34,
-                           "UP/DOWN SELECT  PGUP/PGDN PAGE  F FULLSCREEN  CTRL-F12 UNLOCK ALL  ESC RETURN",
+                           "UP/DOWN SELECT  PGUP/PGDN PAGE  F FULLSCREEN  ESC RETURN",
                            15, 3, 4);
 }
 
@@ -4689,6 +5217,7 @@ static int game_door_encounter_self_test(Game *g) {
     int open_x = -1, open_y = -1, open_d = -1;
     int saved_floor = g->cur_floor;
     int saved_x = g->cur_x, saved_y = g->cur_y;
+    int saved_noclip = g->cheat_noclip;
     int saved_loaded = g->monster_map_loaded;
     int saved_layer = g->monster_layer;
     int test_layer = 0;
@@ -4717,6 +5246,7 @@ static int game_door_encounter_self_test(Game *g) {
            sizeof(g->monster_map[test_layer]));
     g->monster_map_loaded = 1;
     g->monster_layer = test_layer;
+    g->cheat_noclip = 0;
     if (door_d < 0 || secret_d < 0 || open_d < 0) {
         failures++;
     } else {
@@ -4728,6 +5258,7 @@ static int game_door_encounter_self_test(Game *g) {
         m->type = 0; m->level = 1;
         if (!game_can_move(g, door_x, door_y, m->x, m->y) ||
             game_find_monster(g, m->x, m->y) != 0 ||
+            game_find_engaged_monster_in_direction(g, door_d) >= 0 ||
             game_find_adjacent_monster(g) >= 0 ||
             actor_cell_visible(g, m->x, m->y))
             failures++;
@@ -4740,6 +5271,7 @@ static int game_door_encounter_self_test(Game *g) {
         m->y = (u8)(secret_y + dy[secret_d]);
         if (!game_can_move(g, secret_x, secret_y, m->x, m->y) ||
             game_find_monster(g, m->x, m->y) != 0 ||
+            game_find_engaged_monster_in_direction(g, secret_d) >= 0 ||
             game_find_adjacent_monster(g) >= 0 ||
             actor_cell_visible(g, m->x, m->y))
             failures++;
@@ -4748,8 +5280,17 @@ static int game_door_encounter_self_test(Game *g) {
         m->x = (u8)(open_x + dx[open_d]);
         m->y = (u8)(open_y + dy[open_d]);
         if (!game_can_move(g, open_x, open_y, m->x, m->y) ||
+            game_find_engaged_monster_in_direction(g, open_d) != 0 ||
             game_find_adjacent_monster(g) != 0 ||
             !actor_cell_visible(g, m->x, m->y))
+            failures++;
+        Character walker;
+        memset(&walker, 0, sizeof(walker));
+        mw_set_hp_max(&walker, 10);
+        mw_set_hp_cur(&walker, 10);
+        if (game_try_step(g, &walker, open_d) != 0 ||
+            g->cur_x != open_x || g->cur_y != open_y ||
+            game_monster_hp(g, 0) != 1)
             failures++;
     }
 
@@ -4758,6 +5299,7 @@ static int game_door_encounter_self_test(Game *g) {
     g->monster_layer = saved_layer;
     g->cur_floor = saved_floor;
     g->cur_x = saved_x; g->cur_y = saved_y;
+    g->cheat_noclip = saved_noclip;
     return failures;
 }
 
@@ -4876,7 +5418,7 @@ static int character_apply_raise_contract(Character *p,
     p->raise_x = 0xFFFFu;
     if (p->stat_con > 1) p->stat_con--;
     character_clear_battle_effects(p);
-    p->hp_cur = p->hp_max;
+    mw_set_hp_cur(p, mw_hp_max(p));
     p->sp_cur = p->sp_max;
     return 1;
 }
@@ -4897,12 +5439,13 @@ static int game_death_recovery_self_test(void) {
     if (!character_apply_raise_contract(&p, &floor, &x, &y) ||
         floor != 77 || x != 12 || y != 34 ||
         p.raise_x != 0xFFFFu || p.stat_con != 8 ||
-        p.hp_cur != p.hp_max || p.sp_cur != p.sp_max ||
+        mw_hp_cur(&p) != mw_hp_max(&p) || p.sp_cur != p.sp_max ||
         p.eff_battle_str != 0 || p.eff_hold_monster != 0)
         failures++;
 
-    p.hp_cur = 0;
-    if (character_apply_raise_contract(&p, &floor, &x, &y) || p.hp_cur != 0)
+    mw_set_hp_cur(&p, 0);
+    if (character_apply_raise_contract(&p, &floor, &x, &y) ||
+        mw_hp_cur(&p) != 0)
         failures++;
 
     memset(&p, 0, sizeof(p));
@@ -4921,7 +5464,7 @@ static int game_death_recovery_self_test(void) {
      * corrupt or edited Classic save to re-enter an Enhanced-only floor. */
     memset(&p, 0, sizeof(p));
     mw_set_experience_mode(&p, MW_EXPERIENCE_CLASSIC);
-    p.hp_max = 20;
+    mw_set_hp_max(&p, 20);
     p.sp_max = 10.0f;
     p.raise_floor = 251;
     p.raise_x = 10;
@@ -4931,7 +5474,7 @@ static int game_death_recovery_self_test(void) {
 
     memset(&p, 0, sizeof(p));
     mw_set_experience_mode(&p, MW_EXPERIENCE_ENHANCED);
-    p.hp_max = 20;
+    mw_set_hp_max(&p, 20);
     p.sp_max = 10.0f;
     p.raise_floor = 777;
     p.raise_x = 10;
@@ -4943,10 +5486,15 @@ static int game_death_recovery_self_test(void) {
 }
 
 int game_ui_self_test(Game *g) {
-    static const int expected[12][2] = {
+    static const int expected_classic[12][2] = {
         {'b','m'}, {'w','v'}, {'z','c'}, {'i','x'},
         {'a','l'}, {'f','p'}, {'t','e'}, {'o','o'},
         {'j','g'}, {'1','1'}, {'2','2'}, {'q','h'}
+    };
+    static const int expected_enhanced[13][2] = {
+        {'b','m'}, {'w','v'}, {'z','c'}, {'i','x'},
+        {'a','l'}, {'f','p'}, {'t','e'}, {'o','o'},
+        {'j','g'}, {'1','1'}, {'2','2'}, {'3','3'}, {'q','h'}
     };
     int failures = 0;
     int catalog_count = 0;
@@ -4964,6 +5512,19 @@ int game_ui_self_test(Game *g) {
         bestiary_type_at_catalog_index(130) != 146 ||
         bestiary_type_at_catalog_index(159) != 173)
         failures++;
+    {
+        BestiaryAverages quest = bestiary_average_stats(112);
+        BestiaryAverages ordinary = bestiary_average_stats(0);
+        if (quest.minimum_level != 373 || quest.maximum_level != 377 ||
+            quest.average_level != 375.0 ||
+            quest.average_hp <= 0.0 ||
+            quest.maximum_hp_at_average_level < quest.average_hp ||
+            ordinary.minimum_level != 1 ||
+            ordinary.maximum_level <= ordinary.minimum_level ||
+            ordinary.average_level <= 1.0 ||
+            ordinary.average_hp <= 0.0)
+            failures++;
+    }
     {
         int saved_floor = g->cur_floor;
         int saved_max_floor = g->dungeon_max_floor;
@@ -5090,6 +5651,14 @@ int game_ui_self_test(Game *g) {
         failures++;
     if (input_sdl_to_dos(SDLK_F10, KMOD_CTRL) != INPUT_NOCLIP_TOGGLE)
         failures++;
+    if (input_sdl_to_dos(SDLK_F12,
+            (SDL_Keymod)(KMOD_LCTRL | KMOD_LSHIFT | KMOD_LALT)) !=
+        INPUT_MAX_CHARACTER ||
+        input_sdl_to_dos(SDLK_F12,
+            (SDL_Keymod)(KMOD_RCTRL | KMOD_RSHIFT | KMOD_RALT)) !=
+        INPUT_MAX_CHARACTER ||
+        input_sdl_to_dos(SDLK_F12, KMOD_LCTRL) != INPUT_TRAINER)
+        failures++;
     if (input_sdl_to_dos(SDLK_F5, KMOD_NONE) != -0x3F ||
         input_sdl_to_dos(SDLK_F6, KMOD_NONE) != -0x40 ||
         input_sdl_to_dos(SDLK_F10, KMOD_NONE) != -0x44)
@@ -5106,22 +5675,35 @@ int game_ui_self_test(Game *g) {
     failures += game_death_recovery_self_test();
 
     const int menu_x = SX(0x48C);
-    const int spacing = SY(35);
     int adv = g->video.font_advance ? g->video.font_advance
                                     : g->video.font_char_w;
     int scaled_advance = adv * 7 / 6;
-    for (int row = 0; row < 12; row++) {
-        for (int col = 0; col < 2; col++) {
-            float logical_x = (float)(menu_x + scaled_advance *
-                                      (col ? 12 : 2));
-            float logical_y = (float)(row * spacing + 4);
-            int window_x, window_y;
-            SDL_RenderLogicalToWindow(g->video.renderer, logical_x, logical_y,
-                                      &window_x, &window_y);
-            if (command_menu_click_key(g, window_x, window_y) !=
-                expected[row][col])
-                failures++;
+    {
+        int saved_max_floor = g->dungeon_max_floor;
+        for (int enhanced = 0; enhanced <= 1; enhanced++) {
+            g->dungeon_max_floor = enhanced ? MAX_DUNGEON_FLOOR :
+                                              CLASSIC_DUNGEON_FLOOR;
+            int row_count = enhanced ? 13 : 12;
+            int spacing = SY(enhanced ? 33 : 35);
+            for (int row = 0; row < row_count; row++) {
+                for (int col = 0; col < 2; col++) {
+                    float logical_x = (float)(menu_x + scaled_advance *
+                                              (col ? 12 : 2));
+                    float logical_y = (float)(row * spacing + 4);
+                    int window_x, window_y;
+                    SDL_RenderLogicalToWindow(g->video.renderer,
+                                              logical_x, logical_y,
+                                              &window_x, &window_y);
+                    int expected = enhanced ?
+                        expected_enhanced[row][col] :
+                        expected_classic[row][col];
+                    if (command_menu_click_key(g, window_x, window_y) !=
+                        expected)
+                        failures++;
+                }
+            }
         }
+        g->dungeon_max_floor = saved_max_floor;
     }
     {
         static const int direction[4] = {0, 1, 2, 3};
@@ -5147,6 +5729,117 @@ int game_ui_self_test(Game *g) {
         g->view_mode = saved_mode;
         g->input.last_mouse_x = saved_x;
         g->input.last_mouse_y = saved_y;
+    }
+    {
+        /* Ctrl+F8 must require an explicit affirmative answer.  Test both
+           cases through the same blocking input path used during play. */
+        Input saved_input = g->input;
+        Character prompt_player = {0};
+        prompt_player.hp_cur = prompt_player.hp_max = 100;
+        prompt_player.sp_cur = prompt_player.sp_max = 50.0f;
+        prompt_player.floor_depth = (u16)g->cur_floor;
+        g->input.head = g->input.tail = 0;
+        g->input.quit_requested = 0;
+        g->input.keys[g->input.tail] = 'N';
+        g->input.tail = (g->input.tail + 1) % KEY_QUEUE_SIZE;
+        if (confirm_town_teleport(g, &prompt_player)) failures++;
+        g->input.keys[g->input.tail] = 'Y';
+        g->input.tail = (g->input.tail + 1) % KEY_QUEUE_SIZE;
+        if (!confirm_town_teleport(g, &prompt_player)) failures++;
+        g->input = saved_input;
+    }
+    {
+        Character maxed = {0};
+        maxed.class_id = CLASS_WIZARD;
+        maxed.jewels_pocket = 1234567;
+        mw_set_experience_mode(&maxed, MW_EXPERIENCE_ENHANCED);
+        game_max_character(g, &maxed);
+        if (maxed.level != MW_PLAYER_LEVEL_MAX ||
+            mw_hp_cur(&maxed) != MW_PLAYER_HP_MAX ||
+            mw_hp_max(&maxed) != MW_PLAYER_HP_MAX ||
+            maxed.sp_cur != MW_PLAYER_SP_MAX ||
+            maxed.sp_max != MW_PLAYER_SP_MAX ||
+            maxed.stat_str != MW_PLAYER_STAT_MAX ||
+            maxed.stat_luck != MW_PLAYER_STAT_MAX ||
+            maxed.jewels_pocket != 1234567 ||
+            maxed.jewel_stones != UINT32_MAX ||
+            game_loaded_weight(&maxed) != 0 ||
+            !mw_universal_access(&maxed) ||
+            !combat_weapon_allowed(&maxed, WEAPON_STAT_COUNT - 1) ||
+            !combat_armor_allowed(&maxed, ARMOR_STAT_COUNT - 1) ||
+            mw_weapon_inventory_count(
+                &maxed, WEAPON_STAT_COUNT - 1) != UINT8_MAX ||
+            mw_armor_inventory_count(
+                &maxed, ARMOR_STAT_COUNT - 1) != UINT8_MAX ||
+            maxed.native.late_gear_unlocks != UINT8_MAX ||
+            mw_deep_spell_unlocks(&maxed) !=
+                (u16)((1u << MW_DEEP_SPELL_COUNT) - 1u) ||
+            maxed.spells[3][MW_ENHANCED_SPELL_COUNT - 1] != 1 ||
+            maxed.wands[3][MW_ENHANCED_SPELL_COUNT - 1] != UINT8_MAX ||
+            maxed.trapdoor_keys[17] != 1 ||
+            maxed.eff_str_bonus != 60 ||
+            maxed.eff_agi_bonus != 60 ||
+            maxed.eff_super_str != 60 ||
+            maxed.eff_super_agi != 60 ||
+            maxed.eff_battle_str != UINT16_MAX ||
+            maxed.eff_battle_spd != UINT16_MAX ||
+            maxed.eff_protect_lv != 8 ||
+            maxed.poisoned_turns != 0 || maxed.diseased_turns != 0)
+            failures++;
+
+        /* Max-effect sentinels must not expire or reverse already-capped
+           attributes during ordinary turn, combat, or inn cleanup. */
+        character_tick_effects(g, &maxed);
+        character_clear_battle_effects(&maxed);
+        character_clear_town_effects(&maxed);
+        if (maxed.stat_str != MW_PLAYER_STAT_MAX ||
+            maxed.stat_agi != MW_PLAYER_STAT_MAX ||
+            game_loaded_weight(&maxed) != 0 ||
+            maxed.eff_str_bonus != 60 ||
+            maxed.eff_agi_bonus != 60 ||
+            maxed.eff_super_str != 60 ||
+            maxed.eff_super_agi != 60 ||
+            maxed.eff_battle_str != UINT16_MAX ||
+            maxed.eff_battle_spd != UINT16_MAX)
+            failures++;
+
+        Character classic = {0};
+        classic.class_id = CLASS_WIZARD;
+        mw_set_experience_mode(&classic, MW_EXPERIENCE_CLASSIC);
+        game_max_character(g, &classic);
+        if (mw_hp_cur(&classic) != INT16_MAX ||
+            classic.green_pill != INT8_MAX ||
+            game_loaded_weight(&classic) != 0 ||
+            !mw_universal_access(&classic) ||
+            !combat_weapon_allowed(&classic, 7) ||
+            !combat_armor_allowed(&classic, 7) ||
+            combat_weapon_allowed(&classic, 12) ||
+            combat_armor_allowed(&classic, 8) ||
+            mw_weapon_inventory_count(&classic, 12) != 0 ||
+            classic.spells[0][MW_ORIGINAL_SPELL_COUNT - 1] != 1 ||
+            classic.spells[0][MW_ORIGINAL_SPELL_COUNT] != 0 ||
+            classic.eff_str_bonus != 60 ||
+            classic.eff_super_agi != 60 ||
+            classic.eff_battle_str != INT16_MAX ||
+            classic.eff_battle_spd != INT16_MAX ||
+            (mw_quest_flags(&classic) & MW_FINAL_GEAR_QUEST_FLAG))
+            failures++;
+    }
+    {
+        /* The destructive max shortcut uses the same explicit Y/N gate as
+           the town teleport and dungeon reroll debug controls. */
+        Input saved_input = g->input;
+        Character prompt_player = {0};
+        prompt_player.hp_cur = prompt_player.hp_max = 100;
+        g->input.head = g->input.tail = 0;
+        g->input.quit_requested = 0;
+        g->input.keys[g->input.tail] = 'N';
+        g->input.tail = (g->input.tail + 1) % KEY_QUEUE_SIZE;
+        if (confirm_max_character(g, &prompt_player)) failures++;
+        g->input.keys[g->input.tail] = 'Y';
+        g->input.tail = (g->input.tail + 1) % KEY_QUEUE_SIZE;
+        if (!confirm_max_character(g, &prompt_player)) failures++;
+        g->input = saved_input;
     }
     return failures;
 }
@@ -5214,128 +5907,161 @@ typedef struct HelpTopic {
 } HelpTopic;
 
 static const HelpTopic help_topics[] = {
-    {'A', "ARMOR (SELECT TYPE)",
+    {'A', "CHANGE ARMOR",
      "Select any armor you own. Your class limits the heaviest armor it can use. Equipped cursed armor cannot be dropped until its curse is removed."},
-    {'B', "BRICK SPEED CHANGE (4 SETTINGS)",
+    {'B', "BRICK SPEED (4 SETTINGS)",
      "Cycles the original four brick-animation speed settings and updates the dungeon-display control value."},
-    {'C', "CAST SPELL OR GET HELP ON SPELLS",
+    {'C', "CAST SPELL / SPELL HELP",
      "Choose Permanent, Preparation, Wizard Battle, or Priest Battle magic. The selector lists all ten levels at once. A spell costs one spell point per level; permanent magic is cast in town, preparation magic outside battle, and battle magic against a monster. The four Help choices explain every spell individually."},
-    {'D', "GO DOWN LADDER OR DIG HOLE",
+    {'D', "DOWN LADDER OR DIG HOLE",
      "On a downward ladder, D descends. Elsewhere it digs through the floor using the original timed sequence. Classic permits digging through floor 120; Enhanced proportionally extends it through floor 480. Deeper rock cannot be dug. U uses upward ladders and town shop ladders; K operates a keyed trap door when you carry its matching key."},
-    {'E', "EXPERIENCE NEEDED TO GAIN LEVEL",
+    {'E', "EXPERIENCE TO NEXT LEVEL",
      "Shows current experience and the exact amount required for the next level. Level gains are awarded when you use the inn."},
-    {'F', "FIGHT A MONSTER",
+    {'F', "ATTACK MONSTER",
      "Attacks an adjacent visible monster. Walking toward a monster through an open passage also engages it. A monster behind a visible or secret door remains hidden and jams that door until it moves away."},
-    {'G', "GAME STATS (CURRENT SAVE)",
+    {'G', "GAME STATS",
      "Summarizes the current dungeon seed and position, age, total recorded kills, Beastiary progress, quest bosses, keys, known pitfalls, explored cells, living floor monsters, magic inventory, equipment, weight pressure, and active runtime test modes."},
     {'H', "THIS HELP SCREEN",
      "Every highlighted help line can be clicked or selected with its shown key. Escape returns to exploration."},
-    {'I', "USE AN ITEM",
-     "Use scrolls, wands, magic paper, pills, stones, potions, floor sloshers, or the Holy Hand Grenade. Scrolls and papers are consumed; wands lose one charge. Fighters may cast only from magic paper."},
+    {'I', "USE ITEM",
+     "Use scrolls, wands, magic paper, pills, stones, potions, floor sloshers, or the Holy Hand Grenade. Scrolls and papers are consumed; wands lose one charge. Fighters may cast only from magic paper. Enhanced super-rare relics are passive and appear on the second miscellaneous Pockets page."},
     {'L', "LOSE (DROP) AN ITEM",
      "Drops armor, weapons, or an entire carried money denomination. Fists and skin are implicit and cannot be dropped. Cursed equipped gear refuses to come off."},
-    {'M', "VIEW MONEY (FINANCIAL STATUS)",
+    {'M', "VIEW MONETARY BREAKDOWN",
      "Shows jewel pieces and every stone denomination in your pockets and bank. Carried stones have weight; banked wealth and jewel pieces do not."},
-    {'O', "TOGGLE SOUND ON AND OFF",
+    {'O', "SOUND ON/OFF",
      "Toggles the original sound state and changes the command legend between ON and OFF."},
     {'P', "VIEW CONTENTS OF POCKETS",
      "Opens spellbooks, scrolls, wands, papers, miscellaneous magic items, pills, rings, body armor, and gauntlet inventory pages."},
-    {'Q', "QUIT AND SAVE GAME",
+    {'Q', "QUIT AND SAVE POSITION",
      "Writes the character, explored dungeon, monsters, pitfalls, and bestiary record, then returns to the launcher. S performs the same save without quitting."},
-    {'J', "BEASTIARY (MONSTER JOURNAL)",
+    {'J', "BEASTIARY",
      "Lists every spawnable monster as ???? until your first kill. Discovered entries show their original picture, statistics, floor range, and kill count. Press F or click the picture for a full-screen view."},
-    {'S', "SAVE AND CONTINUE PLAYING",
+    {'S', "SAVE AND CONTINUE",
      "Saves the complete current game state and immediately resumes play."},
-    {'T', "WAIT (SKIP A TURN)",
+    {'T', "WAIT",
      "Passes one player turn. Monsters move and timed battle effects, poison, and disease advance normally."},
-    {'V', "VIEW STATS",
+    {'V', "VIEW PLAYER STATISTICS",
      "Shows race, class, level, attributes, health, spell points, age, load, equipment bonuses, drains, and raise-dead contract state."},
-    {'W', "WEAPONS (SELECT TYPE)",
+    {'W', "SELECT WEAPON",
      "Equips an owned weapon permitted to your class. Damage, hit bonus, temporary spell enchantment, and permanent item enchantment all contribute in combat."},
-    {'X', "EXPAND MAP VIEW",
+    {'X', "EXPAND THE 2D MAP",
      "Displays the remembered dungeon map with exact wall and door edges, ladder directions, shops, keyed trap doors, known pitfalls, and the blinking player marker. Quest floors also show the original directional hint toward a living quest monster."},
     {'Z', "ZOOM IN ON A 3D VIEW",
      "Opens the original direction chooser. Press an arrow or click a compass viewport to expand that view across the full 1024x768 screen until another key is pressed. Press Z again in the chooser to cycle the original three four-view sizes."},
     {'1', "SHOW SPELL EFFECT PAGE 1",
      "Shows preparation and battle bonuses including strength, agility, invisibility, feather, fast movement, protection, and weapon power with their remaining state."},
     {'2', "SHOW SPELL EFFECT PAGE 2",
-     "Shows poison, disease, elemental and drain resistances, and monster hold/stop effects with their remaining turns."}
+     "Shows poison, disease, elemental and drain resistances, and monster hold/stop effects with their remaining turns."},
+    {'3', "SHOW ENHANCED EFFECT PAGE 3",
+     "Enhanced only. Shows automatic regeneration, protection, anti-magic, body armor, gauntlet, and every owned passive relic. Arcane Renewal reports actions until its next spell point; Phoenix Seal reports ready or its exact recharge time."}
 };
 
-static void draw_help_detail(Game *g, const HelpTopic *topic) {
-    Video *v = &g->video;
-    int fh = v->font_char_h + 5;
-    char copy[1024], line[72] = "";
-    snprintf(copy, sizeof(copy), "%s", topic->detail);
-    video_clear(v, 0);
-    char title[96];
-    snprintf(title, sizeof(title), "%c - %s", topic->key, topic->menu);
-    video_draw_text(v, 8, 6, title, 4);
-    video_hline(v, 8, 6 + fh, LOGICAL_W - 16, 8);
-    int y = 6 + fh * 2;
+static int wrap_help_detail(const char *detail, char lines[][33],
+                            int line_capacity) {
+    char copy[1024];
+    int count = 0;
+    snprintf(copy, sizeof(copy), "%s", detail ? detail : "");
+    if (line_capacity <= 0) return 0;
+    lines[0][0] = '\0';
     char *word = strtok(copy, " ");
-    while (word) {
-        size_t used = strlen(line), need = strlen(word);
-        if (used && used + need + 1 > 62) {
-            video_draw_text(v, 8, y, line, 7);
-            y += fh;
-            line[0] = 0;
-            used = 0;
+    while (word && count < line_capacity) {
+        size_t have = strlen(lines[count]);
+        size_t need = strlen(word);
+        if (have && have + need + 1 > 31) {
+            count++;
+            if (count >= line_capacity) break;
+            lines[count][0] = '\0';
+            have = 0;
         }
-        if (used) strncat(line, " ", sizeof(line) - strlen(line) - 1);
-        strncat(line, word, sizeof(line) - strlen(line) - 1);
+        if (have) strncat(lines[count], " ",
+                          sizeof(lines[count]) - strlen(lines[count]) - 1);
+        strncat(lines[count], word,
+                sizeof(lines[count]) - strlen(lines[count]) - 1);
         word = strtok(NULL, " ");
     }
-    if (*line) video_draw_text(v, 8, y, line, 7);
-    video_draw_text(v, 8, LOGICAL_H - fh - 4,
-                    "HIT ANY KEY TO RETURN TO HELP...", 15);
-    video_present(v);
-    input_wait_any_key(&g->input);
+    if (count < line_capacity && lines[count][0]) count++;
+    return count;
 }
 
-static void cmd_help(Game *g) {
+static void draw_help_detail(Game *g, Character *p,
+                             const HelpTopic *topic) {
+    enum { DETAIL_LINES_PER_PAGE = 26 };
     Video *v = &g->video;
-    int fh = v->font_char_h + 2;
-    const int topic_count = (int)(sizeof(help_topics) / sizeof(help_topics[0]));
-    const int split = topic_count - 2; /* The last two topics are 1 and 2. */
+    char lines[48][33];
+    char title[96], page_line[48];
+    int line_count = wrap_help_detail(topic->detail, lines, 48);
+    int pages = (line_count + DETAIL_LINES_PER_PAGE - 1) /
+                DETAIL_LINES_PER_PAGE;
+    if (pages < 1) pages = 1;
+
+    for (int page = 0; page < pages; page++) {
+        int y = 0;
+        left_column_begin(g, p);
+        snprintf(title, sizeof(title), "%c-%s", topic->key, topic->menu);
+        y = left_column_text(g, y, title, 4);
+        int first = page * DETAIL_LINES_PER_PAGE;
+        int end = first + DETAIL_LINES_PER_PAGE;
+        if (end > line_count) end = line_count;
+        for (int i = first; i < end; i++)
+            y = left_column_text(g, y, lines[i], 7);
+        if (page + 1 < pages)
+            snprintf(page_line, sizeof(page_line),
+                     "ANY KEY: MORE (%d/%d) ESC: HELP", page + 1, pages);
+        else
+            snprintf(page_line, sizeof(page_line),
+                     "HIT ANY KEY TO RETURN TO HELP");
+        left_column_text(g, y, page_line, 15);
+        video_present(v);
+        if (input_wait_any_key(&g->input) == 0x1B) return;
+    }
+}
+
+static void cmd_help(Game *g, Character *p) {
+    Video *v = &g->video;
+    const int row_h = SY(38);
+    int topic_count = (int)(sizeof(help_topics) / sizeof(help_topics[0]));
+    if (mw_experience_mode(p) == MW_EXPERIENCE_CLASSIC)
+        topic_count--; /* Enhanced effect page 3 is the final help entry. */
     for (;;) {
-        video_clear(v, 0);
-        int y = 4;
-        video_draw_text(v, 8, y, "HELP MENU-HIT ESC TO RETURN TO GAME", 4);
-        y += fh;
-        video_draw_text(v, 8, y, "HIT OR CLICK A LETTER OR NUMBER FOR MORE HELP", 5);
-        y += fh + 4;
+        int y = 0;
+        int option_top[sizeof(help_topics) / sizeof(help_topics[0])];
+        left_column_begin(g, p);
+        y = left_column_text(g, y,
+                             "HELP MENU-HIT ESC TO RETURN TO GAME", 4);
+        y = left_column_text(g, y,
+                             "HIT LETTER OR NUMBER FOR MORE HELP", 5);
         int option_y = y;
         for (int i = 0; i < topic_count; i++) {
-            if (i == split) y += 4;
-            char line[96];
+            char line[40];
+            option_top[i] = y;
             snprintf(line, sizeof(line), "%c-%s", help_topics[i].key,
                      help_topics[i].menu);
-            video_draw_text(v, 8, y, line, 8);
-            y += fh;
+            left_column_text(g, y, line, 8);
+            y += row_h;
         }
-        video_draw_text(v, 8, LOGICAL_H - fh - 4, "ESC RETURNS TO GAME", 15);
+        left_column_text(g, y, "ESC RETURNS TO GAME", 15);
         video_present(v);
 
-        int key = input_getch(&g->input);
+        int key = input_wait_any_key(&g->input);
         if (input_poll_quit(&g->input) || key == 0x1B) return;
         if (key == INPUT_MOUSE_CLICK) {
             int x, click_y;
             key = -1;
-            if (game_mouse_click_logical(g, &x, &click_y)) {
-                if (click_y >= option_y && click_y < option_y + fh * split)
-                    key = help_topics[(click_y - option_y) / fh].key;
-                else {
-                    int last_y = option_y + fh * split + 4;
-                    if (click_y >= last_y && click_y < last_y + fh * 2)
-                        key = help_topics[split + (click_y - last_y) / fh].key;
-                }
+            if (game_mouse_click_logical(g, &x, &click_y) &&
+                x >= 0 && x < SX(0x2D3) &&
+                click_y >= option_y) {
+                int row = (click_y - option_y) / row_h;
+                if (row >= 0 && row < topic_count &&
+                    click_y >= option_top[row] &&
+                    click_y < option_top[row] + row_h)
+                    key = help_topics[row].key;
             }
         }
         if (key >= 'a' && key <= 'z') key -= 'a' - 'A';
         for (int i = 0; i < topic_count; i++)
             if (key == help_topics[i].key) {
-                draw_help_detail(g, &help_topics[i]);
+                draw_help_detail(g, p, &help_topics[i]);
                 break;
             }
     }
@@ -5535,70 +6261,268 @@ static void cmd_zoom(Game *g, Character *p) {
 }
 
 /* MW_PORT: WORLD func_0C031 effect pages and func_0CDDD/func_0D2C9 effect
- * expiration/reset state. */
-/* ── Spells in effect display (keys '1' and '2', matches func_0C031) ── */
+ * expiration/reset state.  Page three is an Enhanced-only extension for
+ * automatic magic items and native passive relics. */
+/* ── Spells in effect display (keys '1', '2', and Enhanced '3') ── */
 
-static void cmd_spells_in_effect(Game *g, Character *p, int page) {
+static void draw_spells_in_effect_page(Game *g, Character *p, int page) {
     Video *v = &g->video;
-    int fh = v->font_char_h + 2;
     char line[128];
+    int y = 0;
+    int shown = 0;
 
-    video_clear(v, 0);
-    snprintf(line, sizeof(line), "SPELLS IN EFFECT - PAGE %d", page + 1);
-    video_draw_text(v, 8, 4, line, 14);
-
-    int y = 4 + fh * 2;
+    /* WORLD func_0C031 clears only the upper-left message pane and omits
+       inactive effects.  That is essential here: a page of zero-valued
+       rows both hid the four-view display and no longer resembled the DOS
+       status pages. */
+    town_pane_begin(g, p);
+#define EFFECT_LINE(condition, color, ...) do { \
+    if (condition) { \
+        snprintf(line, sizeof(line), __VA_ARGS__); \
+        y = town_pane_text(g, y, line, color); \
+        shown++; \
+    } \
+} while (0)
 
     if (page == 0) {
-        snprintf(line, sizeof(line), "STRENGTH BONUS:  %d", p->eff_str_bonus);
-        video_draw_text(v, 8, y, line, p->eff_str_bonus > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "SUPER STRENGTH:  %d", p->eff_super_str);
-        video_draw_text(v, 8, y, line, p->eff_super_str > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "AGILITY BONUS:   %d", p->eff_agi_bonus);
-        video_draw_text(v, 8, y, line, p->eff_agi_bonus > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "SUPER AGILITY:   %d", p->eff_super_agi);
-        video_draw_text(v, 8, y, line, p->eff_super_agi > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "INVISIBLE:       %d", p->eff_invisible);
-        video_draw_text(v, 8, y, line, p->eff_invisible > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "FEATHER:         %d", p->eff_feather);
-        video_draw_text(v, 8, y, line, p->eff_feather > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "FAST MOVE:       %d", p->eff_fast_move);
-        video_draw_text(v, 8, y, line, p->eff_fast_move > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "PROTECTION:      %d (LV %d)", p->eff_protect_turns, p->eff_protect_lv);
-        video_draw_text(v, 8, y, line, p->eff_protect_turns > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "BATTLE STRENGTH: %d", p->eff_battle_str);
-        video_draw_text(v, 8, y, line, p->eff_battle_str > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "BATTLE SPEED:    %d", p->eff_battle_spd);
-        video_draw_text(v, 8, y, line, p->eff_battle_spd > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "SLOW MONSTER:    %d", p->eff_slow_mon);
-        video_draw_text(v, 8, y, line, p->eff_slow_mon > 0 ? 15 : 8); y += fh;
-    } else {
-        snprintf(line, sizeof(line), "DISEASE:         %d", p->diseased_turns);
-        video_draw_text(v, 8, y, line, p->diseased_turns > 0 ? 6 : 15); y += fh;
-        snprintf(line, sizeof(line), "POISON:          %d", p->poisoned_turns);
-        video_draw_text(v, 8, y, line, p->poisoned_turns > 0 ? 6 : 15); y += fh;
-        snprintf(line, sizeof(line), "RESIST POISON:   %d", p->eff_resist_poison);
-        video_draw_text(v, 8, y, line, p->eff_resist_poison > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "RESIST DISEASE:  %d", p->eff_resist_disease);
-        video_draw_text(v, 8, y, line, p->eff_resist_disease > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "ANTI COLD:       %d", p->eff_anti_cold);
-        video_draw_text(v, 8, y, line, p->eff_anti_cold > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "ANTI FIRE:       %d", p->eff_anti_fire);
-        video_draw_text(v, 8, y, line, p->eff_anti_fire > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "RESIST DRAIN:    %d", p->eff_resist_drain);
-        video_draw_text(v, 8, y, line, p->eff_resist_drain > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "POWER WEAPON:    %d (%d TURNS)", p->eff_pwr_weapon, p->eff_pwr_wpn_turns);
-        video_draw_text(v, 8, y, line, p->eff_pwr_weapon > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "HOLD MONSTER:    %d", p->eff_hold_monster);
-        video_draw_text(v, 8, y, line, p->eff_hold_monster > 0 ? 15 : 8); y += fh;
-        snprintf(line, sizeof(line), "STOP MONSTER:    %d", p->eff_stop_monster);
-        video_draw_text(v, 8, y, line, p->eff_stop_monster > 0 ? 15 : 8); y += fh;
+        EFFECT_LINE(mw_enchant_wpn_spell(p) > 0, 3, "WEAPONS, PLUS %d",
+                    mw_enchant_wpn_spell(p));
+        EFFECT_LINE(mw_armor_plus(p) > 0, 3, "ARMOR, PLUS %d",
+                    mw_armor_plus(p));
+        EFFECT_LINE(p->eff_feather > 0, 7, "FEATHER");
+        EFFECT_LINE(p->eff_invisible > 0, 7, "INVISIBILITY");
+        EFFECT_LINE(p->eff_fast_move > 0, 7, "FAST - MOVE");
+        EFFECT_LINE(p->eff_str_bonus > 0, 6, "STRENGTH (PREP)");
+        EFFECT_LINE(p->eff_agi_bonus > 0, 6, "AGILITY (PREP)");
+        EFFECT_LINE(p->eff_super_str > 0, 6, "SUPER STRENGTH");
+        EFFECT_LINE(p->eff_super_agi > 0, 6, "SUPER AGILITY");
+        EFFECT_LINE(p->eff_battle_str > 0, 3, "BATTLE STRENGTH: %d",
+                    p->eff_battle_str);
+        EFFECT_LINE(p->eff_battle_spd > 0, 3, "BATTLE SPEED: %d",
+                    p->eff_battle_spd);
+    } else if (page == 1) {
+        EFFECT_LINE(p->eff_protect_turns > 0, 5,
+                    "PROTECT, LEVEL %d (%d TURNS)",
+                    p->eff_protect_lv, p->eff_protect_turns);
+        EFFECT_LINE(p->eff_pwr_wpn_turns > 0, 5,
+                    "POWER WEAPON %d (%d TURNS)",
+                    p->eff_pwr_weapon, p->eff_pwr_wpn_turns);
+        EFFECT_LINE(p->eff_slow_mon > 0, 7, "SLOW MONSTER: %d",
+                    p->eff_slow_mon);
+        EFFECT_LINE(p->eff_hold_monster > 0, 7, "HOLD MONSTER: %d",
+                    p->eff_hold_monster);
+        EFFECT_LINE(p->eff_stop_monster > 0, 7, "STOP MONSTER: %d",
+                    p->eff_stop_monster);
+        EFFECT_LINE(p->eff_resist_poison > 0, 6, "RESIST POISON: %d",
+                    p->eff_resist_poison);
+        EFFECT_LINE(p->eff_resist_disease > 0, 6, "RESIST DISEASE: %d",
+                    p->eff_resist_disease);
+        EFFECT_LINE(p->eff_resist_drain > 0, 6, "RESIST DRAIN: %d",
+                    p->eff_resist_drain);
+        EFFECT_LINE(p->eff_anti_cold > 0, 6, "ANTI-COLD: %d",
+                    p->eff_anti_cold);
+        EFFECT_LINE(p->eff_anti_fire > 0, 6, "ANTI-FIRE: %d",
+                    p->eff_anti_fire);
+    } else if (mw_experience_mode(p) == MW_EXPERIENCE_ENHANCED) {
+        EFFECT_LINE(p->ring_regen > 0, 3, "RING REGEN: +%d HP PER ACTION",
+                    p->ring_regen);
+        EFFECT_LINE(mw_ring_prot_plus(p) > 0, 3,
+                    "RING PROTECTION: PLUS %d", mw_ring_prot_plus(p));
+        EFFECT_LINE(p->antimagic_ring > 0, 3, "ANTI-MAGIC: PLUS %d",
+                    p->antimagic_ring);
+        EFFECT_LINE(mw_body_armor_plus(p) > 0, 5,
+                    "BODY ARMOR: PLUS %d", mw_body_armor_plus(p));
+        EFFECT_LINE(mw_gauntlet(p) > 0, 5, "GAUNTLET: PLUS %d",
+                    mw_gauntlet(p));
+        if (mw_relic_owned(p, MW_RELIC_ARCANE_RING)) {
+            unsigned phase = p->native.relic_regen_phase;
+            unsigned remaining = phase < 4 ? 4 - phase : 1;
+            EFFECT_LINE(1, 11, "ARCANE RENEWAL: SP IN %u ACTIONS",
+                        remaining);
+        }
+        EFFECT_LINE(mw_relic_owned(p, MW_RELIC_BLOODSTONE_SIGNET), 11,
+                    "BLOODSTONE: 5%% MELEE LIFE-STEAL");
+        EFFECT_LINE(mw_relic_owned(p, MW_RELIC_DEEPWARD_AMULET), 11,
+                    "DEEPWARD: -15%% DAMAGE; DRAINS X2");
+        EFFECT_LINE(mw_relic_owned(p, MW_RELIC_SAGE_PRISM), 11,
+                    "SAGE'S PRISM: KILL XP +25%%");
+        if (mw_relic_owned(p, MW_RELIC_PHOENIX_SEAL)) {
+            if (p->native.relic_phoenix_cooldown)
+                EFFECT_LINE(1, 14, "PHOENIX: %u ACTIONS TO READY",
+                            p->native.relic_phoenix_cooldown);
+            else
+                EFFECT_LINE(1, 10, "PHOENIX SEAL: READY");
+        }
     }
+#undef EFFECT_LINE
 
-    y += fh;
-    video_draw_text(v, 8, y, "PRESS ANY KEY...", 7);
+    if (!shown)
+        y = town_pane_text(g, y, "NO SPELLS IN EFFECT.", 8);
+    town_pane_text(g, y, "HIT ANY KEY...", 4);
     video_present(v);
+}
+
+static void cmd_spells_in_effect(Game *g, Character *p, int page) {
+    draw_spells_in_effect_page(g, p, page);
     input_wait_any_key(&g->input);
+}
+
+void game_draw_effects_test(Game *g, Character *p, int page) {
+    draw_spells_in_effect_page(g, p, page);
+}
+
+static int dialog_outside_unchanged(const Video *v, const u8 *baseline,
+                                    int changed_w, int changed_h) {
+    for (int y = 0; y < LOGICAL_H; y++)
+        for (int x = 0; x < LOGICAL_W; x++)
+            if ((x >= changed_w || y >= changed_h) &&
+                v->pixels[y * LOGICAL_W + x] !=
+                    baseline[y * LOGICAL_W + x])
+                return 0;
+    return 1;
+}
+
+int game_dialog_ui_self_test(Game *g, Character *p) {
+    if (!g || !p || !g->video.pixels) return 1;
+    const size_t pixel_count = (size_t)LOGICAL_W * LOGICAL_H;
+    u8 *baseline = malloc(pixel_count);
+    if (!baseline) return 1;
+    Input saved_input = g->input;
+    int failures = 0;
+
+#define QUEUE_DIALOG_KEY(key_value) do { \
+    g->input.head = 0; \
+    g->input.tail = 1; \
+    g->input.quit_requested = 0; \
+    g->input.keys[0] = (key_value); \
+} while (0)
+#define VERIFY_DIALOG(label, changed_width, changed_height, key_value, ...) do { \
+    game_draw_exploration(g, p); \
+    memcpy(baseline, g->video.pixels, pixel_count); \
+    QUEUE_DIALOG_KEY(key_value); \
+    __VA_ARGS__; \
+    if (!dialog_outside_unchanged(&g->video, baseline, \
+                                  (changed_width), (changed_height))) { \
+        fprintf(stderr, "DIALOG UI TEST FAIL: %s escaped its source pane\n", \
+                (label)); \
+        failures++; \
+    } \
+} while (0)
+#define VERIFY_DIALOG_TWO(label, changed_width, changed_height, key1, key2, ...) do { \
+    game_draw_exploration(g, p); \
+    memcpy(baseline, g->video.pixels, pixel_count); \
+    g->input.head = 0; \
+    g->input.tail = 2; \
+    g->input.quit_requested = 0; \
+    g->input.keys[0] = (key1); \
+    g->input.keys[1] = (key2); \
+    __VA_ARGS__; \
+    if (!dialog_outside_unchanged(&g->video, baseline, \
+                                  (changed_width), (changed_height))) { \
+        fprintf(stderr, "DIALOG UI TEST FAIL: %s escaped its source pane\n", \
+                (label)); \
+        failures++; \
+    } \
+} while (0)
+#define VERIFY_SOURCE_SELECTOR(label, statement, ...) do { \
+    const int dialog_keys_[] = { __VA_ARGS__ }; \
+    game_draw_exploration(g, p); \
+    memcpy(baseline, g->video.pixels, pixel_count); \
+    g->input.head = 0; \
+    g->input.tail = 0; \
+    g->input.quit_requested = 0; \
+    for (size_t key_i_ = 0; \
+         key_i_ < sizeof(dialog_keys_) / sizeof(dialog_keys_[0]); \
+         key_i_++) { \
+        g->input.keys[g->input.tail] = dialog_keys_[key_i_]; \
+        g->input.tail = (g->input.tail + 1) % KEY_QUEUE_SIZE; \
+    } \
+    statement; \
+    if (!dialog_outside_unchanged(&g->video, baseline, \
+                                  LOGICAL_W, SY(0x1AE))) { \
+        fprintf(stderr, \
+                "DIALOG UI TEST FAIL: %s escaped the top selector strip\n", \
+                (label)); \
+        failures++; \
+    } \
+} while (0)
+
+    /* Short WORLD shop_magic-style panels. */
+    VERIFY_DIALOG("view money", SX(0x2D3), SY(0x1AE), ' ',
+                  cmd_view_money(g, p));
+    VERIFY_DIALOG("experience", SX(0x2D3), SY(0x1AE), ' ',
+                  cmd_exp_needed(g, p));
+    VERIFY_DIALOG("pockets menu", SX(0x2D3), SY(0x1AE), 0x1B,
+                  cmd_pockets(g, p));
+    /* Page Down is the DOS byte pair 0,51h.  51h is also ASCII 'Q', so a
+       one-key menu must consume the pair atomically before returning to the
+       exploration Save/Quit dispatcher. */
+    g->input.head = 0;
+    g->input.tail = 3;
+    g->input.quit_requested = 0;
+    g->input.keys[0] = 0;
+    g->input.keys[1] = 0x51;
+    g->input.keys[2] = 'v';
+    cmd_pockets(g, p);
+    if (!input_kbhit(&g->input) || input_getch(&g->input) != 'v') {
+        fprintf(stderr,
+                "DIALOG INPUT TEST FAIL: Page Down leaked ASCII Q\n");
+        failures++;
+    }
+    VERIFY_DIALOG("spell effects", SX(0x2D3), SY(0x1AE), ' ',
+                  cmd_spells_in_effect(g, p, 0));
+    if (mw_experience_mode(p) == MW_EXPERIENCE_ENHANCED)
+        VERIFY_DIALOG("enhanced effects", SX(0x2D3), SY(0x1AE), ' ',
+                      cmd_spells_in_effect(g, p, 2));
+    VERIFY_DIALOG("drop item", SX(0x2D3), SY(0x1AE), 0x1B,
+                  cmd_drop_item(g, p));
+    VERIFY_DIALOG("cast spell", SX(0x2D3), SY(0x1AE), 0x1B,
+                  cmd_cast_spell_menu(g, p, NULL));
+    VERIFY_DIALOG("use item", SX(0x2D0), SY(0x1AC), 0x1B,
+                  cmd_use_item(g, p, NULL));
+    VERIFY_DIALOG_TWO("vitamin pill item page", SX(0x2D0), SY(0x1AC),
+                      '4', 0x1B, cmd_use_item(g, p, NULL));
+    VERIFY_DIALOG_TWO("other magic item page", SX(0x2D0), SY(0x1AC),
+                      '5', 0x1B, cmd_use_item(g, p, NULL));
+    VERIFY_DIALOG("weapons", SX(0x2D3), SY(0x1AE), 0x1B,
+                  cmd_weapons(g, p));
+    VERIFY_DIALOG("armor", SX(0x2D3), SY(0x1AE), 0x1B,
+                  cmd_armor(g, p));
+
+    /* The shared 30-item selector for casting and consumable sources owns
+       the full-width top strip, but must preserve everything below it.
+       Enter the selector through every live source rather than testing only
+       the preceding category menu. */
+    VERIFY_SOURCE_SELECTOR("spellbook selector",
+                           (void)cmd_cast_spell_menu(g, p, NULL),
+                           '2', 0x1B);
+    VERIFY_SOURCE_SELECTOR("scroll selector",
+                           (void)cmd_use_item(g, p, NULL),
+                           '1', '2', 0x1B);
+    VERIFY_SOURCE_SELECTOR("wand selector",
+                           (void)cmd_use_item(g, p, NULL),
+                           '2', '2', 0x1B);
+    VERIFY_SOURCE_SELECTOR("paper selector",
+                           (void)cmd_use_item(g, p, NULL),
+                           '3', '2', 0x1B);
+
+    /* Long source pages replace only the left column. */
+    VERIFY_DIALOG("view stats", SX(0x2D3), LOGICAL_H, ' ',
+                  cmd_view_stats(g, p));
+    VERIFY_DIALOG("help", SX(0x2D3), LOGICAL_H, 0x1B,
+                  cmd_help(g, p));
+    /* Keep this last: the magic test harness captures the Enhanced relic
+       inventory page for visual regression review. */
+    VERIFY_DIALOG_TWO("misc pockets", SX(0x2D3), LOGICAL_H, ' ', ' ',
+                      cmd_pockets_misc(g, p));
+
+#undef VERIFY_DIALOG
+#undef VERIFY_DIALOG_TWO
+#undef VERIFY_SOURCE_SELECTOR
+#undef QUEUE_DIALOG_KEY
+    g->input = saved_input;
+    free(baseline);
+    return failures;
 }
 
 /* MW_PORT: WORLD select_player (0x0889F) and character_menu (0x092B4). */
@@ -5671,8 +6595,6 @@ static int player_select_screen(Game *g) {
 /* ── Original character roller (ROLL.TXT / WORLD.ASM far_19115) ── */
 
 #define CREATION_TEXT_LINES 40
-#define MW_AGE_YEAR_UNITS   0x80520u /* 525,600 minutes per year */
-
 typedef struct {
     char line[CREATION_TEXT_LINES][96];
     int count;
@@ -6044,7 +6966,10 @@ static float starting_spell_points(const Character *p) {
 
 static void grant_starting_spells(Character *p) {
     if (p->class_id == CLASS_MONK) {
-        memset(p->spells, 1, sizeof(p->spells));
+        /* Monks begin knowing the complete original catalog.  Enhanced
+         * entries 30-34 remain zero until their deep quest bosses fall. */
+        for (int category = 0; category < 4; category++)
+            memset(p->spells[category], 1, MW_ORIGINAL_SPELL_COUNT);
         return;
     }
     if (p->class_id == CLASS_FIGHTER) return;
@@ -6091,7 +7016,7 @@ static int character_creation_self_test(void) {
         }
     }
 
-    static const int expected_spells[CLASS_COUNT] = {0, 2, 180, 2, 2, 3, 2};
+    static const int expected_spells[CLASS_COUNT] = {0, 2, 120, 2, 2, 3, 2};
     for (int class_id = 0; class_id < CLASS_COUNT; class_id++) {
         Character p = {0};
         p.class_id = (u8)class_id;
@@ -6202,7 +7127,7 @@ static int create_character(Game *g, Character *p) {
     creation_draw(g, 980, 380, class_names[class_id], 8);
     char summary[96];
     snprintf(summary, sizeof(summary), "SPELL POINTS: %.0f    HEALTH POINTS: %u",
-             p->sp_max, p->hp_max);
+             p->sp_max, mw_hp_max(p));
     creation_draw(g, 0, 460, summary, 4);
     snprintf(summary, sizeof(summary), "EXPERIENCE: %s - DUNGEON LEVELS 0-%d",
              experience_mode == MW_EXPERIENCE_CLASSIC ? "CLASSIC" : "ENHANCED",
@@ -6246,11 +7171,23 @@ static void record_bestiary_kill(Game *g, int monster_type) {
     game_save_bestiary(g);
 }
 
-static void fight_monster(Game *g, Character *player, int index) {
-    if (index < 0) return;
+static int fight_monster_action(Game *g, Character *player, int index,
+                                int action) {
+    if (index < 0 || g->monster_layer < 0) return 0;
+    int old_floor = g->cur_floor;
+    int old_layer = g->monster_layer;
     CombatState cs;
     combat_init_entity(g, &cs, index);
-    combat_run(g, &cs, player);
+    /* Hold/Stop/Sleep durations must survive the return to WORLD's normal
+       command dispatcher between individual battle actions. */
+    cs.monster_held = player->eff_hold_monster;
+    cs.monster_stopped = player->eff_stop_monster;
+    if (!combat_take_turn(g, &cs, player, action)) return 0;
+
+    if (g->cur_floor != old_floor || g->monster_layer != old_layer) {
+        g->monster_adjacent = game_find_adjacent_monster(g) >= 0;
+        return 1;
+    }
     if (cs.monster_hp <= 0) {
         record_bestiary_kill(g, cs.monster_type_idx);
         game_kill_monster(g, index);
@@ -6259,8 +7196,19 @@ static void fight_monster(Game *g, Character *player, int index) {
         game_kill_monster(g, index);
     } else {
         game_set_monster_hp(g, index, cs.monster_hp);
+        if (index >= 0 && index < MONSTERS_PER_FLOOR) {
+            int level = cs.monster_level < 1 ? 1 : cs.monster_level;
+            if (level > UINT16_MAX) level = UINT16_MAX;
+            g->monster_map[g->monster_layer][index].level = (u16)level;
+            g->monster_map_dirty = 1;
+        }
     }
     g->monster_adjacent = game_find_adjacent_monster(g) >= 0;
+    return 1;
+}
+
+static void fight_monster(Game *g, Character *player, int index) {
+    (void)fight_monster_action(g, player, index, COMBAT_ACTION_FIGHT);
 }
 
 /* MW_PORT: exploration dispatcher for WORLD spell_menu/cast_spell and
@@ -6268,7 +7216,19 @@ static void fight_monster(Game *g, Character *player, int index) {
 /* ── Cast spell from exploration (handles battle vs prep) ── */
 
 static int cmd_cast_spell(Game *g, Character *player) {
-    return cmd_cast_spell_menu(g, player, NULL);
+    int monster = game_find_adjacent_monster(g);
+    if (monster >= 0)
+        return fight_monster_action(g, player, monster,
+                                    COMBAT_ACTION_CAST) ? 2 : 0;
+    return cmd_cast_spell_menu(g, player, NULL) ? 1 : 0;
+}
+
+static int cmd_use_item_exploration(Game *g, Character *player) {
+    int monster = game_find_adjacent_monster(g);
+    if (monster >= 0)
+        return fight_monster_action(g, player, monster,
+                                    COMBAT_ACTION_ITEM) ? 2 : 0;
+    return cmd_use_item(g, player, NULL) ? 1 : 0;
 }
 
 /* MW_PORT: dungeon branch of WORLD func_0F6E5, including
@@ -6342,7 +7302,7 @@ static void draw_contextual_advice(Game *g, Character *p) {
     };
     const char *line[4] = {NULL, NULL, NULL, NULL};
     u8 color = 3;
-    if (p->hp_max && p->hp_cur * 3u < p->hp_max) {
+    if (mw_hp_max(p) && (uint64_t)mw_hp_cur(p) * 3u < mw_hp_max(p)) {
         line[0] = "YOU ARE BADLY DAMAGED. YOU";
         line[1] = "SHOULD CURE YOURSELF WITH";
         line[2] = "THE CURE SPELL OR GO SEARCH";
@@ -6473,6 +7433,217 @@ static int confirm_dungeon_reroll(Game *g, Character *player) {
     }
 }
 
+static int confirm_town_teleport(Game *g, Character *player) {
+    const int pane_w = SX(0x2D3), pane_h = SY(0x1AE);
+    game_draw_exploration_base(g, player);
+    video_fill_rect(&g->video, 0, 0, pane_w, pane_h, 0);
+    int y = draw_combat_message(&g->video, 0, pane_h,
+                                "TELEPORT TO FLOOR-ZERO TOWN?", 12);
+    y = draw_combat_message(&g->video, y, pane_h,
+                            "YOUR CURRENT DUNGEON LOCATION WILL BE LEFT.", 15);
+    draw_combat_message(&g->video, y, pane_h,
+                        "PRESS Y TO TELEPORT OR N TO CANCEL.", 4);
+    video_present(&g->video);
+    for (;;) {
+        int key = input_getch(&g->input);
+        if (input_poll_quit(&g->input) || key == 0x1B ||
+            key == 'n' || key == 'N')
+            return 0;
+        if (key == 'y' || key == 'Y') return 1;
+        if (key == 0) (void)input_getch(&g->input);
+    }
+}
+
+/* MW_EXTENSION: Ctrl+Shift+Alt+F12 is an intentionally extreme, persistent
+ * character maximizer.  Every assignment uses the same mode-aware caps as
+ * the trainer and every byte inventory stops at 255, so later rewards cannot
+ * roll a maxed field through zero. */
+void game_max_character(Game *g, Character *player) {
+    if (!player) return;
+
+    mw_character_native_ensure(player);
+    const int enhanced =
+        mw_experience_mode(player) == MW_EXPERIENCE_ENHANCED;
+    const int enchant_cap = enhanced ? INT16_MAX : INT8_MAX;
+    const u8 pill_cap = enhanced ? UINT8_MAX : INT8_MAX;
+    const u16 turn_cap = mw_effect_turn_cap(player);
+
+    /* Remove reversible bonuses before replacing the underlying attributes;
+       otherwise their eventual expiration would subtract from the maximum. */
+    character_clear_battle_effects(player);
+    character_clear_town_effects(player);
+
+    player->level = MW_PLAYER_LEVEL_MAX;
+    mw_set_hp_max(player, mw_player_hp_cap(player));
+    mw_set_hp_cur(player, mw_hp_max(player));
+    player->sp_max = MW_PLAYER_SP_MAX;
+    player->sp_cur = player->sp_max;
+    player->stat_str = MW_PLAYER_STAT_MAX;
+    player->stat_int = MW_PLAYER_STAT_MAX;
+    player->stat_wis = MW_PLAYER_STAT_MAX;
+    player->stat_con = MW_PLAYER_STAT_MAX;
+    player->stat_agi = MW_PLAYER_STAT_MAX;
+    player->stat_luck = MW_PLAYER_STAT_MAX;
+    player->experience = experience_for_level(MW_PLAYER_LEVEL_MAX);
+
+    player->jewels_bank = UINT32_MAX;
+    player->copper_stones = UINT32_MAX;
+    player->silver_stones = UINT32_MAX;
+    player->ivory_stones = UINT32_MAX;
+    player->gold_stones = UINT32_MAX;
+    player->platinum_stones = UINT32_MAX;
+    player->jewel_stones = UINT32_MAX;
+
+    for (int slot = 0; slot < 8; slot++) {
+        if (slot > 0) {
+            mw_set_weapon_inventory_count(player, slot, UINT8_MAX);
+            mw_set_armor_inventory_count(player, slot, UINT8_MAX);
+        }
+        mw_set_weapon_enchant(player, slot, enchant_cap);
+        mw_set_armor_enchant(player, slot, enchant_cap);
+    }
+    if (enhanced) {
+        for (int deep = 0; deep < MW_DEEP_SPELL_COUNT; deep++)
+            mw_unlock_deep_spell_tier(player, deep);
+        player->native.late_gear_unlocks = UINT8_MAX;
+        for (int slot = 12; slot < WEAPON_STAT_COUNT; slot++) {
+            mw_set_weapon_inventory_count(player, slot, UINT8_MAX);
+            mw_set_weapon_enchant(player, slot, enchant_cap);
+        }
+        for (int slot = 8; slot < ARMOR_STAT_COUNT; slot++) {
+            mw_set_armor_inventory_count(player, slot, UINT8_MAX);
+            mw_set_armor_enchant(player, slot, enchant_cap);
+        }
+        player->equipped_weapon = WEAPON_STAT_COUNT - 1;
+        player->equipped_armor = ARMOR_STAT_COUNT - 1;
+    } else {
+        player->equipped_weapon = 7;
+        player->equipped_armor = 7;
+    }
+
+    int spell_count = mw_spell_catalog_count(player);
+    for (int category = 0; category < 4; category++)
+        for (int spell = 0; spell < spell_count; spell++) {
+            player->spells[category][spell] = 1;
+            player->scrolls[category][spell] = UINT8_MAX;
+            player->wands[category][spell] = UINT8_MAX;
+            player->papers[category][spell] = UINT8_MAX;
+        }
+
+    player->holy_grenade = UINT8_MAX;
+    player->stone_teleport = UINT8_MAX;
+    player->stone_see = UINT8_MAX;
+    player->floor_slosher = 1;
+    player->potion_heal = UINT8_MAX;
+    player->ring_regen = UINT8_MAX;
+    player->combat_bonus = UINT8_MAX;
+    player->green_pill = pill_cap;
+    player->orange_pill = pill_cap;
+    player->blue_pill = pill_cap;
+    player->red_pill = pill_cap;
+    player->white_pill = pill_cap;
+    player->yellow_pill = pill_cap;
+    player->antimagic_ring = 5;
+    memset(player->trapdoor_keys, 1, sizeof(player->trapdoor_keys));
+
+    mw_set_enchant_wpn_spell(player, enchant_cap);
+    mw_set_armor_plus(player, enchant_cap);
+    mw_set_body_armor_plus(player, enchant_cap);
+    mw_set_ring_prot_plus(player, enchant_cap);
+    mw_set_gauntlet(player, enchant_cap);
+    player->eff_feather = 100;
+    player->eff_fast_move = 60;
+    player->eff_invisible = 100;
+    player->eff_str_bonus = 60;
+    player->eff_agi_bonus = 60;
+    player->eff_super_str = 60;
+    player->eff_super_agi = 60;
+    player->eff_battle_str = turn_cap;
+    player->eff_battle_spd = turn_cap;
+    player->eff_slow_mon = turn_cap;
+    player->eff_pwr_weapon = 3;
+    player->eff_pwr_wpn_turns = turn_cap;
+    player->eff_protect_lv = enhanced ? 8 : 5;
+    player->eff_protect_turns = turn_cap;
+    player->eff_resist_poison = turn_cap;
+    player->eff_resist_disease = turn_cap;
+    player->eff_anti_cold = turn_cap;
+    player->eff_anti_fire = turn_cap;
+    player->eff_resist_drain = turn_cap;
+    player->eff_stop_monster = turn_cap;
+    player->eff_hold_monster = turn_cap;
+    player->poisoned_turns = 0;
+    player->diseased_turns = 0;
+
+    u16 quest_flags = enhanced ? UINT16_MAX :
+                      (u16)(((1u << 8) - 1u) |
+                            MW_UNIVERSAL_ACCESS_FLAG);
+    mw_set_quest_flags(player, quest_flags);
+    if (enhanced) {
+        for (int relic = 0; relic < MW_RELIC_COUNT; relic++)
+            mw_set_relic_owned(player, relic, 1);
+        player->native.relic_regen_phase = 0;
+        player->native.relic_phoenix_cooldown = 0;
+    }
+
+    if (g) {
+        player->raise_floor = (u16)game_clamp_dungeon_floor(g, g->cur_floor);
+        player->raise_x = (u16)g->cur_x;
+        player->raise_y = (u16)g->cur_y;
+    }
+}
+
+static int confirm_max_character(Game *g, Character *player) {
+    const int pane_w = SX(0x2D3), pane_h = SY(0x1AE);
+    game_draw_exploration_base(g, player);
+    video_fill_rect(&g->video, 0, 0, pane_w, pane_h, 0);
+    int y = draw_combat_message(&g->video, 0, pane_h,
+                                "MAX OUT THIS CHARACTER?", 12);
+    y = draw_combat_message(&g->video, y, pane_h,
+                            "THIS MAXES STATS, INVENTORY, MAGIC, GEAR, AND ACCESS.", 15);
+    y = draw_combat_message(&g->video, y, pane_h,
+                            "THE CHANGES ARE STORED WHEN YOU NEXT SAVE.", 15);
+    draw_combat_message(&g->video, y, pane_h,
+                        "PRESS Y TO MAX OUT OR N TO CANCEL.", 4);
+    video_present(&g->video);
+    for (;;) {
+        int key = input_getch(&g->input);
+        if (input_poll_quit(&g->input) || key == 0x1B ||
+            key == 'n' || key == 'N')
+            return 0;
+        if (key == 'y' || key == 'Y') return 1;
+        if (key == 0) (void)input_getch(&g->input);
+    }
+}
+
+void game_debug_max_character(Game *g, Character *player) {
+    if (!g || !player) return;
+    if (!confirm_max_character(g, player)) {
+        show_runtime_indicator(g, player, "MAX CHARACTER CANCELLED.",
+                               "NO CHARACTER VALUES WERE CHANGED.", 8);
+        return;
+    }
+    game_max_character(g, player);
+    show_runtime_indicator(
+        g, player, "CHARACTER MAXIMIZED.",
+        mw_experience_mode(player) == MW_EXPERIENCE_ENHANCED ?
+        "ALL ENHANCED STATS, ITEMS, SPELLS, AND ACCESS ARE MAXED." :
+        "ALL CLASSIC STATS, ITEMS, SPELLS, AND ACCESS ARE MAXED.",
+        4);
+}
+
+static void debug_teleport_to_town(Game *g, Character *player) {
+    if (!confirm_town_teleport(g, player)) {
+        show_runtime_indicator(g, player, "TOWN TELEPORT CANCELLED.",
+                               "YOUR LOCATION IS UNCHANGED.", 8);
+        return;
+    }
+    game_change_floor(g, player, 0);
+    game_relocate(g, player);
+    show_runtime_indicator(g, player, "TOWN TELEPORT COMPLETE.",
+                           "YOU ARE NOW ON FLOOR ZERO.", 4);
+}
+
 static void reroll_dungeon(Game *g, Character *player) {
     if (!confirm_dungeon_reroll(g, player)) {
         show_runtime_indicator(g, player, "DUNGEON REROLL CANCELLED.",
@@ -6522,9 +7693,12 @@ static int game_try_step(Game *g, Character *player, int direction) {
         return 0;
     }
     if (monster >= 0) {
-        mw_audio_play(&g->audio, MW_SFX_ATTACK);
-        fight_monster(g, player, monster);
-        return player->hp_cur <= 0 ? -1 : 1;
+        /* WORLD cancels the movement delta when the destination is occupied.
+         * Walking into a visible monster never invokes combat; F is the
+         * keyboard fight command (and clicking that monster's viewport is
+         * the original mouse synonym for F). */
+        g->monster_adjacent = 1;
+        return 0;
     }
 
     g->cur_x = nx;
@@ -6533,7 +7707,7 @@ static int game_try_step(Game *g, Character *player, int direction) {
     reveal_around_player_animated(g, player);
     game_apply_pitfall_interactive(g, player);
     game_advance_monsters(g, player);
-    return player->hp_cur <= 0 ? -1 : 1;
+    return mw_hp_cur(player) == 0 ? -1 : 1;
 }
 
 static void draw_trapdoor_notice(Game *g, Character *player) {
@@ -6766,8 +7940,15 @@ resume_exploration:
             if (!key) {
                 int direction = game_mouse_view_direction(g);
                 if (direction >= 0) {
-                    if (game_try_step(g, player, direction) < 0)
+                    int monster =
+                        game_find_engaged_monster_in_direction(g, direction);
+                    if (monster >= 0) {
+                        mw_audio_play(&g->audio, MW_SFX_ATTACK);
+                        fight_monster(g, player, monster);
+                        if (mw_hp_cur(player) == 0) goto game_over;
+                    } else if (game_try_step(g, player, direction) < 0) {
                         goto game_over;
+                    }
                     /* The click has already executed the turn. */
                     key = -1;
                 } else {
@@ -6787,7 +7968,9 @@ resume_exploration:
             }
         }
 
-        if (key == INPUT_MODEL_VIEWER) {
+        if (key == INPUT_MAX_CHARACTER) {
+            game_debug_max_character(g, player);
+        } else if (key == INPUT_MODEL_VIEWER) {
             model_viewer_run(g);
         } else if (key == INPUT_DUNGEON_REROLL) {
             reroll_dungeon(g, player);
@@ -6800,10 +7983,7 @@ resume_exploration:
                                     : "U AND D REQUIRE LADDERS AGAIN.",
                 g->cheat_open_floor ? 4 : 8);
         } else if (key == INPUT_TOWN_TELEPORT) {
-            game_change_floor(g, player, 0);
-            game_relocate(g, player);
-            show_runtime_indicator(g, player, "TOWN TELEPORT COMPLETE.",
-                                   "YOU ARE NOW ON FLOOR ZERO.", 4);
+            debug_teleport_to_town(g, player);
         } else if (key == INPUT_GOD_TOGGLE) {
             g->cheat_god_mode = !g->cheat_god_mode;
             show_runtime_indicator(g, player,
@@ -6847,7 +8027,7 @@ resume_exploration:
         } else if (key == 'e' || key == 'E') {
             cmd_exp_needed(g, player);
         } else if (key == 'h' || key == 'H') {
-            cmd_help(g);
+            cmd_help(g, player);
         } else if (key == 'j' || key == 'J') {
             cmd_bestiary(g);
         } else if (key == 'g' || key == 'G') {
@@ -6858,20 +8038,22 @@ resume_exploration:
             int monster = game_find_adjacent_monster(g);
             if (monster >= 0) {
                 fight_monster(g, player, monster);
-                if (player->hp_cur <= 0) break;
+                if (mw_hp_cur(player) == 0) break;
             } else {
                 town_message(g, player, "YOU ARE NOT CURRENTLY",
                              "ENGAGING ANY MONSTER.", "", 6);
             }
         } else if (key == 'c' || key == 'C') {
-            if (cmd_cast_spell(g, player) != 0) {
+            int cast_result = cmd_cast_spell(g, player);
+            if (cast_result != 0) {
                 mw_audio_play(&g->audio, MW_SFX_MAGIC);
-                game_advance_monsters(g, player);
+                if (cast_result == 1) game_advance_monsters(g, player);
             }
         } else if (key == 'i' || key == 'I') {
-            if (cmd_use_item(g, player, NULL) != 0) {
+            int item_result = cmd_use_item_exploration(g, player);
+            if (item_result != 0) {
                 mw_audio_play(&g->audio, MW_SFX_MAGIC);
-                game_advance_monsters(g, player);
+                if (item_result == 1) game_advance_monsters(g, player);
             }
         } else if (key == 'l' || key == 'L') {
             cmd_drop_item(g, player);
@@ -6902,8 +8084,16 @@ resume_exploration:
             cmd_spells_in_effect(g, player, 0);
         } else if (key == '2') {
             cmd_spells_in_effect(g, player, 1);
+        } else if (key == '3' &&
+                   mw_experience_mode(player) == MW_EXPERIENCE_ENHANCED) {
+            cmd_spells_in_effect(g, player, 2);
         } else if (key == 't' || key == 'T') {
-            game_advance_monsters(g, player);
+            int monster = game_find_adjacent_monster(g);
+            if (monster >= 0)
+                (void)fight_monster_action(g, player, monster,
+                                           COMBAT_ACTION_WAIT);
+            else
+                game_advance_monsters(g, player);
         } else if (key == 'u' || key == 'U') {
             int delta = ladder_delta(g, g->cur_x, g->cur_y);
             int shop = game_shop_type(g, g->cur_x, g->cur_y);
@@ -6928,7 +8118,7 @@ resume_exploration:
                     show_runtime_indicator(g, player,
                         "OPEN FLOOR MODE: BOTTOM REACHED.",
                         "THERE IS NO DEEPER DUNGEON FLOOR.", 8);
-            } else if (cmd_dig_hole(g, player) && player->hp_cur <= 0) {
+            } else if (cmd_dig_hole(g, player) && mw_hp_cur(player) == 0) {
                 goto game_over;
             }
         } else if (key == 'k' || key == 'K') {
@@ -6938,11 +8128,8 @@ resume_exploration:
                 player->trapdoor_keys[key_index]) {
                 game_change_floor(g, player, target);
                 game_relocate(g, player);
-                video_clear(v, 0);
-                video_draw_text(v, 225, LOGICAL_H / 2,
-                                "THE TRAPDOOR DROPS YOU!", 12);
-                video_present(v);
-                SDL_Delay(800);
+                town_message(g, player, "THE TRAPDOOR DROPS YOU!",
+                             "YOU LAND ON A DEEPER FLOOR.", "", 12);
             } else if (target < 0) {
                 town_message(g, player, "I DON'T SEE ANY TRAP DOOR HERE.",
                              "KEEP SEARCHING.", "", 12);
@@ -6981,7 +8168,7 @@ resume_exploration:
             int direction = -1;
             switch (scan) {
             case 0x3B: /* F1 is the printed Help synonym. */
-                cmd_help(g);
+                cmd_help(g, player);
                 break;
             case 0x48: /* Up arrow = North (Y-1) */
                 direction = 0;
@@ -7003,7 +8190,7 @@ resume_exploration:
         /* Waiting, magic and item use can all advance monsters.  Route any
          * resulting death through the same contract/permanent-death handler
          * immediately instead of drawing another zero-HP exploration frame. */
-        if (player->hp_cur <= 0) goto game_over;
+        if (mw_hp_cur(player) == 0) goto game_over;
 
         if (g->cur_x < 0) g->cur_x = 0;
         if (g->cur_y < 0) g->cur_y = 0;
@@ -7021,7 +8208,7 @@ game_over:
     ;
     int death_raised = 0;
     int permanent_death = 0;
-    if (player->hp_cur <= 0) {
+    if (mw_hp_cur(player) == 0) {
         video_clear(v, 0);
         video_draw_text(v, 160, 180, "YOU HAVE DIED!", 12);
         if (player->raise_x != 0xFFFFu) {

@@ -11,13 +11,49 @@ void input_init(Input *inp) {
     memset(inp, 0, sizeof(*inp));
 }
 
-static void input_push(Input *inp, int key, int x, int y) {
+static void input_push(Input *inp, int key, int x, int y, SDL_Keymod mods) {
     int next = (inp->tail + 1) % KEY_QUEUE_SIZE;
     if (next == inp->head) return; /* queue full, drop key */
     inp->keys[inp->tail] = key;
+    inp->key_mods[inp->tail] = mods;
     inp->event_x[inp->tail] = x;
     inp->event_y[inp->tail] = y;
     inp->tail = next;
+}
+
+static int movement_keycode(SDL_Keycode sym) {
+    switch (sym) {
+    case SDLK_UP:
+    case SDLK_DOWN:
+    case SDLK_LEFT:
+    case SDLK_RIGHT:
+    case SDLK_HOME:
+    case SDLK_END:
+    case SDLK_PAGEUP:
+    case SDLK_PAGEDOWN:
+    case SDLK_KP_1:
+    case SDLK_KP_2:
+    case SDLK_KP_3:
+    case SDLK_KP_4:
+    case SDLK_KP_6:
+    case SDLK_KP_7:
+    case SDLK_KP_8:
+    case SDLK_KP_9:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int extended_repeat_already_queued(const Input *inp, int scan,
+                                          SDL_Keymod mods) {
+    if (inp->head == inp->tail) return 0;
+    int scan_index = (inp->tail + KEY_QUEUE_SIZE - 1) % KEY_QUEUE_SIZE;
+    int zero_index = (scan_index + KEY_QUEUE_SIZE - 1) % KEY_QUEUE_SIZE;
+    return scan_index != inp->head &&
+           inp->keys[zero_index] == 0 &&
+           inp->keys[scan_index] == scan &&
+           inp->key_mods[scan_index] == mods;
 }
 
 void input_pump(Input *inp) {
@@ -28,14 +64,22 @@ void input_pump(Input *inp) {
             inp->quit_requested = 1;
             break;
         case SDL_KEYDOWN: {
-            if (ev.key.repeat) break;
-            int dos_key = input_sdl_to_dos(ev.key.keysym.sym, (SDL_Keymod)ev.key.keysym.mod);
+            SDL_Keymod mods = (SDL_Keymod)ev.key.keysym.mod;
+            /* DOS keyboard repeat is what lets WORLD keep walking while a
+             * cursor key is held.  SDL marks those later KEYDOWN events as
+             * repeats; accept them only for movement so held menu commands
+             * cannot fire repeatedly. */
+            if (ev.key.repeat && !movement_keycode(ev.key.keysym.sym)) break;
+            int dos_key = input_sdl_to_dos(ev.key.keysym.sym, mods);
             if (dos_key > 0) {
-                input_push(inp, dos_key, -1, -1);
+                input_push(inp, dos_key, -1, -1, mods);
             } else if (dos_key < 0) {
+                if (ev.key.repeat &&
+                    extended_repeat_already_queued(inp, -dos_key, mods))
+                    break;
                 /* Extended key: push 0 then scancode */
-                input_push(inp, 0, -1, -1);
-                input_push(inp, -dos_key, -1, -1);
+                input_push(inp, 0, -1, -1, mods);
+                input_push(inp, -dos_key, -1, -1, mods);
             }
             break;
         }
@@ -43,7 +87,8 @@ void input_pump(Input *inp) {
             inp->mouse_x = ev.button.x;
             inp->mouse_y = ev.button.y;
             if (ev.button.button == SDL_BUTTON_LEFT)
-                input_push(inp, INPUT_MOUSE_CLICK, ev.button.x, ev.button.y);
+                input_push(inp, INPUT_MOUSE_CLICK, ev.button.x, ev.button.y,
+                           KMOD_NONE);
             break;
         case SDL_MOUSEMOTION:
             inp->mouse_x = ev.motion.x;
@@ -55,9 +100,11 @@ void input_pump(Input *inp) {
             if (ev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
                 amount = -amount;
             if (amount > 0)
-                input_push(inp, INPUT_MOUSE_WHEEL_UP, inp->mouse_x, inp->mouse_y);
+                input_push(inp, INPUT_MOUSE_WHEEL_UP, inp->mouse_x,
+                           inp->mouse_y, KMOD_NONE);
             else if (amount < 0)
-                input_push(inp, INPUT_MOUSE_WHEEL_DOWN, inp->mouse_x, inp->mouse_y);
+                input_push(inp, INPUT_MOUSE_WHEEL_DOWN, inp->mouse_x,
+                           inp->mouse_y, KMOD_NONE);
             break;
         }
         default:
@@ -78,6 +125,7 @@ int input_getch(Input *inp) {
         SDL_Delay(10);
     }
     int key = inp->keys[inp->head];
+    inp->last_key_mods = inp->key_mods[inp->head];
     if (key == INPUT_MOUSE_CLICK) {
         inp->last_mouse_x = inp->event_x[inp->head];
         inp->last_mouse_y = inp->event_y[inp->head];
@@ -113,12 +161,19 @@ void input_mouse_position(Input *inp, int *x, int *y, unsigned *serial) {
     if (serial) *serial = inp->mouse_motion_serial;
 }
 
+SDL_Keymod input_last_key_modifiers(const Input *inp) {
+    return inp ? inp->last_key_mods : KMOD_NONE;
+}
+
 /* Map SDL keys to what the original DOS game expects.
  * Returns: >0 for ASCII, <0 for extended scancode (caller pushes 0 then -ret),
  *          0 for keys we don't map. */
 int input_sdl_to_dos(SDL_Keycode sym, SDL_Keymod mod) {
     /* Native-only diagnostic shortcuts use otherwise unused function-key
      * chords, leaving every original WORLD key byte unchanged. */
+    if (sym == SDLK_F12 && (mod & KMOD_CTRL) &&
+        (mod & KMOD_SHIFT) && (mod & KMOD_ALT))
+        return INPUT_MAX_CHARACTER;
     if (sym == SDLK_F5 && (mod & KMOD_CTRL)) return INPUT_MODEL_VIEWER;
     if (sym == SDLK_F6 && (mod & KMOD_CTRL)) return INPUT_DUNGEON_REROLL;
     if (sym == SDLK_F7 && (mod & KMOD_CTRL)) return INPUT_OPEN_FLOOR_TOGGLE;

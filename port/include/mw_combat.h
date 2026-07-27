@@ -38,11 +38,16 @@ typedef struct {
 #define ASCENDED_BOSS_FIRST 174
 #define ASCENDED_BOSS_COUNT 4
 #define MONSTER_TYPE_COUNT (DEEP_MONSTER_FIRST + DEEP_MONSTER_COUNT)
-#define WEAPON_STAT_COUNT  12
-#define ARMOR_STAT_COUNT   8
+#define WEAPON_STAT_COUNT  20
+#define ARMOR_STAT_COUNT   16
 
 extern const MonsterType monster_types[MONSTER_TYPE_COUNT];
 extern const WeaponStats weapon_stats[WEAPON_STAT_COUNT];
+const char *combat_armor_name(int armor);
+int combat_armor_defense(int armor);
+int combat_armor_weight(int armor);
+int combat_weapon_allowed(const Character *player, int weapon);
+int combat_armor_allowed(const Character *player, int armor);
 
 /* ── Combat state ── */
 typedef struct {
@@ -61,6 +66,13 @@ typedef struct {
     char special_message[96];
 } CombatState;
 
+enum {
+    COMBAT_ACTION_FIGHT = 0,
+    COMBAT_ACTION_CAST,
+    COMBAT_ACTION_ITEM,
+    COMBAT_ACTION_WAIT
+};
+
 /* ── Spell definitions ── */
 typedef enum {
     SPELL_CAT_PERMANENT = 0,
@@ -75,6 +87,7 @@ const char *combat_spell_name(int category, int index);
 /* Combat lifecycle */
 void combat_init_encounter(Game *g, CombatState *cs);
 void combat_init_entity(Game *g, CombatState *cs, int entity_index);
+int  combat_take_turn(Game *g, CombatState *cs, Character *player, int action);
 void combat_run(Game *g, CombatState *cs, Character *player);
 
 /* Individual actions */
@@ -85,6 +98,8 @@ int  combat_cast_battle_spell(Game *g, CombatState *cs, Character *player);
 /* Shared magic UI/engine.  A null combat state means exploration mode. */
 int  cmd_cast_spell_menu(Game *g, Character *player, CombatState *combat);
 int  cmd_use_item(Game *g, Character *player, CombatState *combat);
+void game_draw_use_item_test(Game *g, Character *player,
+                             CombatState *combat, int page);
 
 /* Original effect lifecycle: one call per player action, and an inn reset. */
 void character_tick_effects(Game *g, Character *player);
@@ -99,6 +114,8 @@ int  combat_monster_type_valid(int type_idx, int floor_depth);
 int  combat_pick_monster_type(Game *g, int floor_depth);
 int  combat_monster_max_floor(int type_idx);
 int  combat_monster_drain_amount(int type_idx);
+const char *combat_monster_spell_name(int type_idx);
+int  combat_monster_spell_chance(int type_idx);
 int  get_monster_pic_index_ext(int type_idx);
 int  get_monster_color_ext(int type_idx);
 int  get_monster_tint_ext(int type_idx);

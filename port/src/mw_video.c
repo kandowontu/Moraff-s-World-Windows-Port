@@ -539,6 +539,9 @@ static void font_build_remap(int *remap) {
     for (int i = 0; i < 26; i++) remap['A' + i] = 1 + i;
     for (int i = 0; i < 26; i++) remap['a' + i] = 1 + i;
     for (int i = 0; i < 10; i++) remap['0' + i] = 27 + i;
+    /* WORLD's table at DS:7F0D maps '-' to font slot zero.  Slot zero is
+       therefore a real punctuation glyph, not an unused sentinel. */
+    remap['-'] = 0;
     remap[','] = 37; remap['.'] = 38; remap['?'] = 39; remap['!'] = 40;
     remap['('] = 41; remap[')'] = 42; remap['\''] = 43; remap['$'] = 44;
     remap[':'] = 45;

@@ -252,6 +252,7 @@ static int run_test_trainer(const char *data_dir) {
     dummy.hp_max = 2345;
     dummy.sp_cur = 3456.0f;
     dummy.sp_max = 4567.0f;
+    dummy.age = 42u * MW_AGE_YEAR_UNITS + 123u * MW_AGE_DAY_UNITS;
     dummy.x_pos = 31;
     dummy.y_pos = 44;
     dummy.floor_depth = 7;
@@ -270,19 +271,72 @@ static int run_test_trainer(const char *data_dir) {
     game.input.keys[game.input.tail] = 0x1B;
     game.input.tail = (game.input.tail + 1) % KEY_QUEUE_SIZE;
     trainer_run(&game, &dummy);
-    int failures = trainer_self_test();
+    char bmp_path[300];
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_trainer_stats.bmp", data_dir);
+    int failures = 0;
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+    failures += trainer_self_test();
+
+    mw_set_experience_mode(&dummy, MW_EXPERIENCE_ENHANCED);
+    for (int relic = 0; relic < MW_RELIC_COUNT; relic++)
+        mw_set_relic_owned(&dummy, relic, 1);
+    dummy.native.relic_phoenix_cooldown = 187;
+    trainer_draw_stats_test(&game, &dummy, 49);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_trainer_relics.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
 
     for (int row = 0; row < 4; row++) {
-        for (int col = 0; col < 30; col++) {
+        for (int col = 0; col < MW_ENHANCED_SPELL_COUNT; col++) {
             dummy.spells[row][col] = (u8)(((row + col) % 4) == 0);
             dummy.scrolls[row][col] = (u8)(((row * 2 + col) % 5) == 0);
             dummy.wands[row][col] = (u8)((row + col) % 10);
             dummy.papers[row][col] = (u8)(((row + col * 2) % 7) == 0);
         }
     }
-    trainer_draw_grid_test(&game, &dummy, 2, SPELL_CAT_PREPARATION, 11);
-    char bmp_path[300];
+    trainer_draw_grid_test(&game, &dummy, 2, SPELL_CAT_PREPARATION, 34);
     snprintf(bmp_path, sizeof(bmp_path), "%s/test_trainer.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    for (int tier = 0; tier < 8; tier++) {
+        mw_set_weapon_inventory_count(&dummy, 12 + tier, tier + 1);
+        mw_set_weapon_enchant(&dummy, 12 + tier, 200 + tier * 125);
+        mw_set_armor_inventory_count(&dummy, 8 + tier, tier + 1);
+        mw_set_armor_enchant(&dummy, 8 + tier, 150 + tier * 100);
+    }
+    trainer_draw_equipment_test(&game, &dummy, 31);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_trainer_equipment.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    /* Classic mode must not render or select any deep-magic or native gear
+       slot even when a stale Enhanced cursor is supplied by the test. */
+    mw_set_experience_mode(&dummy, MW_EXPERIENCE_CLASSIC);
+    trainer_draw_stats_test(&game, &dummy, 49);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_trainer_classic_stats.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+    trainer_draw_grid_test(&game, &dummy, 2, SPELL_CAT_PREPARATION,
+                           MW_ENHANCED_SPELL_COUNT - 1);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_trainer_classic_magic.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+    trainer_draw_equipment_test(&game, &dummy, 31);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_trainer_classic_equipment.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+    mw_set_experience_mode(&dummy, MW_EXPERIENCE_ENHANCED);
+    trainer_draw_equipment_test(&game, &dummy, 31);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_trainer_enhanced_final.bmp", data_dir);
     if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
     else printf("Saved: %s\n", bmp_path);
 
@@ -359,8 +413,9 @@ static int run_test_magic(const char *data_dir) {
     dummy.floor_depth = 1;
     dummy.x_pos = 19;
     dummy.y_pos = 20;
+    mw_set_experience_mode(&dummy, MW_EXPERIENCE_ENHANCED);
     for (int category = 0; category < 4; category++)
-        for (int index = 0; index < 30; index++)
+        for (int index = 0; index < MW_ENHANCED_SPELL_COUNT; index++)
             dummy.spells[category][index] = 1;
     game->cur_floor = dummy.floor_depth;
     game->cur_x = dummy.x_pos;
@@ -377,6 +432,123 @@ static int run_test_magic(const char *data_dir) {
 
     char bmp_path[300];
     snprintf(bmp_path, sizeof(bmp_path), "%s/test_spell_selector.bmp", data_dir);
+    if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    /* Enhanced adds a second page for levels 11-14 without changing the
+       original selector page or its hotkeys. */
+    game->input.keys[game->input.tail] = '2';
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    game->input.keys[game->input.tail] = 0;
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    game->input.keys[game->input.tail] = 0x51;
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    game->input.keys[game->input.tail] = 0x1B;
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    cmd_cast_spell_menu(game, &dummy, NULL);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_deep_spell_selector.bmp", data_dir);
+    if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    /* Cast the longest preparation-result notice and retain its final frame.
+       This guards the original upper-left pane against horizontal runoff. */
+    game->input.keys[game->input.tail] = '2';
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    game->input.keys[game->input.tail] = 0;
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    game->input.keys[game->input.tail] = 0x51;
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    game->input.keys[game->input.tail] = 'H';
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    game->input.keys[game->input.tail] = ' ';
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    cmd_cast_spell_menu(game, &dummy, NULL);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_spell_notice_wrap.bmp", data_dir);
+    if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    /* Capture the original shop_magic-sized USE ITEM dispatcher and both
+       non-spell child pages for visual regression review. */
+    for (int page = 0; page < 3; page++) {
+        static const char *const names[3] = {
+            "test_use_item_menu.bmp",
+            "test_use_item_pills.bmp",
+            "test_use_item_other.bmp"
+        };
+        game_draw_use_item_test(game, &dummy, NULL, page);
+        snprintf(bmp_path, sizeof(bmp_path), "%s/%s", data_dir, names[page]);
+        if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
+        else printf("Saved: %s\n", bmp_path);
+    }
+
+    /* Exercise both equipment pages with a mix of collected and hidden
+       entries.  The selector must consume only Escape/PageDown—not a normal
+       command waiting behind it. */
+    mw_set_experience_mode(&dummy, MW_EXPERIENCE_ENHANCED);
+    dummy.weapon_inventory[0] = 1;
+    dummy.weapon_inventory[1] = 1;
+    dummy.weapon_inventory[4] = 1;
+    mw_set_weapon_enchant(&dummy, 4, 3);
+    game_draw_exploration(game, &dummy);
+    game->input.keys[game->input.tail] = 0x1B;
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    cmd_weapons(game, &dummy);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_weapon_selector.bmp", data_dir);
+    if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    mw_set_weapon_inventory_count(&dummy, 12, 1);
+    mw_set_weapon_inventory_count(&dummy, 14, 1);
+    game_draw_exploration(game, &dummy);
+    game->input.keys[game->input.tail] = 0;
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    game->input.keys[game->input.tail] = 0x51;
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    game->input.keys[game->input.tail] = 0x1B;
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    cmd_weapons(game, &dummy);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_deep_weapon_selector.bmp", data_dir);
+    if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    CombatState one_action = {0};
+    one_action.active = 1;
+    one_action.entity_index = -1;
+    one_action.monster_type_idx = 0;
+    one_action.monster_level = 1;
+    one_action.monster_hp = one_action.monster_max_hp = 1000000;
+    game->cheat_god_mode = 1;
+    game->input.keys[game->input.tail] = 'v';
+    game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
+    combat_run(game, &one_action, &dummy);
+    if (!input_kbhit(&game->input) ||
+        input_getch(&game->input) != 'v') {
+        fprintf(stderr,
+                "COMBAT TEST FAIL: one-action combat consumed a main-loop key\n");
+        failures++;
+    }
+    for (int relic = 0; relic < MW_RELIC_COUNT; relic++)
+        mw_set_relic_owned(&dummy, relic, 1);
+    dummy.ring_regen = 4;
+    mw_set_ring_prot_plus(&dummy, 125);
+    dummy.antimagic_ring = 5;
+    mw_set_body_armor_plus(&dummy, 300);
+    mw_set_gauntlet(&dummy, 275);
+    dummy.native.relic_regen_phase = 2;
+    dummy.native.relic_phoenix_cooldown = 187;
+    game_draw_exploration(game, &dummy);
+    game_draw_effects_test(game, &dummy, 2);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_effects_3.bmp", data_dir);
+    if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+    failures += game_dialog_ui_self_test(game, &dummy);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_relic_pockets.bmp", data_dir);
     if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
     else printf("Saved: %s\n", bmp_path);
     game->active_save_slot = -1;

@@ -7,6 +7,8 @@
 void trainer_run(Game *g, Character *player);
 void trainer_draw_grid_test(Game *g, Character *player, int set,
                             int row, int column);
+void trainer_draw_equipment_test(Game *g, Character *player, int selection);
+void trainer_draw_stats_test(Game *g, Character *player, int selection);
 int  trainer_self_test(void);
 
 #endif /* MW_TRAINER_H */

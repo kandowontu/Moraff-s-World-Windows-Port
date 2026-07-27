@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
 
 /* Convert a click on a uniformly spaced numbered/lettered list into the
  * same key byte consumed by its original keyboard path. */
@@ -39,6 +40,16 @@ const WeaponStats weapon_stats[WEAPON_STAT_COUNT] = {
     { "POWER WEAPON I",   129, 6,  8,   0 },
     { "POWER WEAPON II",  199, 10, 8,   0 },
     { "POWER WEAPON III", 399, 20, 8,   0 },
+    /* MW_EXTENSION: quest gear awarded only in Enhanced mode.  Slots 8-11
+       remain the temporary Power Weapon spell dice used by WORLD.EXE. */
+    { "WORLDFORGED BLADE", 75, 28, 18, 10 },
+    { "RIFTCARVER",       130, 42, 17, 12 },
+    { "STARFORGED SABER", 210, 58, 16, 14 },
+    { "VOIDREAVER",       310, 74, 15, 16 },
+    { "ETERNITY EDGE",    430, 90, 14, 18 },
+    { "CELESTIAL BRAND",  570,105, 13, 20 },
+    { "ASCENDANT EDGE",   750,118, 12, 22 },
+    { "MORAFF'S LEGACY",  980,127, 10, 24 },
 };
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -185,7 +196,7 @@ const MonsterType monster_types[MONSTER_TYPE_COUNT] = {
     /* 112-113: native deep-dungeon quest bosses.  These deliberately use
        values above 255 to exercise the widened monster stat model. */
     {"Violet Abyss King",275,180,310,140,190,150,300,375,375,1,300,320},
-    {"Prismatic World King",420,260,480,220,280,108,500,500,500,1,420,450},
+    {"Prismatic World King",420,260,480,220,280,220,500,500,500,1,420,450},
     /* 114-133: native deep-floor generations.  Each group enters for 75
        floors and overlaps the next group for 25, giving floors 251-500 a
        changing roster instead of extending the original 8-bit bands. */
@@ -204,15 +215,15 @@ const MonsterType monster_types[MONSTER_TYPE_COUNT] = {
     {"Abyss Giant",      260,130,245,190,135,130,100,351,425,0,240,235},
     {"Golden Devourer",  220,150,235,160,165,115,100,351,425,0,230,225},
 
-    {"Crimson Death Mask",260,110,260,205,190,105,100,401,475,0,260,255},
-    {"Frost Skeleton",   245,130,270,210,210,100,100,401,475,0,270,265},
-    {"Plague Zombie",    260,145,280,220,175,115,100,401,475,0,275,270},
-    {"Violet Wraith",    285,120,300,235,225,110,100,401,475,0,290,285},
+    {"Crimson Death Mask",260,110,260,205,190,120,100,401,475,0,260,255},
+    {"Frost Skeleton",   245,130,270,210,210,120,100,401,475,0,270,265},
+    {"Plague Zombie",    260,145,280,220,175,130,100,401,475,0,275,270},
+    {"Violet Wraith",    285,120,300,235,225,130,100,401,475,0,290,285},
 
-    {"Obsidian Mummy",   310,155,325,250,210,115,100,451,500,0,315,310},
-    {"Astral Vampire",   330,145,350,270,245,110,100,451,500,0,335,330},
-    {"Blood Medusa",     350,170,365,285,260,120,100,451,500,0,350,345},
-    {"Void Demon",       380,190,400,310,275,125,100,451,500,0,380,375},
+    {"Obsidian Mummy",   310,155,325,250,210,130,100,451,500,0,315,310},
+    {"Astral Vampire",   330,145,350,270,245,130,100,451,500,0,335,330},
+    {"Blood Medusa",     350,170,365,285,260,145,100,451,500,0,350,345},
+    {"Void Demon",       380,190,400,310,275,150,100,451,500,0,380,375},
 
     /* 134-173: ascended-floor variants.  Ten overlapping generations carry
        the native progression from floor 501 through floor 1000. */
@@ -282,7 +293,94 @@ const MonsterType monster_types[MONSTER_TYPE_COUNT] = {
 
 /* Index 7 is the quest-only Ogre armor.  In the DOS data it deliberately
    reads the 14 at the boundary immediately following the seven shop rows. */
-static const int armor_defense[] = { 0, 2, 4, 6, 9, 12, 16, 14 };
+static const int armor_defense[ARMOR_STAT_COUNT] = {
+    0, 2, 4, 6, 9, 12, 16, 14,
+    75, 130, 210, 310, 430, 570, 750, 980
+};
+
+static const int armor_weight[ARMOR_STAT_COUNT] = {
+    0, 14, 24, 40, 60, 72, 48, 0,
+    36, 42, 48, 54, 60, 66, 72, 80
+};
+
+static const char *const armor_type_names[ARMOR_STAT_COUNT] = {
+    "SKIN", "LEATHER", "CHAIN", "SCALE", "PLATE",
+    "FIELD PLATE", "TITANIUM", "OGRE",
+    "PRISMATIC MAIL", "RIFTWARD PLATE", "STARFORGED MAIL",
+    "VOID BASTION", "ETERNITY PLATE", "CELESTIAL AEGIS",
+    "ASCENDANT AEGIS", "MORAFF'S BULWARK"
+};
+
+const char *combat_armor_name(int armor) {
+    return armor >= 0 && armor < ARMOR_STAT_COUNT ?
+           armor_type_names[armor] : "UNKNOWN";
+}
+
+int combat_armor_defense(int armor) {
+    return armor >= 0 && armor < ARMOR_STAT_COUNT ?
+           armor_defense[armor] : 0;
+}
+
+int combat_armor_weight(int armor) {
+    return armor >= 0 && armor < ARMOR_STAT_COUNT ?
+           armor_weight[armor] : 0;
+}
+
+int combat_weapon_allowed(const Character *player, int weapon) {
+    if (!player || weapon < 0 || weapon >= WEAPON_STAT_COUNT ||
+        (weapon >= 8 && weapon <= 11))
+        return 0;
+    if (weapon >= 12 &&
+        mw_experience_mode(player) != MW_EXPERIENCE_ENHANCED)
+        return 0;
+    if (weapon == 0) return 1;
+    if (mw_universal_access(player)) return 1;
+    if (weapon == 12)
+        return player->class_id != CLASS_WORSHIPPER &&
+               player->class_id != CLASS_MONK;
+    if (weapon >= 13)
+        return player->class_id == CLASS_FIGHTER ||
+               player->class_id == CLASS_PRIEST ||
+               player->class_id == CLASS_MAGE;
+    switch (player->class_id) {
+    case CLASS_FIGHTER:
+        return 1;
+    case CLASS_WORSHIPPER:
+    case CLASS_MONK:
+        return 0;
+    case CLASS_WIZARD:
+    case CLASS_SAGE:
+        return weapon == 1 || weapon == 4;
+    default:
+        return weapon != 7;
+    }
+}
+
+int combat_armor_allowed(const Character *player, int armor) {
+    if (!player || armor < 0 || armor >= ARMOR_STAT_COUNT) return 0;
+    if (armor >= 8 &&
+        mw_experience_mode(player) != MW_EXPERIENCE_ENHANCED)
+        return 0;
+    if (armor == 0) return 1;
+    if (mw_universal_access(player)) return 1;
+    if (armor == 8)
+        return player->class_id == CLASS_FIGHTER ||
+               player->class_id == CLASS_MONK ||
+               player->class_id == CLASS_PRIEST ||
+               player->class_id == CLASS_SAGE ||
+               player->class_id == CLASS_MAGE;
+    if (armor >= 9)
+        return player->class_id == CLASS_FIGHTER ||
+               player->class_id == CLASS_PRIEST ||
+               player->class_id == CLASS_MAGE;
+    if (player->class_id == CLASS_WORSHIPPER ||
+        player->class_id == CLASS_WIZARD)
+        return 0;
+    if (player->class_id == CLASS_MONK ||
+        player->class_id == CLASS_SAGE)
+        return armor == 1;
+    return 1;
+}
 
 /* ══════════════════════════════════════════════════════════════════════
    Battle spell data
@@ -298,7 +396,8 @@ typedef enum {
     BS_RESIST_POISON, BS_RESIST_DISEASE, BS_ANTI_COLD, BS_ANTI_FIRE,
     BS_RESIST_DRAIN, BS_PASS_WALL, BS_RELOCATE, BS_POWER_WEAPON,
     BS_BUFF_STR_SPD, BS_STOP, BS_SHOCK_125, BS_SHOCK_300,
-    BS_HEAL_FIXED, BS_HEAL_ALL,
+    BS_HEAL_FIXED, BS_HEAL_ALL, BS_DRAIN_SCALE, BS_DAMAGE_PERCENT,
+    BS_RESTORE_ALL, BS_FULL_RESTORE, BS_AEGIS,
 } BattleSpellType;
 
 typedef struct {
@@ -307,8 +406,8 @@ typedef struct {
     int param2;
 } BattleSpellDef;
 
-/* Wizard battle spells (30 entries, matching wiz_names order) */
-static const BattleSpellDef wiz_spells[30] = {
+/* Wizard battle spells: the original 30 followed by ten Enhanced entries. */
+static const BattleSpellDef wiz_spells[MW_ENHANCED_SPELL_COUNT] = {
     /* L1 */ {BS_SLEEP,0,0},        {BS_DAMAGE_SCALE,2,2},   {BS_BUFF_PROTECT,1,0},
     /* L2 */ {BS_BUFF_SLOW,0,0},    {BS_BUFF_STR,0,0},       {BS_DAMAGE_FIXED,25,0},
     /* L3 */ {BS_DAMAGE_SCALE,4,4}, {BS_DAMAGE_FIXED,50,0},  {BS_BUFF_SPD,0,0},
@@ -319,10 +418,16 @@ static const BattleSpellDef wiz_spells[30] = {
     /* L8 */ {BS_DAMAGE_MULTI,7,11},{BS_BUFF_PROTECT,3,0},    {BS_POWER_WEAPON,2,0},
     /* L9 */ {BS_HOLD,0,0},         {BS_DRAIN,0,0},          {BS_SHOCK_300,0,0},
     /* L10*/ {BS_DAMAGE_RANGE,200,500},{BS_AUTOKILL,0,0},     {BS_POWER_WEAPON,3,0},
+    /* L11*/ {BS_DAMAGE_SCALE,25,500},{BS_STOP,30,0},          {BS_DAMAGE_RANGE,5000,12000},
+    /* L12*/ {BS_DRAIN_SCALE,4,0},  {BS_DAMAGE_PERCENT,25,5000},
+              {BS_DAMAGE_RANGE,15000,30000},
+    /* L13*/ {BS_STOP,120,0},       {BS_DAMAGE_PERCENT,40,25000},
+              {BS_DAMAGE_SCALE,50,2000},
+    /* L14*/ {BS_DAMAGE_RANGE,60000,120000},
 };
 
-/* Priest battle spells (30 entries, matching priest_names order) */
-static const BattleSpellDef priest_spells[30] = {
+/* Priest battle spells: the original 30 followed by ten Enhanced entries. */
+static const BattleSpellDef priest_spells[MW_ENHANCED_SPELL_COUNT] = {
     /* L1 */ {BS_SLEEP,0,0},        {BS_BUFF_PROTECT,1,0},   {BS_BUFF_STR,0,0},
     /* L2 */ {BS_RESIST_POISON,0,0},{BS_BUFF_SPD,0,0},       {BS_HEAL_FIXED,20,0},
     /* L3 */ {BS_RESIST_DISEASE,0,0},{BS_RELOCATE,0,0},      {BS_BUFF_SLOW,0,0},
@@ -333,10 +438,16 @@ static const BattleSpellDef priest_spells[30] = {
     /* L8 */ {BS_BUFF_PROTECT,3,0}, {BS_DAMAGE_RANGE,125,225},{BS_DAMAGE_MULTI,4,8},
     /* L9 */ {BS_AUTOKILL,0,0},     {BS_POWER_WEAPON,3,0},   {BS_BUFF_STR_SPD,0,0},
     /* L10*/ {BS_BUFF_PROTECT,4,0}, {BS_HEAL_ALL,0,0},       {BS_SHOCK_300,0,0},
+    /* L11*/ {BS_RESTORE_ALL,0,0},  {BS_AEGIS,6,180},         {BS_DAMAGE_RANGE,3500,9000},
+    /* L12*/ {BS_STOP,30,0},        {BS_DAMAGE_PERCENT,20,4000},
+              {BS_FULL_RESTORE,0,0},
+    /* L13*/ {BS_AEGIS,8,1200},     {BS_DAMAGE_RANGE,12000,26000},
+              {BS_FULL_RESTORE,0,0},
+    /* L14*/ {BS_DAMAGE_PERCENT,50,30000},
 };
 
 /* Spell names (same arrays as in mw_game.c, duplicated here for self-containment) */
-static const char *wiz_spell_names[30] = {
+static const char *wiz_spell_names[MW_ENHANCED_SPELL_COUNT] = {
     "SLEEP","MAGIC ZAP","MINOR PROTECTION",
     "SLOW ENEMIES","STRENGTH","MINOR SHOCK",
     "LIGHTNING","MAGIC MISSLE","SPEED",
@@ -347,9 +458,13 @@ static const char *wiz_spell_names[30] = {
     "MAGIC BOLT","MAJOR PROTECTION","POWER WEAPON II",
     "HOLD MONSTER","DRAIN MONSTER","MAJOR SHOCK",
     "MAJOR EXPLOSION","AUTOKILL","POWER WEAPON III",
+    "ABYSSAL LANCE","TIME STOP","VOID NOVA",
+    "SOUL REND","OBLIVION",
+    "STARFIRE","CHRONO LOCK","REALITY RUPTURE",
+    "MANA TEMPEST","ANNIHILATION",
 };
 
-static const char *priest_spell_names[30] = {
+static const char *priest_spell_names[MW_ENHANCED_SPELL_COUNT] = {
     "SLEEP","MINOR PROTECTION","STRENGTH",
     "RESIST POISON","SPEED","FAST CURE",
     "RESIST DISEASE","RELOCATE","SLOW ENEMIES",
@@ -360,9 +475,13 @@ static const char *priest_spell_names[30] = {
     "MAJOR PROTECTION","EXPLOSION","MAGIC ZOT",
     "AUTOKILL","POWER WEAPON III","STRENGTH AND SPEED",
     "ULTRA PROTECTION","FAST HEAL","MAJOR SHOCK",
+    "GREATER RESTORATION","DIVINE AEGIS","HOLY CATACLYSM",
+    "CELESTIAL STASIS","FINAL JUDGMENT",
+    "MASS RESTORATION","ETERNAL WARD","WRATH OF HEAVEN",
+    "PHOENIX PRAYER","DIVINE VERDICT",
 };
 
-static const char *permanent_spell_names[30] = {
+static const char *permanent_spell_names[MW_ENHANCED_SPELL_COUNT] = {
     "ENCHANT WEAPON LEVEL 1", "EXTRA HEALTH POINT", "WRITE SCROLL TO LEVEL 3",
     "ENCHANT ARMOR LEVEL 1", "EXTRA 3 HEALTH POINTS", "ENCHANT WAND LEVEL 3",
     "ENCHANT WEAPON LEVEL 2", "EXTRA 5 HEALTH POINTS", "ENCHANT RING LEVEL 1",
@@ -372,10 +491,15 @@ static const char *permanent_spell_names[30] = {
     "ENCHANT RING LEVEL 3", "ANTI-MAGIC RING LEVEL 3", "BODY ARMOR LEVEL 2",
     "ENCHANT WEAPON LEVEL 4", "ENCHANT ARMOR LEVEL 4", "ENCHANT WAND ANY LEVEL",
     "PERMANENT FEATHER", "ANTI-MAGIC RING LEVEL 5", "EXTRA 25 HEALTH POINTS",
-    "PERMANENT INVISIBILITY", "YOUTH", "BODY ARMOR LEVEL 4"
+    "PERMANENT INVISIBILITY", "YOUTH", "BODY ARMOR LEVEL 4",
+    "ENCHANT WEAPON LEVEL 150","ENCHANT ARMOR LEVEL 100",
+    "BODY ARMOR LEVEL 100","WRITE DEEP SCROLL","CHARGE DEEP WAND",
+    "ENCHANT WEAPON LEVEL 500","ENCHANT ARMOR LEVEL 350",
+    "BODY ARMOR LEVEL 300","WRITE ASCENDANT SCROLL",
+    "CHARGE ASCENDANT WAND"
 };
 
-static const char *preparation_spell_names[30] = {
+static const char *preparation_spell_names[MW_ENHANCED_SPELL_COUNT] = {
     "ENCHANT ARMOR LEVEL 1", "ENCHANT WEAPON LEVEL 1", "LITTLE CURE",
     "ENCHANT WEAPON LEVEL 2", "RELOCATE", "DETECT LEVEL",
     "CURE", "ENCHANT ARMOR LEVEL 2", "STRENGTH",
@@ -385,7 +509,11 @@ static const char *preparation_spell_names[30] = {
     "INVISIBILITY", "ENCHANT ARMOR LEVEL 3", "FAST MOVE",
     "SUPER STRENGTH", "ENCHANT WEAPON LEVEL 5", "MAJOR DESCEND",
     "SUPER AGILITY", "CURE POISON", "HEAL ALL WOUNDS",
-    "MAJOR ASCEND", "CURE DISEASE", "ENCHANT ARMOR LEVEL 4"
+    "MAJOR ASCEND", "CURE DISEASE", "ENCHANT ARMOR LEVEL 4",
+    "ABYSS DESCEND","ABYSS ASCEND","DEEP SANCTUARY",
+    "CARTOGRAPHER'S EYE","TOWN PORTAL",
+    "RIFT DESCEND","RIFT ASCEND","ETERNAL SANCTUARY",
+    "WORLD REVEAL","FULL RESTORATION"
 };
 
 static const char *const *spell_names_for_category(int category) {
@@ -397,24 +525,163 @@ static const char *const *spell_names_for_category(int category) {
 
 const char *combat_spell_name(int category, int index) {
     if (category < SPELL_CAT_PERMANENT || category > SPELL_CAT_PRIEST ||
-        index < 0 || index >= 30)
+        index < 0 || index >= MW_ENHANCED_SPELL_COUNT)
         return "UNKNOWN SPELL";
     return spell_names_for_category(category)[index];
+}
+
+typedef struct MonsterSpellProfile {
+    u8 category;
+    u8 index;
+    u8 chance; /* denominator: one cast attempt in this many responses */
+} MonsterSpellProfile;
+
+enum {
+    LATE_CASTER_FIRST = 112,
+    LATE_CASTER_COUNT = MONSTER_TYPE_COUNT - LATE_CASTER_FIRST
+};
+
+/* MW_EXTENSION: the Enhanced roster previously had only melee/breath
+ * specials.  Its magical creatures now use the same named level 11-14
+ * battle catalog earned by the player.  Brute silhouettes deliberately
+ * retain physical-only identities, while spellcasters become more frequent
+ * and more dangerous toward floor 1000. */
+static const MonsterSpellProfile
+late_monster_spell_profiles[LATE_CASTER_COUNT] = {
+    [112 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 32, 3}, /* Void Nova */
+    [113 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 34, 3}, /* Oblivion */
+    [116 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 30, 5},
+    [118 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 32, 5},
+    [120 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 30, 5},
+    [122 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 30, 5},
+    [123 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 32, 5},
+    [125 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 34, 5},
+    [128 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 30, 4},
+    [129 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 34, 4},
+    [131 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 30, 4},
+    [132 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 32, 4},
+    [133 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 34, 4},
+
+    [135 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 35, 4},
+    [136 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 35, 4},
+    [137 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 35, 4},
+    [138 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 37, 4},
+    [139 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 37, 4},
+    [140 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 38, 4},
+    [141 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 38, 4},
+    [142 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 37, 4},
+    [143 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 37, 4},
+    [144 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 38, 4},
+    [145 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 35, 4},
+
+    [146 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 35, 3},
+    [147 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 37, 3},
+    [148 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 37, 3},
+    [149 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 38, 3},
+    [150 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 35, 3},
+    [151 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 38, 3},
+    [152 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 39, 3},
+    [153 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 37, 3},
+    [154 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 37, 3},
+    [155 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 35, 3},
+    [156 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 39, 3},
+    [157 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 38, 3},
+    [158 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 39, 3},
+    [159 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 37, 3},
+    [160 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 38, 3},
+    [161 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 35, 3},
+    [162 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 39, 3},
+    [163 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 37, 3},
+    [164 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 37, 3},
+    [165 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 39, 3},
+    [166 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 37, 3},
+    [167 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 38, 3},
+    [168 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 39, 3},
+    [169 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 39, 3},
+    [170 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 38, 3},
+    [171 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 35, 3},
+    [172 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 39, 3},
+    [173 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 39, 3},
+
+    [174 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 37, 2},
+    [175 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 39, 2},
+    [176 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 39, 2},
+    [177 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 39, 2},
+};
+
+static const MonsterSpellProfile *monster_spell_profile(int type) {
+    if (type < LATE_CASTER_FIRST || type >= MONSTER_TYPE_COUNT) return NULL;
+    const MonsterSpellProfile *profile =
+        &late_monster_spell_profiles[type - LATE_CASTER_FIRST];
+    return profile->chance ? profile : NULL;
+}
+
+const char *combat_monster_spell_name(int type_idx) {
+    const MonsterSpellProfile *profile = monster_spell_profile(type_idx);
+    return profile ? combat_spell_name(profile->category, profile->index) :
+                     "NONE";
+}
+
+int combat_monster_spell_chance(int type_idx) {
+    const MonsterSpellProfile *profile = monster_spell_profile(type_idx);
+    return profile ? profile->chance : 0;
 }
 
 static void dec_u16(u16 *value) {
     if (*value) --*value;
 }
 
+static void add_stat_capped(u16 *value, unsigned amount) {
+    unsigned total = (unsigned)*value + amount;
+    *value = (u16)(total > MW_PLAYER_STAT_MAX ?
+                   MW_PLAYER_STAT_MAX : total);
+}
+
+static int add_temporary_stat_stack(u16 *value, u16 *turns,
+                                    unsigned amount, u16 duration) {
+    if ((unsigned)*value + amount > MW_PLAYER_STAT_MAX ||
+        *turns > (u16)(UINT16_MAX - duration))
+        return 0;
+    *value = (u16)(*value + amount);
+    *turns = (u16)(*turns + duration);
+    return 1;
+}
+
+static void add_hp_capped(Character *p, unsigned amount) {
+    uint64_t cap = mw_player_hp_cap(p);
+    uint64_t maximum = mw_hp_max(p);
+    uint64_t current = mw_hp_cur(p);
+    maximum = maximum + amount > cap ? cap : maximum + amount;
+    current = current + amount > maximum ? maximum : current + amount;
+    mw_set_hp_max(p, maximum);
+    mw_set_hp_cur(p, current);
+}
+
+static void heal_hp_capped(Character *p, unsigned amount) {
+    uint64_t total = (uint64_t)mw_hp_cur(p) + amount;
+    u32 maximum = mw_hp_max(p);
+    mw_set_hp_cur(p, total > maximum ? maximum : total);
+}
+
 /* MW_PORT: WORLD func_0CA5F, func_0CDDD, func_0D2C9, plus duration/reset
  * work performed by spell-effect helpers 0x10E9A..0x11DA5. */
+static int character_has_maxed_prep_effect(const Character *p, u8 value) {
+    return mw_universal_access(p) && value == 60;
+}
+
+static int character_has_maxed_battle_effect(const Character *p, u16 value) {
+    return mw_universal_access(p) && value == mw_effect_turn_cap(p);
+}
+
 void character_clear_battle_effects(Character *p) {
-    if (p->eff_battle_str) {
+    if (p->eff_battle_str &&
+        !character_has_maxed_battle_effect(p, p->eff_battle_str)) {
         unsigned remove = ((unsigned)p->eff_battle_str + 59) / 60 * 7;
         p->stat_str = p->stat_str >= remove ? (u16)(p->stat_str - remove) : 0;
         p->eff_battle_str = 0;
     }
-    if (p->eff_battle_spd) {
+    if (p->eff_battle_spd &&
+        !character_has_maxed_battle_effect(p, p->eff_battle_spd)) {
         unsigned remove = ((unsigned)p->eff_battle_spd + 59) / 60 * 7;
         p->stat_agi = p->stat_agi >= remove ? (u16)(p->stat_agi - remove) : 0;
         p->eff_battle_spd = 0;
@@ -439,28 +706,36 @@ void character_clear_town_effects(Character *p) {
     p->eff_fast_move = 0;
     if (p->eff_feather == 1) p->eff_feather = 0;
     if (p->eff_invisible == 1) p->eff_invisible = 0;
-    if (p->eff_str_bonus) {
+    if (p->eff_str_bonus &&
+        !character_has_maxed_prep_effect(p, p->eff_str_bonus)) {
         p->stat_str = p->stat_str >= 5 ? (u16)(p->stat_str - 5) : 0;
         p->eff_str_bonus = 0;
     }
-    if (p->eff_agi_bonus) {
+    if (p->eff_agi_bonus &&
+        !character_has_maxed_prep_effect(p, p->eff_agi_bonus)) {
         p->stat_agi = p->stat_agi >= 5 ? (u16)(p->stat_agi - 5) : 0;
         p->eff_agi_bonus = 0;
     }
-    if (p->eff_super_str) {
+    if (p->eff_super_str &&
+        !character_has_maxed_prep_effect(p, p->eff_super_str)) {
         p->stat_str = p->stat_str >= 10 ? (u16)(p->stat_str - 10) : 0;
         p->eff_super_str = 0;
     }
-    if (p->eff_super_agi) {
+    if (p->eff_super_agi &&
+        !character_has_maxed_prep_effect(p, p->eff_super_agi)) {
         p->stat_agi = p->stat_agi >= 10 ? (u16)(p->stat_agi - 10) : 0;
         p->eff_super_agi = 0;
     }
 }
 
 void character_tick_effects(Game *g, Character *p) {
-    if (p->eff_battle_str && --p->eff_battle_str % 60 == 0)
+    if (p->eff_battle_str &&
+        !character_has_maxed_battle_effect(p, p->eff_battle_str) &&
+        --p->eff_battle_str % 60 == 0)
         p->stat_str = p->stat_str >= 7 ? (u16)(p->stat_str - 7) : 0;
-    if (p->eff_battle_spd && --p->eff_battle_spd % 60 == 0)
+    if (p->eff_battle_spd &&
+        !character_has_maxed_battle_effect(p, p->eff_battle_spd) &&
+        --p->eff_battle_spd % 60 == 0)
         p->stat_agi = p->stat_agi >= 7 ? (u16)(p->stat_agi - 7) : 0;
     dec_u16(&p->eff_slow_mon);
     if (p->eff_pwr_wpn_turns && --p->eff_pwr_wpn_turns == 0)
@@ -472,13 +747,15 @@ void character_tick_effects(Game *g, Character *p) {
     if (p->poisoned_turns && !p->eff_resist_poison) {
         if (--p->poisoned_turns == 0) {
             if (p->stat_str > 1) --p->stat_str;
-            p->poisoned_turns = 450;
+            p->poisoned_turns =
+                mw_relic_owned(p, MW_RELIC_DEEPWARD_AMULET) ? 900 : 450;
         }
     }
     if (p->diseased_turns && !p->eff_resist_disease) {
         if (--p->diseased_turns == 0) {
             if (p->stat_con > 1) --p->stat_con;
-            p->diseased_turns = 450;
+            p->diseased_turns =
+                mw_relic_owned(p, MW_RELIC_DEEPWARD_AMULET) ? 900 : 450;
         }
     }
     dec_u16(&p->eff_resist_poison);
@@ -488,10 +765,23 @@ void character_tick_effects(Game *g, Character *p) {
     dec_u16(&p->eff_resist_drain);
     dec_u16(&p->eff_stop_monster);
     dec_u16(&p->eff_hold_monster);
-    if (p->ring_regen && p->hp_cur < p->hp_max) {
-        unsigned healed = p->hp_cur + p->ring_regen;
-        p->hp_cur = (u16)(healed > p->hp_max ? p->hp_max : healed);
+    if (p->ring_regen && mw_hp_cur(p) < mw_hp_max(p))
+        heal_hp_capped(p, p->ring_regen);
+    if (mw_relic_owned(p, MW_RELIC_ARCANE_RING)) {
+        p->native.relic_regen_phase++;
+        if (p->native.relic_regen_phase >= 4) {
+            p->native.relic_regen_phase = 0;
+            if (p->sp_cur < p->sp_max) {
+                p->sp_cur += 1.0f;
+                if (p->sp_cur > p->sp_max) p->sp_cur = p->sp_max;
+            }
+        }
+    } else if (mw_character_native_valid(p)) {
+        p->native.relic_regen_phase = 0;
     }
+    if (mw_relic_owned(p, MW_RELIC_PHOENIX_SEAL) &&
+        p->native.relic_phoenix_cooldown)
+        --p->native.relic_phoenix_cooldown;
     (void)g;
 }
 
@@ -764,7 +1054,9 @@ static int get_effective_weapon(const Character *p) {
 int combat_player_attack(Game *g, CombatState *cs, Character *player) {
     const MonsterType *mt = &monster_types[cs->monster_type_idx];
     int base_wpn = player->equipped_weapon;
-    if (base_wpn >= 8) base_wpn = 0;
+    if (base_wpn >= WEAPON_STAT_COUNT ||
+        (base_wpn >= 8 && base_wpn <= 11))
+        base_wpn = 0;
     const WeaponStats *equipped = &weapon_stats[base_wpn];
     const WeaponStats *damage_weapon = &weapon_stats[get_effective_weapon(player)];
 
@@ -951,6 +1243,130 @@ int combat_monster_drain_amount(int type) {
     return 0;
 }
 
+static int combat_monster_spell_heal(CombatState *cs,
+                                     const MonsterSpellProfile *profile) {
+    if (profile->category != SPELL_CAT_PRIEST ||
+        (profile->index != 30 && profile->index != 35 &&
+         profile->index != 38))
+        return -1;
+    const MonsterType *mt = &monster_types[cs->monster_type_idx];
+    int cap = combat_calc_monster_hp(mt, cs->monster_level);
+    if (cap < cs->monster_hp) cap = cs->monster_hp;
+    int divisor = profile->index == 30 ? 10 :
+                  profile->index == 35 ? 8 : 5;
+    int64_t amount = cap / divisor + cs->monster_level;
+    int64_t healed = (int64_t)cs->monster_hp + amount;
+    if (healed > cap) healed = cap;
+    int restored = (int)(healed - cs->monster_hp);
+    if (restored < 0) restored = 0;
+    cs->monster_hp = (int)healed;
+    if (cs->monster_max_hp < cs->monster_hp)
+        cs->monster_max_hp = cs->monster_hp;
+    return restored;
+}
+
+/* Enemy versions of the player's deep spells retain their identity but use
+ * player-scale damage.  Copying the player's five-figure flat damage would
+ * make the first post-250 caster an unavoidable instant kill; percentage
+ * spells instead remain threatening across normal and trainer-expanded HP. */
+static int combat_monster_spell_effect(Game *g, CombatState *cs,
+                                       Character *player,
+                                       const MonsterSpellProfile *profile) {
+    const MonsterType *mt = &monster_types[cs->monster_type_idx];
+    const char *spell = combat_spell_name(profile->category, profile->index);
+    int restored = combat_monster_spell_heal(cs, profile);
+    cs->special_used = 1;
+    if (restored >= 0) {
+        snprintf(cs->special_message, sizeof(cs->special_message),
+                 "THE %.28s CASTS %.25s AND HEALS %d!",
+                 mt->name, spell, restored);
+        return 0;
+    }
+
+    uint64_t maximum_hp = mw_hp_max(player);
+    uint64_t damage = 0;
+    int level = cs->monster_level > 0 ? cs->monster_level : 1;
+    if (profile->category == SPELL_CAT_WIZARD) {
+        switch (profile->index) {
+        case 30: /* Abyssal Lance */
+            damage = (uint64_t)level / 2u + (unsigned)mt->dmg / 2u;
+            break;
+        case 32: /* Void Nova */
+            damage = (uint64_t)level * 3u / 4u + (unsigned)mt->dmg;
+            break;
+        case 34: /* Oblivion */
+            damage = maximum_hp / 12u + (unsigned)level / 3u;
+            break;
+        case 35: /* Starfire */
+            damage = (unsigned)level + (unsigned)mt->dmg;
+            break;
+        case 37: /* Reality Rupture */
+            damage = maximum_hp / 8u + (unsigned)level / 2u;
+            break;
+        case 38: { /* Mana Tempest */
+            damage = (unsigned)level / 2u + (unsigned)mt->dmg;
+            if (!g->cheat_god_mode) {
+                float drain = (float)(level / 5 + mt->dmg / 10);
+                if (drain > player->sp_cur) drain = player->sp_cur;
+                if (drain > 0.0f) player->sp_cur -= drain;
+            }
+            break;
+        }
+        case 39: /* Annihilation */
+            damage = maximum_hp / 6u + (unsigned)level +
+                     (unsigned)mt->dmg / 2u;
+            break;
+        default:
+            damage = (unsigned)level / 2u + (unsigned)mt->dmg / 2u;
+            break;
+        }
+    } else {
+        switch (profile->index) {
+        case 32: /* Holy Cataclysm */
+            damage = (unsigned)level / 2u + (unsigned)mt->dmg;
+            break;
+        case 34: /* Final Judgment */
+            damage = maximum_hp / 10u + (unsigned)level / 2u;
+            break;
+        case 37: /* Wrath of Heaven */
+            damage = (uint64_t)level * 3u / 4u + (unsigned)mt->dmg;
+            break;
+        case 39: /* Divine Verdict */
+            damage = maximum_hp / 7u + (unsigned)level / 2u;
+            break;
+        default:
+            damage = (unsigned)level / 2u + (unsigned)mt->dmg / 2u;
+            break;
+        }
+    }
+    damage += (unsigned)game_rand(g) % ((unsigned)level / 4u + 1u);
+    if (damage < 1) damage = 1;
+    if (damage > INT_MAX) damage = INT_MAX;
+    snprintf(cs->special_message, sizeof(cs->special_message),
+             "THE %.32s CASTS %.32s!", mt->name, spell);
+    return (int)damage;
+}
+
+static int combat_monster_try_spell(Game *g, CombatState *cs,
+                                    Character *player, int *damage) {
+    cs->special_used = 0;
+    cs->special_message[0] = '\0';
+    const MonsterSpellProfile *profile =
+        monster_spell_profile(cs->monster_type_idx);
+    if (!profile || game_rand(g) % profile->chance != 0) return 0;
+    cs->special_used = 1;
+    if (player->antimagic_ring &&
+        game_rand(g) % 100 < player->antimagic_ring * 8) {
+        snprintf(cs->special_message, sizeof(cs->special_message),
+                 "YOUR ANTI-MAGIC RING DISPELS %.40s!",
+                 combat_spell_name(profile->category, profile->index));
+        *damage = 0;
+        return 1;
+    }
+    *damage = combat_monster_spell_effect(g, cs, player, profile);
+    return 1;
+}
+
 static int combat_monster_special(Game *g, CombatState *cs, Character *p,
                                   int physical_damage) {
     int type = cs->monster_type_idx;
@@ -994,12 +1410,16 @@ static int combat_monster_special(Game *g, CombatState *cs, Character *p,
     /* The black and green animal families use the table's special byte,
        rather than a breath byte, to inflict their persistent condition. */
     if (type >= 43 && type <= 49 && !p->eff_resist_poison) {
-        if (!p->poisoned_turns) p->poisoned_turns = 450;
+        if (!p->poisoned_turns)
+            p->poisoned_turns =
+                mw_relic_owned(p, MW_RELIC_DEEPWARD_AMULET) ? 900 : 450;
         cs->special_used = 1;
         snprintf(cs->special_message, sizeof(cs->special_message),
                  "THE %s POISONS YOU!", monster_types[type].name);
     } else if (type >= 50 && type <= 56 && !p->eff_resist_disease) {
-        if (!p->diseased_turns) p->diseased_turns = 450;
+        if (!p->diseased_turns)
+            p->diseased_turns =
+                mw_relic_owned(p, MW_RELIC_DEEPWARD_AMULET) ? 900 : 450;
         cs->special_used = 1;
         snprintf(cs->special_message, sizeof(cs->special_message),
                  "THE %s DISEASES YOU!", monster_types[type].name);
@@ -1018,13 +1438,16 @@ static int combat_monster_special(Game *g, CombatState *cs, Character *p,
                        (breath == BREATH_POISON && p->eff_resist_poison);
         if (resisted) damage /= 2;
         if (breath == BREATH_DISEASE && !p->eff_resist_disease)
-            p->diseased_turns = 450;
+            p->diseased_turns =
+                mw_relic_owned(p, MW_RELIC_DEEPWARD_AMULET) ? 900 : 450;
         if (breath == BREATH_POISON && !p->eff_resist_poison)
-            p->poisoned_turns = 450;
+            p->poisoned_turns =
+                mw_relic_owned(p, MW_RELIC_DEEPWARD_AMULET) ? 900 : 450;
         if (breath == BREATH_ACID && p->equipped_armor > 0) {
             int armor = p->equipped_armor;
             mw_set_armor_enchant(p, armor, 0);
-            if (p->armor_inventory[armor]) --p->armor_inventory[armor];
+            int owned = mw_armor_inventory_count(p, armor);
+            if (owned > 0) mw_set_armor_inventory_count(p, armor, owned - 1);
             p->equipped_armor = 0;
             snprintf(cs->special_message, sizeof(cs->special_message),
                      "ACID AND MELEE DO %d; YOUR ARMOR DISSOLVES!",
@@ -1114,7 +1537,7 @@ static int combat_monster_attack_weighted(Game *g, CombatState *cs,
                      cs->special_message);
         }
         if (!cs->active || cs->monster_hp <= 0 ||
-            total >= (int)player->hp_cur)
+            (uint64_t)total >= mw_hp_cur(player))
             break;
     }
     if (had_special) {
@@ -1128,12 +1551,32 @@ static int combat_monster_attack_weighted(Game *g, CombatState *cs,
 
 /* Native God Mode keeps the original hit/special rolls intact so combat
  * behavior remains observable, but makes the final HP transaction atomic. */
-static int combat_apply_player_damage(Game *g, Character *player, int damage) {
+static int combat_apply_player_damage(Game *g, Character *player, int damage,
+                                      int *phoenix_saved) {
+    if (phoenix_saved) *phoenix_saved = 0;
     if (damage <= 0 || g->cheat_god_mode) return 0;
-    if (damage >= (int)player->hp_cur)
-        player->hp_cur = 0;
+    if (mw_relic_owned(player, MW_RELIC_DEEPWARD_AMULET)) {
+        /* Fifteen-percent mitigation, rounded so a real hit still does at
+           least one point.  Status durations are halved at their source. */
+        damage = (int)((int64_t)damage * 85 / 100);
+        if (damage < 1) damage = 1;
+    }
+    u32 current_hp = mw_hp_cur(player);
+    if ((u32)damage >= current_hp &&
+        mw_relic_owned(player, MW_RELIC_PHOENIX_SEAL) &&
+        player->native.relic_phoenix_cooldown == 0) {
+        int applied = current_hp > 1 ? (int)(current_hp - 1) : 1;
+        mw_set_hp_cur(player, 1);
+        /* The triggering exchange ticks effects once after combat, so start
+           at 301 to leave exactly 300 future player actions on the display. */
+        player->native.relic_phoenix_cooldown = 301;
+        if (phoenix_saved) *phoenix_saved = 1;
+        return applied;
+    }
+    if ((u32)damage >= current_hp)
+        mw_set_hp_cur(player, 0);
     else
-        player->hp_cur -= (u16)damage;
+        mw_set_hp_cur(player, current_hp - (u32)damage);
     return damage;
 }
 
@@ -1155,6 +1598,10 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
     case BS_SLEEP:
         if (mt->imm >= 100 || cs->monster_level > (int)player->level * 2) return -2;
         cs->monster_asleep = 10;
+        /* Combat is not modal in WORLD.  Mirror the remaining duration in
+           the save-backed encounter counter so it survives returning to the
+           ordinary dispatcher between attacks. */
+        player->eff_hold_monster = 10;
         return -3;
 
     case BS_DAMAGE_SCALE:
@@ -1191,8 +1638,8 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
 
     case BS_STOP:
         if (mt->imm >= 100) return -2;
-        cs->monster_stopped = 10;
-        player->eff_stop_monster = 10;
+        cs->monster_stopped = sd->param1 > 0 ? sd->param1 : 10;
+        player->eff_stop_monster = (u16)cs->monster_stopped;
         return -3;
 
     case BS_DRAIN: {
@@ -1201,6 +1648,24 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
         cs->monster_level -= drain;
         if (cs->monster_level < 1) return -1;
         return -3;
+    }
+
+    case BS_DRAIN_SCALE: {
+        int64_t drain = (int64_t)player->stat_wis * sd->param1 +
+                        (int64_t)player->level / 2;
+        if (drain < 1) drain = 1;
+        if (drain > INT_MAX) drain = INT_MAX;
+        cs->monster_level -= (int)drain;
+        if (cs->monster_level < 1) return -1;
+        return -3;
+    }
+
+    case BS_DAMAGE_PERCENT: {
+        int64_t damage = (int64_t)cs->monster_max_hp * sd->param1 / 100 +
+                         sd->param2;
+        if (damage < 1) damage = 1;
+        if (damage > INT_MAX) damage = INT_MAX;
+        return (int)damage;
     }
 
     case BS_AUTOKILL: {
@@ -1219,28 +1684,20 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
         return 300;
 
     case BS_BUFF_STR:
-        if (player->eff_battle_str <= 0xFFFF - 60) {
-            player->stat_str += 7;
-            player->eff_battle_str += 60;
-        }
+        (void)add_temporary_stat_stack(&player->stat_str,
+                                       &player->eff_battle_str, 7, 60);
         return -3;
 
     case BS_BUFF_SPD:
-        if (player->eff_battle_spd <= 0xFFFF - 60) {
-            player->stat_agi += 7;
-            player->eff_battle_spd += 60;
-        }
+        (void)add_temporary_stat_stack(&player->stat_agi,
+                                       &player->eff_battle_spd, 7, 60);
         return -3;
 
     case BS_BUFF_STR_SPD:
-        if (player->eff_battle_str <= 0xFFFF - 60) {
-            player->stat_str += 7;
-            player->eff_battle_str += 60;
-        }
-        if (player->eff_battle_spd <= 0xFFFF - 60) {
-            player->stat_agi += 7;
-            player->eff_battle_spd += 60;
-        }
+        (void)add_temporary_stat_stack(&player->stat_str,
+                                       &player->eff_battle_str, 7, 60);
+        (void)add_temporary_stat_stack(&player->stat_agi,
+                                       &player->eff_battle_spd, 7, 60);
         return -3;
 
     case BS_BUFF_SLOW:
@@ -1288,14 +1745,45 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
         return -4;
 
     case BS_HEAL_FIXED: {
-        int hp = (int)player->hp_cur + sd->param1;
-        player->hp_cur = (u16)(hp > player->hp_max ? player->hp_max : hp);
+        heal_hp_capped(player, (unsigned)sd->param1);
         return -3;
     }
 
     case BS_HEAL_ALL:
-        player->hp_cur = player->hp_max;
+        mw_set_hp_cur(player, mw_hp_max(player));
         return -3;
+
+    case BS_RESTORE_ALL:
+        mw_set_hp_cur(player, mw_hp_max(player));
+        player->poisoned_turns = 0;
+        player->diseased_turns = 0;
+        return -3;
+
+    case BS_FULL_RESTORE:
+        mw_set_hp_cur(player, mw_hp_max(player));
+        player->sp_cur = player->sp_max;
+        player->poisoned_turns = 0;
+        player->diseased_turns = 0;
+        return -3;
+
+    case BS_AEGIS: {
+        u16 duration = (u16)(sd->param2 > 0 ? sd->param2 : 60);
+        if (player->eff_protect_lv < (u8)sd->param1)
+            player->eff_protect_lv = (u8)sd->param1;
+        if (player->eff_protect_turns < duration)
+            player->eff_protect_turns = duration;
+        if (player->eff_resist_poison < duration)
+            player->eff_resist_poison = duration;
+        if (player->eff_resist_disease < duration)
+            player->eff_resist_disease = duration;
+        if (player->eff_anti_cold < duration)
+            player->eff_anti_cold = duration;
+        if (player->eff_anti_fire < duration)
+            player->eff_anti_fire = duration;
+        if (player->eff_resist_drain < duration)
+            player->eff_resist_drain = duration;
+        return -3;
+    }
 
     case BS_POWER_WEAPON:
         if (player->eff_pwr_weapon == (u8)sd->param1 &&
@@ -1330,6 +1818,9 @@ static void draw_combat_screen(Game *g, CombatState *cs, Character *player,
    category: 2=wizard, 3=priest
    ══════════════════════════════════════════════════════════════════════ */
 
+/* Legacy reconstruction retained only for comparison with the early port.
+ * Nothing in the live dispatcher calls this full-screen selector; all cast
+ * and item paths enter the pane-preserving unified interface below. */
 static int select_battle_spell(Game *g, Character *player, int category) {
     Video *v = &g->video;
     int fh = v->font_char_h;
@@ -1377,7 +1868,7 @@ static int select_battle_spell(Game *g, Character *player, int category) {
     video_present(v);
 
     while (1) {
-        int key = input_getch(&g->input);
+        int key = input_wait_any_key(&g->input);
         if (input_poll_quit(&g->input)) return -1;
         if (key == 0x1B) return -1;
         key = mouse_list_key(g, key, 0, LOGICAL_W,
@@ -1403,6 +1894,9 @@ static int select_battle_spell(Game *g, Character *player, int category) {
    Returns: damage dealt to monster, or special codes
    ══════════════════════════════════════════════════════════════════════ */
 
+/* Legacy public entry point retained for source/API comparison.  The active
+ * combat path calls cmd_cast_spell_menu(), which preserves the exploration
+ * layout and monster viewport. */
 int combat_cast_battle_spell(Game *g, CombatState *cs, Character *player) {
     Video *v = &g->video;
     int fh = v->font_char_h + 2;
@@ -1417,7 +1911,7 @@ int combat_cast_battle_spell(Game *g, CombatState *cs, Character *player) {
 
     int category = -1;
     while (1) {
-        int key = input_getch(&g->input);
+        int key = input_wait_any_key(&g->input);
         if (input_poll_quit(&g->input)) return 0;
         if (key == 0x1B) return 0;
         key = mouse_list_key(g, key, 0, LOGICAL_W,
@@ -1453,267 +1947,179 @@ int combat_cast_battle_spell(Game *g, CombatState *cs, Character *player) {
     return apply_battle_spell(g, cs, player, sd, spell_level);
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   Main combat loop
-   MW_PORT: combat_encounter (0x018FE), func_0EAE9, and combat branch of
-   func_0F6E5. The caller keeps the fight inside the four viewports.
-   ══════════════════════════════════════════════════════════════════════ */
+static int combat_direction(Game *g, const CombatState *cs) {
+    int direction = g->last_move_dir & 3;
+    if (g->monster_map_loaded && g->monster_layer >= 0 &&
+        cs->entity_index >= 0 && cs->entity_index < MONSTERS_PER_FLOOR) {
+        const MonsterRecord *m =
+            &g->monster_map[g->monster_layer][cs->entity_index];
+        int dx = (int)m->x - g->cur_x;
+        int dy = (int)m->y - g->cur_y;
+        if (dx == 0 && dy == -1) direction = 0;
+        else if (dx == 0 && dy == 1) direction = 1;
+        else if (dx == -1 && dy == 0) direction = 2;
+        else if (dx == 1 && dy == 0) direction = 3;
+    }
+    return direction;
+}
 
-void combat_run(Game *g, CombatState *cs, Character *player) {
+static void combat_counterattack(Game *g, CombatState *cs,
+                                 Character *player, int direction,
+                                 char *message, size_t message_size,
+                                 char *death, size_t death_size) {
+    static const char *const dir_name[4] = {
+        "NORTH", "SOUTH", "WEST", "EAST"
+    };
+    const MonsterType *mt = &monster_types[cs->monster_type_idx];
+    int strikes = 1;
+    int phoenix_saved = 0;
+    int damage = 0;
+    int monster_disabled =
+        cs->monster_asleep > 0 || cs->monster_held > 0 ||
+        cs->monster_stopped > 0;
+    int spell_cast = monster_disabled ? 0 :
+        combat_monster_try_spell(g, cs, player, &damage);
+    if (spell_cast) {
+        strikes = 0;
+        mw_audio_play(&g->audio, MW_SFX_MAGIC);
+    } else {
+        damage = combat_monster_attack_weighted(g, cs, player, &strikes);
+    }
+    damage = combat_apply_player_damage(g, player, damage, &phoenix_saved);
+    if (damage <= 0) {
+        if (cs->special_used)
+            snprintf(message, message_size, "%s", cs->special_message);
+        else if (cs->monster_asleep || cs->monster_held ||
+                 cs->monster_stopped)
+            snprintf(message, message_size, "THE %s CANNOT ATTACK!", mt->name);
+        else
+            snprintf(message, message_size, "%s MISSES", dir_name[direction]);
+        return;
+    }
+    mw_audio_play(&g->audio, MW_SFX_HURT);
+    if (spell_cast)
+        snprintf(message, message_size, "%s %d HP LOST.",
+                 cs->special_message, damage);
+    else if (cs->special_used)
+        snprintf(message, message_size, "%s", cs->special_message);
+    else if (strikes > 1)
+        snprintf(message, message_size,
+                 "%s STRIKES %d TIMES FOR %d POINTS",
+                 dir_name[direction], strikes, damage);
+    else
+        snprintf(message, message_size, "%s DOES %d POINTS",
+                 dir_name[direction], damage);
+    if (phoenix_saved)
+        snprintf(death, death_size,
+                 "THE PHOENIX SEAL FLARES! YOU SURVIVE WITH 1 HP.");
+    if (!mw_hp_cur(player)) {
+        character_clear_battle_effects(player);
+        snprintf(death, death_size, "YOU HAVE BEEN KILLED!");
+    }
+}
+
+static int combat_apply_bloodstone(Character *player, int damage) {
+    if (!mw_relic_owned(player, MW_RELIC_BLOODSTONE_SIGNET) ||
+        damage <= 0 || mw_hp_cur(player) >= mw_hp_max(player))
+        return 0;
+    int healed = (damage + 19) / 20;
+    int cap = 1 + player->level / 10;
+    if (healed > cap) healed = cap;
+    uint64_t missing = (uint64_t)mw_hp_max(player) - mw_hp_cur(player);
+    if ((uint64_t)healed > missing) healed = (int)missing;
+    mw_set_hp_cur(player, (uint64_t)mw_hp_cur(player) + healed);
+    return healed;
+}
+
+/* MW_PORT: WORLD func_0EAE9 and the F/C/I branches of func_0F6E5.  WORLD
+   has no modal combat dispatcher: one selected battle action resolves, the
+   monster may answer, and control immediately returns to the ordinary main
+   loop.  This is what permits movement, equipment, map/help, save, and every
+   other main-screen command while a monster remains adjacent. */
+int combat_take_turn(Game *g, CombatState *cs, Character *player, int action) {
     char msg1[128] = "";
     char msg2[128] = "";
     char msg3[128] = "";
     const MonsterType *mt = &monster_types[cs->monster_type_idx];
-    static const char *dir_name[4] = {"NORTH", "SOUTH", "WEST", "EAST"};
-    int combat_dir = g->last_move_dir & 3;
-    if (g->monster_map_loaded && cs->entity_index >= 0 &&
-        cs->entity_index < MONSTERS_PER_FLOOR) {
-        const MonsterRecord *m = &g->monster_map[g->monster_layer][cs->entity_index];
-        int dx = (int)m->x - g->cur_x;
-        int dy = (int)m->y - g->cur_y;
-        if (dx == 0 && dy == -1) combat_dir = 0;
-        else if (dx == 0 && dy == 1) combat_dir = 1;
-        else if (dx == -1 && dy == 0) combat_dir = 2;
-        else if (dx == 1 && dy == 0) combat_dir = 3;
-    }
+    int direction = combat_direction(g, cs);
+    int result = 0;
 
-    while (cs->active && !input_poll_quit(&g->input)) {
-        draw_combat_screen(g, cs, player, msg1, msg2, msg3);
-        msg1[0] = msg2[0] = msg3[0] = 0;
-
-        int key = input_getch(&g->input);
-        if (input_poll_quit(&g->input)) break;
-
-        if (key == INPUT_MOUSE_CLICK) {
-            key = game_mouse_command_key(g);
-            if (!key && game_mouse_view_direction(g) == combat_dir)
-                key = 'f';
-            if (!key) continue;
+    if (action == COMBAT_ACTION_FIGHT) {
+        mw_audio_play(&g->audio, MW_SFX_ATTACK);
+        int damage = combat_player_attack(g, cs, player);
+        if (damage <= 0)
+            snprintf(msg1, sizeof(msg1), "YOU MISS");
+        else {
+            int dealt = damage > cs->monster_hp ? cs->monster_hp : damage;
+            cs->monster_hp -= damage;
+            int healed = combat_apply_bloodstone(player, dealt);
+            if (healed)
+                snprintf(msg1, sizeof(msg1),
+                         "YOU DO %d POINTS; BLOODSTONE HEALS %d",
+                         damage, healed);
+            else
+                snprintf(msg1, sizeof(msg1), "YOU DO %d POINTS", damage);
         }
-
-        if (key == INPUT_GOD_TOGGLE) {
-            g->cheat_god_mode = !g->cheat_god_mode;
-            snprintf(msg1, sizeof(msg1), "GOD MODE: %s",
-                     g->cheat_god_mode ? "ON" : "OFF");
-            snprintf(msg2, sizeof(msg2), "%s",
-                     g->cheat_god_mode ?
-                     "DAMAGE AND SPELL COSTS DISABLED" :
-                     "NORMAL DAMAGE AND SPELL COSTS RESTORED");
-            mw_audio_play(&g->audio, MW_SFX_UI);
-            continue;
-        }
-
-        if (key == 'f' || key == 'F') {
-            /* ── Player attacks ── */
-            mw_audio_play(&g->audio, MW_SFX_ATTACK);
-            int dmg = combat_player_attack(g, cs, player);
-            if (dmg <= 0) {
-                snprintf(msg1, sizeof(msg1), "YOU MISS");
-            } else {
-                cs->monster_hp -= dmg;
-                snprintf(msg1, sizeof(msg1), "YOU DO %d POINTS", dmg);
-                if (cs->monster_hp < 1) {
-                    snprintf(msg2, sizeof(msg2), "THE %s IS DEAD!", mt->name);
-
-                    snprintf(msg3, sizeof(msg3), "SEARCHING THE REMAINS...");
-
-                    draw_combat_screen(g, cs, player, msg1, msg2, msg3);
-                    input_wait_any_key(&g->input);
-                    cs->active = 0;
-                    break;
-                }
-            }
-
-            /* ── Monster counter-attacks ── */
-            if (cs->active) {
-                int mon_strikes = 1;
-                int mon_dmg = combat_monster_attack_weighted(
-                    g, cs, player, &mon_strikes);
-                mon_dmg = combat_apply_player_damage(g, player, mon_dmg);
-                if (mon_dmg <= 0) {
-                    if (cs->special_used) {
-                        snprintf(msg2, sizeof(msg2), "%s", cs->special_message);
-                    } else if (cs->monster_asleep > 0 || cs->monster_held > 0 || cs->monster_stopped > 0) {
-                        snprintf(msg2, sizeof(msg2), "THE %s CANNOT ATTACK!", mt->name);
-                    } else {
-                        snprintf(msg2, sizeof(msg2), "%s MISSES", dir_name[combat_dir]);
-                    }
-                } else {
-                    mw_audio_play(&g->audio, MW_SFX_HURT);
-                    snprintf(msg2, sizeof(msg2), "%s", cs->special_used ?
-                             cs->special_message : dir_name[combat_dir]);
-                    if (!cs->special_used) {
-                        if (mon_strikes > 1)
-                            snprintf(msg2, sizeof(msg2),
-                                     "%s STRIKES %d TIMES FOR %d POINTS",
-                                     dir_name[combat_dir], mon_strikes,
-                                     mon_dmg);
-                        else
-                            snprintf(msg2, sizeof(msg2), "%s DOES %d POINTS",
-                                     dir_name[combat_dir], mon_dmg);
-                    }
-
-                    if (player->hp_cur == 0) {
-                        player->hp_cur = 0;
-                        character_clear_battle_effects(player);
-                        snprintf(msg3, sizeof(msg3), "YOU HAVE BEEN KILLED!");
-                        draw_combat_screen(g, cs, player, msg1, msg2, msg3);
-                        input_wait_any_key(&g->input);
-                        cs->active = 0;
-                        break;
-                    }
-                }
-            }
-
-            /* Decrement status effect timers */
-            if (cs->monster_asleep > 0) cs->monster_asleep--;
-            if (cs->monster_held > 0) cs->monster_held--;
-            if (cs->monster_stopped > 0) cs->monster_stopped--;
-
-        } else if (key == 'c' || key == 'C' || key == 'i' || key == 'I') {
-            /* ── Cast spell ── */
-            int result = (key == 'i' || key == 'I') ?
-                         cmd_use_item(g, player, cs) :
-                         cmd_cast_spell_menu(g, player, cs);
-
-            if (result != 0) mw_audio_play(&g->audio, MW_SFX_MAGIC);
-
-            if (result == 0) {
-                /* Cancelled or failed */
-                continue;
-            } else if (result == -1) {
-                /* Instant kill */
-                cs->monster_hp = 0;
-                snprintf(msg1, sizeof(msg1), "THE %s IS DESTROYED!", mt->name);
-                snprintf(msg2, sizeof(msg2), "SEARCHING THE REMAINS...");
-                draw_combat_screen(g, cs, player, msg1, msg2, "");
-                input_wait_any_key(&g->input);
-                cs->active = 0;
-                break;
-            } else if (result == -2) {
-                /* Immune */
-                snprintf(msg1, sizeof(msg1), "THE %s IS IMMUNE TO THAT SPELL!", mt->name);
-            } else if (result == -3) {
-                /* Effect applied (buff/debuff) */
+        result = 1;
+    } else if (action == COMBAT_ACTION_CAST ||
+               action == COMBAT_ACTION_ITEM) {
+        int spell_result = action == COMBAT_ACTION_ITEM ?
+                           cmd_use_item(g, player, cs) :
+                           cmd_cast_spell_menu(g, player, cs);
+        if (!spell_result) return 0; /* cancelled/help/failed: no turn */
+        mw_audio_play(&g->audio, MW_SFX_MAGIC);
+        result = 1;
+        if (spell_result == -1) {
+            cs->monster_hp = 0;
+            snprintf(msg1, sizeof(msg1), "THE %s IS DESTROYED!", mt->name);
+        } else if (spell_result == -2) {
+            snprintf(msg1, sizeof(msg1),
+                     "THE %s IS IMMUNE TO THAT SPELL!", mt->name);
+        } else if (spell_result == -3) {
+            if (action == COMBAT_ACTION_CAST)
                 snprintf(msg1, sizeof(msg1), "SPELL CAST SUCCESSFULLY!");
-            } else if (result == -4) {
+        } else if (spell_result == -4) {
+            cs->player_fled = 1;
+            if (action == COMBAT_ACTION_CAST)
                 snprintf(msg1, sizeof(msg1), "YOU ESCAPE THE MONSTER!");
-                draw_combat_screen(g, cs, player, msg1, "", "");
-                input_wait_any_key(&g->input);
-                cs->active = 0;
-                break;
-            } else if (result == -5) {
-                snprintf(msg1, sizeof(msg1), "THE SPELL FAILS TO AFFECT THE %s!", mt->name);
-            } else if (result > 0) {
-                /* Damage */
-                cs->monster_hp -= result;
-                snprintf(msg1, sizeof(msg1), "YOUR SPELL HITS FOR %d DAMAGE!", result);
-                if (cs->monster_hp <= 0) {
-                    snprintf(msg2, sizeof(msg2), "THE %s IS DEAD!", mt->name);
-                    snprintf(msg3, sizeof(msg3), "SEARCHING THE REMAINS...");
-                    draw_combat_screen(g, cs, player, msg1, msg2, msg3);
-                    input_wait_any_key(&g->input);
-                    cs->active = 0;
-                    break;
-                }
-            }
-
-            /* Monster counter-attack after spell */
-            if (cs->active && result != 0) {
-                /* Check if Go Away worked */
-                if (cs->fled) {
-                    snprintf(msg2, sizeof(msg2), "THE %s FLEES!", mt->name);
-                    draw_combat_screen(g, cs, player, msg1, msg2, "");
-                    input_wait_any_key(&g->input);
-                    cs->active = 0;
-                    break;
-                }
-
-                int mon_strikes = 1;
-                int mon_dmg = combat_monster_attack_weighted(
-                    g, cs, player, &mon_strikes);
-                mon_dmg = combat_apply_player_damage(g, player, mon_dmg);
-                if (mon_dmg <= 0) {
-                    if (cs->special_used) {
-                        snprintf(msg2, sizeof(msg2), "%s", cs->special_message);
-                    } else if (cs->monster_asleep > 0 || cs->monster_held > 0 || cs->monster_stopped > 0) {
-                        snprintf(msg2, sizeof(msg2), "THE %s CANNOT ATTACK!", mt->name);
-                    } else {
-                        snprintf(msg2, sizeof(msg2), "%s MISSES", dir_name[combat_dir]);
-                    }
-                } else {
-                    mw_audio_play(&g->audio, MW_SFX_HURT);
-                    if (cs->special_used)
-                        snprintf(msg2, sizeof(msg2), "%s", cs->special_message);
-                    else if (mon_strikes > 1)
-                        snprintf(msg2, sizeof(msg2),
-                                 "%s STRIKES %d TIMES FOR %d POINTS",
-                                 dir_name[combat_dir], mon_strikes, mon_dmg);
-                    else
-                        snprintf(msg2, sizeof(msg2), "%s DOES %d POINTS",
-                                 dir_name[combat_dir], mon_dmg);
-                    if (player->hp_cur == 0) {
-                        player->hp_cur = 0;
-                        character_clear_battle_effects(player);
-                        snprintf(msg3, sizeof(msg3), "YOU HAVE BEEN KILLED!");
-                        draw_combat_screen(g, cs, player, msg1, msg2, msg3);
-                        input_wait_any_key(&g->input);
-                        cs->active = 0;
-                        break;
-                    }
-                }
-
-                if (cs->monster_asleep > 0) cs->monster_asleep--;
-                if (cs->monster_held > 0) cs->monster_held--;
-                if (cs->monster_stopped > 0) cs->monster_stopped--;
-            }
-
-        } else if (key == 'r' || key == 'R') {
-            /* ── Run away ── */
-            int flee_chance = player->stat_agi + player->stat_luck + player->level * 2;
-            int mon_hold = mt->atk + mt->agi + cs->monster_level;
-            if ((game_rand(g) % (flee_chance + mon_hold)) < flee_chance) {
-                snprintf(msg1, sizeof(msg1), "YOU RUN AWAY!");
-                cs->player_fled = 1;
-                draw_combat_screen(g, cs, player, msg1, "", "");
-                input_wait_any_key(&g->input);
-                cs->active = 0;
-                break;
-            } else {
-                snprintf(msg1, sizeof(msg1), "YOU FAIL TO ESCAPE!");
-                /* Monster gets a free attack */
-                int mon_strikes = 1;
-                int mon_dmg = combat_monster_attack_weighted(
-                    g, cs, player, &mon_strikes);
-                mon_dmg = combat_apply_player_damage(g, player, mon_dmg);
-                if (mon_dmg > 0) {
-                    mw_audio_play(&g->audio, MW_SFX_HURT);
-                    if (cs->special_used)
-                        snprintf(msg2, sizeof(msg2), "%s", cs->special_message);
-                    else if (mon_strikes > 1)
-                        snprintf(msg2, sizeof(msg2),
-                                 "%s STRIKES %d TIMES FOR %d POINTS",
-                                 dir_name[combat_dir], mon_strikes, mon_dmg);
-                    else
-                        snprintf(msg2, sizeof(msg2), "%s DOES %d POINTS",
-                                 dir_name[combat_dir], mon_dmg);
-                    if (player->hp_cur == 0) {
-                        player->hp_cur = 0;
-                        character_clear_battle_effects(player);
-                        snprintf(msg3, sizeof(msg3), "YOU HAVE BEEN KILLED!");
-                        draw_combat_screen(g, cs, player, msg1, msg2, msg3);
-                        input_wait_any_key(&g->input);
-                        cs->active = 0;
-                        break;
-                    }
-                } else if (cs->special_used) {
-                    snprintf(msg2, sizeof(msg2), "%s", cs->special_message);
-                }
-            }
+        } else if (spell_result == -6) {
+            /* Original item pages already report their complete result before
+               returning to the ordinary one-action combat exchange. */
+        } else if (spell_result == -5) {
+            snprintf(msg1, sizeof(msg1),
+                     "THE SPELL FAILS TO AFFECT THE %s!", mt->name);
+        } else if (spell_result > 0) {
+            cs->monster_hp -= spell_result;
+            snprintf(msg1, sizeof(msg1),
+                     "YOUR SPELL HITS FOR %d DAMAGE!", spell_result);
         }
-        character_tick_effects(g, player);
-        /* Any other key: redraw, no action */
+    } else if (action == COMBAT_ACTION_WAIT) {
+        snprintf(msg1, sizeof(msg1), "YOU WAIT...");
+        result = 1;
     }
+
+    if (cs->monster_hp <= 0) {
+        cs->active = 0;
+        snprintf(msg2, sizeof(msg2), "THE %s IS DEAD!", mt->name);
+        snprintf(msg3, sizeof(msg3), "SEARCHING THE REMAINS...");
+    } else if (cs->fled) {
+        cs->active = 0;
+        snprintf(msg2, sizeof(msg2), "THE %s FLEES!", mt->name);
+    } else if (!cs->player_fled) {
+        combat_counterattack(g, cs, player, direction,
+                             msg2, sizeof(msg2), msg3, sizeof(msg3));
+    }
+
+    if (result) character_tick_effects(g, player);
+    draw_combat_screen(g, cs, player, msg1, msg2, msg3);
+    SDL_Delay(mw_hp_cur(player) && cs->monster_hp > 0 ? 450 : 700);
+    return result;
+}
+
+/* Compatibility entry point used by synthetic tests and the exploration
+   Fight command.  It intentionally performs one exchange and returns. */
+void combat_run(Game *g, CombatState *cs, Character *player) {
+    (void)combat_take_turn(g, cs, player, COMBAT_ACTION_FIGHT);
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -1721,58 +2127,143 @@ void combat_run(Game *g, CombatState *cs, Character *player) {
    MW_PORT: select_weapon (0x04538) and its inventory helpers.
    ══════════════════════════════════════════════════════════════════════ */
 
-void cmd_weapons(Game *g, Character *player) {
+static int equipment_x(int dos_x) {
+    return dos_x * LOGICAL_W / 1600;
+}
+
+static int equipment_y(int dos_y) {
+    return dos_y * LOGICAL_H / 1200;
+}
+
+static void equipment_clear_pane(Video *v) {
+    video_fill_rect(v, 0, 0, equipment_x(0x2D3), equipment_y(0x1AE), 0);
+}
+
+static void equipment_text(Video *v, int y, const char *text, u8 color) {
+    video_draw_text_scaled_xy(v, 0, y, text, color, 7, 6, 12, 17);
+}
+
+static void equipment_error(Game *g, int armor) {
     Video *v = &g->video;
-    int fh = v->font_char_h + 2;
-    char line[128];
+    const char *const weapon_lines[] = {
+        "CHARACTERS OF YOUR CLASS",
+        "  CAN NOT USE THAT WEAPON.",
+        "  YOU SHOULD, THEREFORE",
+        "  DROP THE WEAPON TO SAVE",
+        "  WEIGHT.",
+        "HIT ANY KEY..."
+    };
+    const char *const armor_lines[] = {
+        "CHARACTERS OF YOUR PROFESSION",
+        "  CAN NOT WEAR ARMOR OF THIS TYPE",
+        "  YOU CONTINUE TO WEAR YOUR OLD",
+        "  ARMOR.",
+        "HIT ANY KEY..."
+    };
+    const char *const *line = armor ? armor_lines : weapon_lines;
+    int count = armor ? 5 : 6;
+    equipment_clear_pane(v);
+    for (int i = 0; i < count; i++)
+        equipment_text(v, equipment_y(i * 0x32), line[i], 5);
+    video_present(v);
+    input_wait_any_key(&g->input);
+}
 
-    video_clear(v, 0);
-    int y = 4;
+static void format_equipment_line(const Character *player, int armor,
+                                  int slot, int row, char *line,
+                                  size_t line_size) {
+    int owned = armor ? mw_armor_inventory_count(player, slot) :
+                        mw_weapon_inventory_count(player, slot);
+    const char *name = owned ?
+        (armor ? combat_armor_name(slot) : weapon_stats[slot].name) :
+        "--------";
+    int enchant = owned ?
+        (armor ? mw_armor_enchant(player, slot) :
+                 mw_weapon_enchant(player, slot)) : 0;
+    if (enchant)
+        snprintf(line, line_size, "%d) %s, PLUS %d",
+                 row + 1, name, enchant);
+    else
+        snprintf(line, line_size, "%d) %s", row + 1, name);
+}
 
-    video_draw_text(v, 8, y, "SELECT WEAPON:", 14);
-    y += fh + 4;
-    int option_y = y;
+static void draw_equipment_page(Game *g, Character *player,
+                                int armor, int page) {
+    Video *v = &g->video;
+    char line[96];
+    equipment_clear_pane(v);
+    equipment_text(v, 0,
+                   page ? (armor ? "ENHANCED ARMOR:" : "ENHANCED WEAPONS:")
+                        : (armor ? "PLEASE SELECT YOUR ARMOR:"
+                                 : "PLEASE SELECT YOUR WEAPON:"),
+                   15);
 
-    for (int i = 0; i < 8; i++) {
-        int owned = (i == 0) || player->weapon_inventory[i] != 0;
-        u8 color = (i == player->equipped_weapon) ? 15 : 7;
-        if (!owned) color = 8;
-        snprintf(line, sizeof(line), "%d) %-12s DMG:%d HIT:+%d  %s",
-                 i + 1, weapon_stats[i].name, weapon_stats[i].maxDmg,
-                 weapon_stats[i].hit, owned ? "" : "NOT OWNED");
-        video_draw_text(v, 8, y, line, color);
-        if (i == player->equipped_weapon) {
-            video_draw_text(v, 450, y, "<-- EQUIPPED", 14);
-        }
-        y += fh;
+    for (int row = 0; row < 8; row++) {
+        int slot = page ? (armor ? 8 + row : 12 + row) : row;
+        int valid = page ? row < 8 : 1;
+        if (valid)
+            format_equipment_line(player, armor, slot, row,
+                                  line, sizeof(line));
+        else
+            snprintf(line, sizeof(line), "%d) --------", row + 1);
+        /* shop_weapon/func_0691B renders all eight original rows with
+           attribute five; ownership changes text, not color. */
+        equipment_text(v, equipment_y(0x28 + row * 0x32), line, 5);
     }
 
-    y += 4;
-    video_draw_text(v, 8, y, "HIT 1-8 TO SELECT, ESC TO CANCEL", 15);
+    /* WORLD's original page is untouched in Classic.  Enhanced adds only a
+       small page cue in otherwise-unused right-hand space. */
+    if (mw_experience_mode(player) == MW_EXPERIENCE_ENHANCED)
+        video_draw_text_scaled_xy(v, equipment_x(0x270), 0,
+                                  page ? "PGUP" : "PGDN",
+                                  10, 7, 6, 12, 17);
     video_present(v);
+}
 
-    while (1) {
-        int key = input_getch(&g->input);
-        if (input_poll_quit(&g->input)) return;
-        if (key == 0x1B) return;
-        key = mouse_list_key(g, key, 0, LOGICAL_W,
-                             option_y, fh, 8, '1');
-        if (key >= '1' && key <= '8') {
-            int w = key - '1';
-            int allowed = 0;
-            switch (player->class_id) {
-            case CLASS_FIGHTER: allowed = 1; break;
-            case CLASS_WORSHIPPER:
-            case CLASS_MONK: allowed = (w == 0); break;
-            case CLASS_WIZARD:
-            case CLASS_SAGE: allowed = (w == 0 || w == 1 || w == 4); break;
-            default: allowed = (w != 7); break;
-            }
-            if ((w == 0 || player->weapon_inventory[w]) && allowed) {
-                player->equipped_weapon = (u8)w;
-                return;
-            }
+static int equipment_page_key(Game *g, int key, int *page,
+                              const Character *player) {
+    if (key == 0) {
+        int scan = input_getch(&g->input);
+        if (mw_experience_mode(player) == MW_EXPERIENCE_ENHANCED &&
+            (scan == 0x49 || scan == 0x51)) {
+            *page = scan == 0x51;
+            return -1;
         }
+        return -2;
+    }
+    if (mw_experience_mode(player) == MW_EXPERIENCE_ENHANCED) {
+        if (key == 'n' || key == 'N') {
+            *page = 1;
+            return -1;
+        }
+        if (key == 'p' || key == 'P') {
+            *page = 0;
+            return -1;
+        }
+    }
+    return key;
+}
+
+void cmd_weapons(Game *g, Character *player) {
+    int page = 0;
+    for (;;) {
+        draw_equipment_page(g, player, 0, page);
+        int key = input_getch(&g->input);
+        if (input_poll_quit(&g->input) || key == 0x1B) return;
+        key = mouse_list_key(g, key, 0, equipment_x(0x2D3),
+                             equipment_y(0x28), equipment_y(0x32),
+                             8, '1');
+        key = equipment_page_key(g, key, &page, player);
+        if (key == -1) continue;
+        if (key < '1' || key > '8') continue;
+        int weapon = page ? 12 + key - '1' : key - '1';
+        if (!mw_weapon_inventory_count(player, weapon)) return;
+        if (!combat_weapon_allowed(player, weapon)) {
+            equipment_error(g, 0);
+            return;
+        }
+        player->equipped_weapon = (u8)weapon;
+        return;
     }
 }
 
@@ -1781,57 +2272,26 @@ void cmd_weapons(Game *g, Character *player) {
    MW_PORT: armor branch of func_0F6E5 and the original armor records.
    ══════════════════════════════════════════════════════════════════════ */
 
-static const char *armor_type_names[] = {
-    "SKIN", "LEATHER", "CHAIN", "SCALE", "PLATE", "FIELD PLATE", "TITANIUM", "OGRE"
-};
-
 void cmd_armor(Game *g, Character *player) {
-    Video *v = &g->video;
-    int fh = v->font_char_h + 2;
-    char line[128];
-
-    video_clear(v, 0);
-    int y = 4;
-
-    video_draw_text(v, 8, y, "SELECT ARMOR:", 14);
-    y += fh + 4;
-    int option_y = y;
-
-    for (int i = 0; i < ARMOR_STAT_COUNT; i++) {
-        int owned = (i == 0) || player->armor_inventory[i] != 0;
-        u8 color = (i == player->equipped_armor) ? 15 : (owned ? 7 : 8);
-        snprintf(line, sizeof(line), "%d) %-12s DEF:%d +%d %s", i + 1,
-                 armor_type_names[i], armor_defense[i], mw_armor_enchant(player, i),
-                 owned ? "" : "NOT OWNED");
-        video_draw_text(v, 8, y, line, color);
-        if (i == player->equipped_armor) {
-            video_draw_text(v, 350, y, "<-- EQUIPPED", 14);
-        }
-        y += fh;
-    }
-
-    y += 4;
-    video_draw_text(v, 8, y, "HIT 1-8 TO SELECT, ESC TO CANCEL", 15);
-    video_present(v);
-
-    while (1) {
+    int page = 0;
+    for (;;) {
+        draw_equipment_page(g, player, 1, page);
         int key = input_getch(&g->input);
-        if (input_poll_quit(&g->input)) return;
-        if (key == 0x1B) return;
-        key = mouse_list_key(g, key, 0, LOGICAL_W,
-                             option_y, fh, ARMOR_STAT_COUNT, '1');
-        if (key >= '1' && key <= '8') {
-            int armor = key - '1';
-            int max_armor = 7;
-            if (player->class_id == CLASS_WORSHIPPER || player->class_id == CLASS_WIZARD)
-                max_armor = 0;
-            else if (player->class_id == CLASS_MONK || player->class_id == CLASS_SAGE)
-                max_armor = 1;
-            if ((armor == 0 || player->armor_inventory[armor]) && armor <= max_armor) {
-                player->equipped_armor = (u8)armor;
-                return;
-            }
+        if (input_poll_quit(&g->input) || key == 0x1B) return;
+        key = mouse_list_key(g, key, 0, equipment_x(0x2D3),
+                             equipment_y(0x28), equipment_y(0x32),
+                             8, '1');
+        key = equipment_page_key(g, key, &page, player);
+        if (key == -1) continue;
+        if (key < '1' || key > '8') continue;
+        int armor = page ? 8 + key - '1' : key - '1';
+        if (!mw_armor_inventory_count(player, armor)) return;
+        if (!combat_armor_allowed(player, armor)) {
+            equipment_error(g, 1);
+            return;
         }
+        player->equipped_armor = (u8)armor;
+        return;
     }
 }
 
@@ -1873,6 +2333,8 @@ static void prep_vertical_failure_message(Game *g, int spell_index,
              prep_vertical_max_floor(g, spell_index));
 }
 
+/* Legacy preparation-only screen retained for source comparison.  The live
+ * C command also goes through cmd_cast_spell_menu(); do not dispatch here. */
 void cmd_cast_prep_spell(Game *g, Character *player) {
     Video *v = &g->video;
     int fh = v->font_char_h + 2;
@@ -1931,7 +2393,7 @@ void cmd_cast_prep_spell(Game *g, Character *player) {
     video_present(v);
 
     while (1) {
-        int key = input_getch(&g->input);
+        int key = input_wait_any_key(&g->input);
         if (input_poll_quit(&g->input)) return;
         if (key == 0x1B) return;
 
@@ -1977,8 +2439,7 @@ void cmd_cast_prep_spell(Game *g, Character *player) {
                 video_draw_text(v, 8, 4, "YOUR WEAPON IS ENCHANTED +1!", 10);
                 break;
             case 2:  /* Little Cure */
-                player->hp_cur += 5;
-                if (player->hp_cur > player->hp_max) player->hp_cur = player->hp_max;
+                heal_hp_capped(player, 5);
                 video_draw_text(v, 8, 4, "YOU ARE HEALED FOR 5 HP!", 10);
                 break;
             case 3:  /* Enchant Weapon L2 */
@@ -1996,8 +2457,7 @@ void cmd_cast_prep_spell(Game *g, Character *player) {
                 video_draw_text(v, 8, 4, line, 10);
                 break;
             case 6:  /* Cure */
-                player->hp_cur += 20;
-                if (player->hp_cur > player->hp_max) player->hp_cur = player->hp_max;
+                heal_hp_capped(player, 20);
                 video_draw_text(v, 8, 4, "YOU ARE HEALED FOR 20 HP!", 10);
                 break;
             case 7:  /* Enchant Armor L2 */
@@ -2046,8 +2506,7 @@ void cmd_cast_prep_spell(Game *g, Character *player) {
                 video_draw_text(v, 8, 4, "YOU FEEL LIGHT AS A FEATHER!", 10);
                 break;
             case 15: /* Big Cure */
-                player->hp_cur += 50;
-                if (player->hp_cur > player->hp_max) player->hp_cur = player->hp_max;
+                heal_hp_capped(player, 50);
                 video_draw_text(v, 8, 4, "YOU ARE HEALED FOR 50 HP!", 10);
                 break;
             case 16: /* Double Ascend */
@@ -2106,7 +2565,7 @@ void cmd_cast_prep_spell(Game *g, Character *player) {
                 video_draw_text(v, 8, 4, "POISON CURED!", 10);
                 break;
             case 26: /* Heal All Wounds */
-                player->hp_cur = player->hp_max;
+                mw_set_hp_cur(player, mw_hp_max(player));
                 video_draw_text(v, 8, 4, "ALL WOUNDS HEALED!", 10);
                 break;
             case 27: /* Major Ascend */
@@ -2158,6 +2617,8 @@ void cmd_cast_prep_spell(Game *g, Character *player) {
 #define SPELL_SELECTOR_ROW_H 25
 #define SPELL_SELECTOR_COL_2 (0x20C * LOGICAL_W / 1600)
 #define SPELL_SELECTOR_COL_3 (0x430 * LOGICAL_W / 1600)
+#define SPELL_NOTICE_WRAP_CHARS 29
+#define SPELL_NOTICE_LAST_ROW 9
 
 static void spell_draw_backdrop(Game *g, Character *p, CombatState *cs) {
     if (cs)
@@ -2173,6 +2634,51 @@ static void spell_line(Game *g, int row, const char *text, u8 color) {
                               7, 6, 12, 17);
 }
 
+/* Extract one word-wrapped line without ever advancing beyond the message
+ * pane.  Result strings from the original 30 spells happened to be short
+ * enough for the DOS window; Enhanced spells made the missing bound visible.
+ * Keep the wrapping in the shared notice renderer so books, scrolls, wands,
+ * papers, failure messages, and every original spell use the same rule. */
+static int spell_wrap_next(const char **cursor,
+                           char line[SPELL_NOTICE_WRAP_CHARS + 1]) {
+    const char *p = cursor ? *cursor : NULL;
+    size_t remaining, take;
+    if (!p) return 0;
+    while (*p == ' ' || *p == '\n' || *p == '\r') ++p;
+    if (!*p) {
+        *cursor = p;
+        return 0;
+    }
+
+    remaining = strcspn(p, "\r\n");
+    take = remaining < SPELL_NOTICE_WRAP_CHARS ?
+           remaining : SPELL_NOTICE_WRAP_CHARS;
+    if (remaining > SPELL_NOTICE_WRAP_CHARS) {
+        size_t split = take;
+        while (split > 0 && p[split] != ' ') --split;
+        if (split > 0) take = split;
+    }
+
+    memcpy(line, p, take);
+    line[take] = '\0';
+    while (take > 0 && line[take - 1] == ' ') line[--take] = '\0';
+    p += take;
+    while (*p == ' ') ++p;
+    if (*p == '\r') ++p;
+    if (*p == '\n') ++p;
+    *cursor = p;
+    return 1;
+}
+
+static int spell_draw_wrapped(Game *g, int row, const char *text, u8 color) {
+    const char *cursor = text;
+    char line[SPELL_NOTICE_WRAP_CHARS + 1];
+    while (row <= SPELL_NOTICE_LAST_ROW &&
+           spell_wrap_next(&cursor, line))
+        spell_line(g, row++, line, color);
+    return row;
+}
+
 static void spell_selector_text(Game *g, int x, int row,
                                 const char *text, u8 color) {
     video_draw_text_scaled_xy(&g->video, x, row * SPELL_SELECTOR_ROW_H,
@@ -2181,6 +2687,9 @@ static void spell_selector_text(Game *g, int x, int row,
 
 static void spell_draw_selector_backdrop(Game *g, Character *p,
                                          CombatState *cs) {
+    /* WORLD's 30-spell casting/using selector is a full-width TOP STRIP,
+     * never a full-screen page.  The only full-display 30-item tables are
+     * the read-only spell/scroll/wand/paper lists reached through Pockets. */
     if (cs)
         game_draw_combat_overlay(g, p, cs->entity_index, cs->monster_type_idx,
                                  cs->monster_level, cs->monster_hp, "", "", "");
@@ -2192,14 +2701,20 @@ static void spell_draw_selector_backdrop(Game *g, Character *p,
 static void spell_notice(Game *g, Character *p, CombatState *cs,
                          const char *line1, const char *line2) {
     spell_draw_backdrop(g, p, cs);
-    spell_line(g, 0, line1, 12);
-    if (line2 && *line2) spell_line(g, 2, line2, 15);
+    int row = spell_draw_wrapped(g, 0, line1, 12);
+    if (line2 && *line2) {
+        /* Preserve WORLD's blank separator after a one-line heading while
+         * allowing a wrapped heading to grow naturally. */
+        row = row < 2 ? 2 : row + 1;
+        spell_draw_wrapped(g, row, line2, 15);
+    }
     spell_line(g, 10, "HIT ANY KEY...", 14);
     video_present(&g->video);
     input_wait_any_key(&g->input);
 }
 
 static int class_can_read_spellbook(const Character *p, int category) {
+    if (mw_universal_access(p)) return 1;
     if (p->class_id == CLASS_MONK) return 1;
     if (p->class_id == CLASS_FIGHTER) return 0;
     if (category <= SPELL_CAT_PREPARATION) return 1;
@@ -2212,12 +2727,20 @@ static int class_can_read_spellbook(const Character *p, int category) {
 
 static int spell_is_available(Character *p, int category, int index,
                               int source, int help) {
+    if (category < SPELL_CAT_PERMANENT || category > SPELL_CAT_PRIEST ||
+        index < 0 || index >= mw_spell_catalog_count(p))
+        return 0;
     if (help) return 1;
     if (source == 0) {
         if (!class_can_read_spellbook(p, category)) return 0;
-        return p->class_id == CLASS_MONK || p->spells[category][index] != 0;
+        /* Monks retain their original access to all 30 DOS spells, but the
+         * Enhanced quest catalog must still be earned from its bosses. */
+        return (p->class_id == CLASS_MONK &&
+                index < MW_ORIGINAL_SPELL_COUNT) ||
+               p->spells[category][index] != 0;
     }
-    if (p->class_id == CLASS_FIGHTER && source != 3) return 0;
+    if (!mw_universal_access(p) &&
+        p->class_id == CLASS_FIGHTER && source != 3) return 0;
     if (source == 1) return p->scrolls[category][index] != 0;
     if (source == 2) return p->wands[category][index] != 0;
     return p->papers[category][index] != 0;
@@ -2240,48 +2763,92 @@ static int select_spell_index(Game *g, Character *p, CombatState *cs,
                               int maximum_level) {
     char line[128];
     const char *const *names = spell_names_for_category(category);
+    int page = 0;
+    int deep_enabled = mw_experience_mode(p) == MW_EXPERIENCE_ENHANCED &&
+                       maximum_level > 10;
     for (;;) {
         spell_draw_selector_backdrop(g, p, cs);
         spell_selector_text(g, 0, 0,
-            help ? "PRESS A LETTER OR A NUMBER TO GET A DESCRIPTION:" :
+            page ? "DEEP SPELLS - LEVELS 11 THROUGH 14:" :
+            (help ? "PRESS A LETTER OR A NUMBER TO GET A DESCRIPTION:" :
             (source == 0 ?
              "SELECT A SPELL-SPELLS USE ONE SPELL POINT PER LEVEL:" :
-             "SELECT A SPELL FROM THE FOLLOWING:"), 4);
+             "SELECT A SPELL FROM THE FOLLOWING:")), 4);
+        if (deep_enabled)
+            spell_selector_text(g, LOGICAL_W - 180, 0,
+                                page ? "PGUP" : "PGDN", 10);
         spell_selector_text(g, LOGICAL_W - 90, 0, "ESCAPE", 3);
 
-        for (int level = 0; level < 10; level++) {
-            for (int slot = 0; slot < 3; slot++) {
-                int index = level * 3 + slot;
-                int available = level < maximum_level &&
+        if (!page) {
+            for (int level = 0; level < 10; level++) {
+                for (int slot = 0; slot < 3; slot++) {
+                    int index = level * 3 + slot;
+                    int available = level < maximum_level &&
+                        spell_is_available(p, category, index, source, help);
+                    char key = spell_hotkey_for_index(index);
+                    if (slot == 0)
+                        snprintf(line, sizeof(line), "%d- %c)%s", level + 1,
+                                 key, available ? names[index] : "NOT YET FOUND");
+                    else
+                        snprintf(line, sizeof(line), " %c)%s", key,
+                                 available ? names[index] : "NOT YET FOUND");
+                    spell_selector_text(g,
+                        slot == 0 ? 0 :
+                        (slot == 1 ? SPELL_SELECTOR_COL_2 : SPELL_SELECTOR_COL_3),
+                        level + 1, line, 8);
+                }
+            }
+        } else {
+            for (int row = 0; row < MW_DEEP_SPELL_COUNT; row++) {
+                int index = MW_DEEP_SPELL_FIRST + row;
+                int available = index / 3 < maximum_level &&
                     spell_is_available(p, category, index, source, help);
-                char key = spell_hotkey_for_index(index);
-                if (slot == 0)
-                    snprintf(line, sizeof(line), "%d- %c)%s", level + 1,
-                             key, available ? names[index] : "NOT YET FOUND");
-                else
-                    snprintf(line, sizeof(line), " %c)%s", key,
-                             available ? names[index] : "NOT YET FOUND");
-                spell_selector_text(g,
-                    slot == 0 ? 0 :
-                    (slot == 1 ? SPELL_SELECTOR_COL_2 : SPELL_SELECTOR_COL_3),
-                    level + 1, line, 8);
+                snprintf(line, sizeof(line), "%d- %c)%s",
+                         index / 3 + 1, 'A' + row,
+                         available ? names[index] : "NOT YET FOUND");
+                spell_selector_text(g, 0, row + 1, line, 8);
             }
         }
         video_present(&g->video);
         int key = input_getch(&g->input);
         if (key == 0x1B || input_poll_quit(&g->input)) return -1;
+        if (key == 0) {
+            int scan = input_getch(&g->input);
+            if (deep_enabled && (scan == 0x49 || scan == 0x51)) {
+                page = scan == 0x51;
+                continue;
+            }
+            continue;
+        }
         int index = -1;
         if (key == INPUT_MOUSE_CLICK) {
             int x, y;
             if (!game_mouse_click_logical(g, &x, &y)) continue;
             if (y < SPELL_SELECTOR_ROW_H && x >= LOGICAL_W - 120)
                 return -1;
-            int level = y / SPELL_SELECTOR_ROW_H - 1;
-            int slot = x < SPELL_SELECTOR_COL_2 ? 0 :
-                       (x < SPELL_SELECTOR_COL_3 ? 1 : 2);
-            if (level >= 0 && level < 10) index = level * 3 + slot;
+            if (deep_enabled && y < SPELL_SELECTOR_ROW_H &&
+                x >= LOGICAL_W - 210) {
+                page = !page;
+                continue;
+            }
+            int row = y / SPELL_SELECTOR_ROW_H - 1;
+            if (!page) {
+                int slot = x < SPELL_SELECTOR_COL_2 ? 0 :
+                           (x < SPELL_SELECTOR_COL_3 ? 1 : 2);
+                if (row >= 0 && row < 10) index = row * 3 + slot;
+            } else if (row >= 0 && row < MW_DEEP_SPELL_COUNT) {
+                index = MW_DEEP_SPELL_FIRST + row;
+            }
         } else {
-            index = spell_index_from_hotkey(key);
+            if (page) {
+                if (key >= 'a' &&
+                    key < 'a' + MW_DEEP_SPELL_COUNT)
+                    key -= 'a' - 'A';
+                if (key >= 'A' && key < 'A' + MW_DEEP_SPELL_COUNT)
+                    index = MW_DEEP_SPELL_FIRST + key - 'A';
+            } else {
+                index = spell_index_from_hotkey(key);
+            }
         }
         if (index >= 0 && index / 3 < maximum_level &&
             spell_is_available(p, category, index, source, help))
@@ -2301,7 +2868,27 @@ static void spell_help_text(Game *g, int category, int index,
     snprintf(out, size, "%s. LEVEL %d; COST %d SP. ", name, level, level);
     if (category == SPELL_CAT_PERMANENT) {
         append_text(out, size, "PERMANENT: CAST ONLY IN TOWN, TAKES ONE MONTH, SURVIVES INNS AND DEATH, AND A BOOK CAST PERMANENTLY LOWERS MAXIMUM SP. ");
-        if (index == 2 || index == 11)
+        if (index == 33)
+            append_text(out, size, "CREATES A ONE-USE SCROLL CONTAINING ANY LEVEL 1-14 SPELL. ");
+        else if (index == 34)
+            append_text(out, size, "ADDS TEN CHARGES OF ANY LEVEL 1-14 SPELL TO A WAND. ");
+        else if (index == 35)
+            append_text(out, size, "RAISES THE EQUIPPED PHYSICAL WEAPON TO AT LEAST +500. ");
+        else if (index == 36)
+            append_text(out, size, "RAISES THE EQUIPPED ARMOR TO AT LEAST +350. ");
+        else if (index == 37)
+            append_text(out, size, "RAISES INNATE BODY ARMOR TO AT LEAST +300. ");
+        else if (index == 38)
+            append_text(out, size, "CREATES A ONE-USE SCROLL CONTAINING ANY LEVEL 1-14 SPELL. ");
+        else if (index == 39)
+            append_text(out, size, "ADDS TWENTY CHARGES OF ANY LEVEL 1-14 SPELL TO A WAND. ");
+        else if (index == 30)
+            append_text(out, size, "RAISES THE EQUIPPED PHYSICAL WEAPON TO AT LEAST +150. ");
+        else if (index == 31)
+            append_text(out, size, "RAISES THE EQUIPPED ARMOR TO AT LEAST +100. ");
+        else if (index == 32)
+            append_text(out, size, "RAISES INNATE BODY ARMOR TO AT LEAST +100. ");
+        else if (index == 2 || index == 11)
             append_text(out, size, "CREATES A ONE-USE SCROLL FOR A CHOSEN SPELL WITHOUT AN SP COST WHEN USED. ");
         else if (index == 5 || index == 17 || index == 23)
             append_text(out, size, "CREATES A WAND WITH FIVE NO-SP CHARGES OF A CHOSEN SPELL. ");
@@ -2318,12 +2905,22 @@ static void spell_help_text(Game *g, int category, int index,
         else if (index == 8 || index == 13 || index == 18)
             append_text(out, size, "UPGRADES THE RING OF PROTECTION; ITS PLUS IS SUBTRACTED FROM ENEMY HIT SCORE. ");
         else if (index == 10 || index == 16 || index == 19 || index == 25)
-            append_text(out, size, "UPGRADES THE ANTI-MAGIC RING. THE ORIGINAL GAME STORES AND DISPLAYS IT BUT NEVER READS IT IN COMBAT. ");
+            append_text(out, size, "UPGRADES THE ANTI-MAGIC RING. WORLD STORES AND DISPLAYS IT WITHOUT USING IT AGAINST ORIGINAL ENEMIES; ENHANCED DEEP MAGIC GIVES EACH PLUS AN 8 PERCENT DISPEL CHANCE. ");
         else
             append_text(out, size, "UPGRADES THE EQUIPPED ITEM ONLY IF THIS ENCHANTMENT IS BETTER; ITEM AND TEMPORARY ENCHANTS STACK. ");
     } else if (category == SPELL_CAT_PREPARATION) {
         append_text(out, size, "PREPARATION MAGIC TAKES THREE MINUTES OUTSIDE BATTLE; BUFFS LAST UNTIL AN INN REST. ");
-        if (index == 2) append_text(out, size, "HEALS 1-20 HP, WITH A SMALL WISDOM BONUS. ");
+        if (index == 30) append_text(out, size, "MOVES DOWN FIFTY FLOORS, CLAMPING AT THE EXPERIENCE'S FINAL FLOOR. ");
+        else if (index == 31) append_text(out, size, "MOVES UP FIFTY FLOORS, CLAMPING AT TOWN. ");
+        else if (index == 32) append_text(out, size, "GRANTS PROTECTION TIER 5 AND EVERY POISON, DISEASE, COLD, FIRE, AND LEVEL-DRAIN RESISTANCE FOR AT LEAST 600 TURNS. ");
+        else if (index == 33) append_text(out, size, "REVEALS EVERY MAP CELL ON THE CURRENT FLOOR. ");
+        else if (index == 34) append_text(out, size, "RETURNS THE CASTER TO A RANDOM SAFE POSITION IN TOWN. ");
+        else if (index == 35) append_text(out, size, "MOVES DOWN ONE HUNDRED FLOORS, CLAMPING AT THE EXPERIENCE'S FINAL FLOOR. ");
+        else if (index == 36) append_text(out, size, "MOVES UP ONE HUNDRED FLOORS, CLAMPING AT TOWN. ");
+        else if (index == 37) append_text(out, size, "GRANTS PROTECTION TIER 8 AND EVERY RESISTANCE FOR AT LEAST 1200 TURNS. ");
+        else if (index == 38) append_text(out, size, "REVEALS EVERY MAP CELL ON THE CURRENT FLOOR. ");
+        else if (index == 39) append_text(out, size, "FULLY RESTORES HP AND SP AND CURES POISON AND DISEASE. ");
+        else if (index == 2) append_text(out, size, "HEALS 1-20 HP, WITH A SMALL WISDOM BONUS. ");
         else if (index == 6) append_text(out, size, "HEALS 10-40 HP, WITH A SMALL WISDOM BONUS. ");
         else if (index == 15) append_text(out, size, "HEALS 20-90 HP, WITH A SMALL WISDOM BONUS. ");
         else if (index == 4) append_text(out, size, "MOVES THE CASTER TO A RANDOM SAFE SQUARE ON THE CURRENT FLOOR. ");
@@ -2369,8 +2966,16 @@ static void spell_help_text(Game *g, int category, int index,
              "CONJURES POWER WEAPON %d FOR 60 TURNS; SAME-TIER RECASTS EXTEND IT. ", sd->param1); break;
         case BS_SLEEP: append_text(out, size, "PUTS A NON-IMMUNE MONSTER TO SLEEP FOR ABOUT 10 TURNS. "); break;
         case BS_HOLD: append_text(out, size, "PARALYZES A NON-IMMUNE MONSTER FOR ABOUT 15 TURNS. "); break;
-        case BS_STOP: append_text(out, size, "STOPS A NON-IMMUNE MONSTER FOR ABOUT 10 TURNS. "); break;
+        case BS_STOP: snprintf(out + strlen(out), size - strlen(out),
+             "STOPS A NON-IMMUNE MONSTER FOR ABOUT %d TURNS. ",
+             sd->param1 > 0 ? sd->param1 : 10); break;
         case BS_DRAIN: append_text(out, size, "PERMANENTLY LOWERS MONSTER LEVEL BY THE CASTER'S WISDOM; LEVEL BELOW ONE DESTROYS IT. "); break;
+        case BS_DRAIN_SCALE: snprintf(out + strlen(out), size - strlen(out),
+             "LOWERS MONSTER LEVEL BY WISDOM X %d PLUS HALF CASTER LEVEL; LEVEL BELOW ONE DESTROYS IT. ",
+             sd->param1); break;
+        case BS_DAMAGE_PERCENT: snprintf(out + strlen(out), size - strlen(out),
+             "DEALS %d PERCENT OF THE MONSTER'S MAXIMUM HP PLUS %d DAMAGE. ",
+             sd->param1, sd->param2); break;
         case BS_AUTOKILL: append_text(out, size, "OPPOSED LEVEL, INTELLIGENCE, WISDOM, AND MONSTER SAVE ROLLS DETERMINE INSTANT DEATH. "); break;
         case BS_RELOCATE: append_text(out, size, "RELOCATES THE CASTER ON THIS FLOOR AND ENDS CONTACT. "); break;
         case BS_PASS_WALL: append_text(out, size, "PHASES THROUGH AN ADJACENT WALL AND ENDS CONTACT. "); break;
@@ -2383,6 +2988,11 @@ static void spell_help_text(Game *g, int category, int index,
         case BS_HEAL_FIXED: snprintf(out + strlen(out), size - strlen(out),
              "RESTORES %d HP DURING COMBAT. ", sd->param1); break;
         case BS_HEAL_ALL: append_text(out, size, "RESTORES CURRENT HP TO MAXIMUM DURING COMBAT. "); break;
+        case BS_RESTORE_ALL: append_text(out, size, "RESTORES CURRENT HP TO MAXIMUM AND CURES POISON AND DISEASE DURING COMBAT. "); break;
+        case BS_FULL_RESTORE: append_text(out, size, "RESTORES HP AND SP TO MAXIMUM AND CURES POISON AND DISEASE DURING COMBAT. "); break;
+        case BS_AEGIS: snprintf(out + strlen(out), size - strlen(out),
+             "GRANTS PROTECTION TIER %d AND ALL FIVE RESISTANCES FOR AT LEAST %d TURNS. ",
+             sd->param1, sd->param2); break;
         case BS_BUFF_SLOW: append_text(out, size, "SLOWS THE MONSTER FOR 60 TURNS; THREE OF FOUR ATTACKS TAKE AN INITIATIVE PENALTY. "); break;
         case BS_SHOCK_125: append_text(out, size, "DEALS 125 DAMAGE. "); break;
         case BS_SHOCK_300: append_text(out, size, "DEALS 300 DAMAGE. "); break;
@@ -2433,7 +3043,7 @@ static int select_created_spell(Game *g, Character *p, CombatState *cs,
     spell_line(g, 6, "3) WIZARD BATTLE", 7);
     spell_line(g, 8, "4) PRIEST BATTLE", 7);
     video_present(&g->video);
-    int key = input_getch(&g->input);
+    int key = input_wait_any_key(&g->input);
     if (key == INPUT_MOUSE_CLICK) {
         int x, y;
         key = -1;
@@ -2454,20 +3064,22 @@ static int apply_permanent_spell(Game *g, Character *p, CombatState *cs,
     int value = 0, target_category, target_index;
     if (index == 0 || index == 6 || index == 12 || index == 21) {
         value = index == 0 ? 1 : index == 6 ? 2 : index == 12 ? 3 : 4;
-        int w = p->equipped_weapon < 8 ? p->equipped_weapon : 0;
+        int w = p->equipped_weapon < WEAPON_STAT_COUNT &&
+                !(p->equipped_weapon >= 8 && p->equipped_weapon <= 11) ?
+                p->equipped_weapon : 0;
         if (mw_weapon_enchant(p, w) >= value) return 0;
         mw_set_weapon_enchant(p, w, value);
         snprintf(message, message_size, "WEAPON PERMANENTLY ENCHANTED +%d!", value);
     } else if (index == 3 || index == 9 || index == 15 || index == 22) {
         value = index == 3 ? 1 : index == 9 ? 2 : index == 15 ? 3 : 4;
-        int armor = p->equipped_armor < 8 ? p->equipped_armor : 0;
+        int armor = p->equipped_armor < ARMOR_STAT_COUNT ?
+                    p->equipped_armor : 0;
         if (mw_armor_enchant(p, armor) >= value) return 0;
         mw_set_armor_enchant(p, armor, value);
         snprintf(message, message_size, "ARMOR PERMANENTLY ENCHANTED +%d!", value);
     } else if (index == 1 || index == 4 || index == 7 || index == 26) {
         value = index == 1 ? 1 : index == 4 ? 3 : index == 7 ? 5 : 25;
-        p->hp_max = (u16)(p->hp_max + value);
-        p->hp_cur = (u16)(p->hp_cur + value);
+        add_hp_capped(p, (unsigned)value);
         snprintf(message, message_size, "MAXIMUM HEALTH INCREASED BY %d!", value);
     } else if (index == 2 || index == 11) {
         int max = index == 2 ? 3 : 10;
@@ -2508,6 +3120,77 @@ static int apply_permanent_spell(Game *g, Character *p, CombatState *cs,
         const u32 ten_years = 315360000u;
         p->age = p->age > ten_years ? p->age - ten_years : 0;
         snprintf(message, message_size, "YOU BECOME TEN YEARS YOUNGER!");
+    } else if (index == 30) {
+        int w = p->equipped_weapon < WEAPON_STAT_COUNT &&
+                !(p->equipped_weapon >= 8 && p->equipped_weapon <= 11) ?
+                p->equipped_weapon : 0;
+        if (mw_weapon_enchant(p, w) >= 150) return 0;
+        mw_set_weapon_enchant(p, w, 150);
+        snprintf(message, message_size,
+                 "WEAPON PERMANENTLY ENCHANTED TO +150!");
+    } else if (index == 31) {
+        int armor = p->equipped_armor < ARMOR_STAT_COUNT ?
+                    p->equipped_armor : 0;
+        if (mw_armor_enchant(p, armor) >= 100) return 0;
+        mw_set_armor_enchant(p, armor, 100);
+        snprintf(message, message_size,
+                 "ARMOR PERMANENTLY ENCHANTED TO +100!");
+    } else if (index == 32) {
+        if (mw_body_armor_plus(p) >= 100) return 0;
+        mw_set_body_armor_plus(p, 100);
+        snprintf(message, message_size, "BODY ARMOR IS NOW +100!");
+    } else if (index == 33) {
+        if (!select_created_spell(g, p, cs, 14,
+                                  &target_category, &target_index))
+            return 0;
+        if (p->scrolls[target_category][target_index] < 255)
+            ++p->scrolls[target_category][target_index];
+        snprintf(message, message_size, "THE DEEP SCROLL IS COMPLETE!");
+    } else if (index == 34) {
+        if (!select_created_spell(g, p, cs, 14,
+                                  &target_category, &target_index))
+            return 0;
+        int charges = p->wands[target_category][target_index] + 10;
+        p->wands[target_category][target_index] =
+            (u8)(charges > 255 ? 255 : charges);
+        snprintf(message, message_size,
+                 "THE DEEP WAND GAINS TEN CHARGES!");
+    } else if (index == 35) {
+        int w = p->equipped_weapon < WEAPON_STAT_COUNT &&
+                !(p->equipped_weapon >= 8 && p->equipped_weapon <= 11) ?
+                p->equipped_weapon : 0;
+        if (mw_weapon_enchant(p, w) >= 500) return 0;
+        mw_set_weapon_enchant(p, w, 500);
+        snprintf(message, message_size,
+                 "WEAPON PERMANENTLY ENCHANTED TO +500!");
+    } else if (index == 36) {
+        int armor = p->equipped_armor < ARMOR_STAT_COUNT ?
+                    p->equipped_armor : 0;
+        if (mw_armor_enchant(p, armor) >= 350) return 0;
+        mw_set_armor_enchant(p, armor, 350);
+        snprintf(message, message_size,
+                 "ARMOR PERMANENTLY ENCHANTED TO +350!");
+    } else if (index == 37) {
+        if (mw_body_armor_plus(p) >= 300) return 0;
+        mw_set_body_armor_plus(p, 300);
+        snprintf(message, message_size, "BODY ARMOR IS NOW +300!");
+    } else if (index == 38) {
+        if (!select_created_spell(g, p, cs, 14,
+                                  &target_category, &target_index))
+            return 0;
+        if (p->scrolls[target_category][target_index] < UINT8_MAX)
+            ++p->scrolls[target_category][target_index];
+        snprintf(message, message_size,
+                 "THE ASCENDANT SCROLL IS COMPLETE!");
+    } else if (index == 39) {
+        if (!select_created_spell(g, p, cs, 14,
+                                  &target_category, &target_index))
+            return 0;
+        int charges = p->wands[target_category][target_index] + 20;
+        p->wands[target_category][target_index] =
+            (u8)(charges > 255 ? 255 : charges);
+        snprintf(message, message_size,
+                 "THE ASCENDANT WAND GAINS TWENTY CHARGES!");
     } else return 0;
     return 1;
 }
@@ -2515,8 +3198,7 @@ static int apply_permanent_spell(Game *g, Character *p, CombatState *cs,
 static void heal_random(Game *g, Character *p, int low, int high, char *message,
                         size_t message_size) {
     int amount = low + game_rand(g) % (high - low + 1) + p->stat_wis / 10;
-    int hp = p->hp_cur + amount;
-    p->hp_cur = (u16)(hp > p->hp_max ? p->hp_max : hp);
+    heal_hp_capped(p, (unsigned)amount);
     snprintf(message, message_size, "YOU ARE HEALED FOR %d POINTS!", amount);
 }
 
@@ -2532,9 +3214,9 @@ static int apply_preparation_spell(Game *g, Character *p, int index,
     case 5: snprintf(message,message_size,"YOU ARE ON DUNGEON LEVEL %d.",g->cur_floor); break;
     case 6: heal_random(g,p,10,40,message,message_size); break;
     case 7: if (mw_armor_plus(p) < 2) mw_set_armor_plus(p,2); snprintf(message,message_size,"ARMOR ENCHANTED +2 UNTIL THE INN!"); break;
-    case 8: if (!p->eff_str_bonus) { p->stat_str += 5; p->eff_str_bonus=1; } snprintf(message,message_size,"STRENGTH INCREASED BY 5 UNTIL THE INN!"); break;
+    case 8: if (!p->eff_str_bonus && p->stat_str <= MW_PLAYER_STAT_MAX - 5) { p->stat_str += 5; p->eff_str_bonus=1; } snprintf(message,message_size,"STRENGTH INCREASED BY 5 UNTIL THE INN!"); break;
     case 9: if (mw_enchant_wpn_spell(p) < 3) mw_set_enchant_wpn_spell(p,3); snprintf(message,message_size,"WEAPONS ENCHANTED +3 UNTIL THE INN!"); break;
-    case 10: if (!p->eff_agi_bonus) { p->stat_agi += 5; p->eff_agi_bonus=1; } snprintf(message,message_size,"AGILITY INCREASED BY 5 UNTIL THE INN!"); break;
+    case 10: if (!p->eff_agi_bonus && p->stat_agi <= MW_PLAYER_STAT_MAX - 5) { p->stat_agi += 5; p->eff_agi_bonus=1; } snprintf(message,message_size,"AGILITY INCREASED BY 5 UNTIL THE INN!"); break;
     case 11:
         if (!prep_vertical_depth_allowed(g, index, g->cur_floor)) {
             prep_vertical_failure_message(g, index, message, message_size);
@@ -2578,7 +3260,7 @@ static int apply_preparation_spell(Game *g, Character *p, int index,
     case 18: if(p->eff_invisible!=100)p->eff_invisible=1; snprintf(message,message_size,"INVISIBILITY LASTS UNTIL THE INN!"); break;
     case 19: if(mw_armor_plus(p)<3)mw_set_armor_plus(p,3); snprintf(message,message_size,"ARMOR ENCHANTED +3 UNTIL THE INN!"); break;
     case 20: p->eff_fast_move=1; snprintf(message,message_size,"FAST MOVE LASTS UNTIL THE INN!"); break;
-    case 21: if(!p->eff_super_str){p->stat_str+=10;p->eff_super_str=1;} snprintf(message,message_size,"STRENGTH INCREASED BY 10 UNTIL THE INN!"); break;
+    case 21: if(!p->eff_super_str && p->stat_str <= MW_PLAYER_STAT_MAX - 10){p->stat_str+=10;p->eff_super_str=1;} snprintf(message,message_size,"STRENGTH INCREASED BY 10 UNTIL THE INN!"); break;
     case 22: if(mw_enchant_wpn_spell(p)<5)mw_set_enchant_wpn_spell(p,5); snprintf(message,message_size,"WEAPONS ENCHANTED +5 UNTIL THE INN!"); break;
     case 23:
         if (!prep_vertical_depth_allowed(g, index, g->cur_floor)) {
@@ -2593,9 +3275,9 @@ static int apply_preparation_spell(Game *g, Character *p, int index,
         if (!game_change_floor(g,p,target) || !game_relocate(g,p)) return 0;
         snprintf(message,message_size,"YOU DESCEND TWENTY-FIVE LEVELS!");
         break;
-    case 24: if(!p->eff_super_agi){p->stat_agi+=10;p->eff_super_agi=1;} snprintf(message,message_size,"AGILITY INCREASED BY 10 UNTIL THE INN!"); break;
+    case 24: if(!p->eff_super_agi && p->stat_agi <= MW_PLAYER_STAT_MAX - 10){p->stat_agi+=10;p->eff_super_agi=1;} snprintf(message,message_size,"AGILITY INCREASED BY 10 UNTIL THE INN!"); break;
     case 25: p->poisoned_turns=0; snprintf(message,message_size,"POISON CURED!"); break;
-    case 26: p->hp_cur=p->hp_max; snprintf(message,message_size,"ALL WOUNDS HEALED!"); break;
+    case 26: mw_set_hp_cur(p,mw_hp_max(p)); snprintf(message,message_size,"ALL WOUNDS HEALED!"); break;
     case 27:
         if (!prep_vertical_depth_allowed(g, index, g->cur_floor)) {
             prep_vertical_failure_message(g, index, message, message_size);
@@ -2612,6 +3294,101 @@ static int apply_preparation_spell(Game *g, Character *p, int index,
         break;
     case 28: p->diseased_turns=0; snprintf(message,message_size,"DISEASE CURED!"); break;
     case 29: if(mw_armor_plus(p)<4)mw_set_armor_plus(p,4); snprintf(message,message_size,"ARMOR ENCHANTED +4 UNTIL THE INN!"); break;
+    case 30:
+        if (g->cur_floor >= game_traversal_rules(g)->max_floor) {
+            snprintf(message, message_size,
+                     "YOU CANNOT DESCEND ANY FARTHER!");
+            return 0;
+        }
+        target = g->cur_floor + 50;
+        if (target > game_traversal_rules(g)->max_floor)
+            target = game_traversal_rules(g)->max_floor;
+        if (!game_change_floor(g, p, target) || !game_relocate(g, p))
+            return 0;
+        snprintf(message, message_size, "YOU DESCEND FIFTY LEVELS!");
+        break;
+    case 31:
+        if (g->cur_floor <= 0) {
+            snprintf(message, message_size,
+                     "YOU CANNOT ASCEND ANY FARTHER!");
+            return 0;
+        }
+        target = g->cur_floor - 50;
+        if (target < 0) target = 0;
+        if (!game_change_floor(g, p, target) || !game_relocate(g, p))
+            return 0;
+        snprintf(message, message_size, "YOU ASCEND FIFTY LEVELS!");
+        break;
+    case 32:
+        if (p->eff_protect_lv < 5) p->eff_protect_lv = 5;
+        if (p->eff_protect_turns < 600) p->eff_protect_turns = 600;
+        if (p->eff_resist_poison < 600) p->eff_resist_poison = 600;
+        if (p->eff_resist_disease < 600) p->eff_resist_disease = 600;
+        if (p->eff_anti_cold < 600) p->eff_anti_cold = 600;
+        if (p->eff_anti_fire < 600) p->eff_anti_fire = 600;
+        if (p->eff_resist_drain < 600) p->eff_resist_drain = 600;
+        snprintf(message, message_size,
+                 "DEEP SANCTUARY PROTECTS YOU FOR 600 TURNS!");
+        break;
+    case 33:
+        memset(g->visited, 1, sizeof(g->visited));
+        snprintf(message, message_size,
+                 "THE ENTIRE DUNGEON LEVEL IS REVEALED!");
+        break;
+    case 34:
+        if (!game_change_floor(g, p, 0) || !game_relocate(g, p))
+            return 0;
+        snprintf(message, message_size, "A TOWN PORTAL CARRIES YOU HOME!");
+        break;
+    case 35:
+        if (g->cur_floor >= game_traversal_rules(g)->max_floor) {
+            snprintf(message, message_size,
+                     "YOU CANNOT DESCEND ANY FARTHER!");
+            return 0;
+        }
+        target = g->cur_floor + 100;
+        if (target > game_traversal_rules(g)->max_floor)
+            target = game_traversal_rules(g)->max_floor;
+        if (!game_change_floor(g, p, target) || !game_relocate(g, p))
+            return 0;
+        snprintf(message, message_size, "YOU DESCEND ONE HUNDRED LEVELS!");
+        break;
+    case 36:
+        if (g->cur_floor <= 0) {
+            snprintf(message, message_size,
+                     "YOU CANNOT ASCEND ANY FARTHER!");
+            return 0;
+        }
+        target = g->cur_floor - 100;
+        if (target < 0) target = 0;
+        if (!game_change_floor(g, p, target) || !game_relocate(g, p))
+            return 0;
+        snprintf(message, message_size, "YOU ASCEND ONE HUNDRED LEVELS!");
+        break;
+    case 37:
+        if (p->eff_protect_lv < 8) p->eff_protect_lv = 8;
+        if (p->eff_protect_turns < 1200) p->eff_protect_turns = 1200;
+        if (p->eff_resist_poison < 1200) p->eff_resist_poison = 1200;
+        if (p->eff_resist_disease < 1200) p->eff_resist_disease = 1200;
+        if (p->eff_anti_cold < 1200) p->eff_anti_cold = 1200;
+        if (p->eff_anti_fire < 1200) p->eff_anti_fire = 1200;
+        if (p->eff_resist_drain < 1200) p->eff_resist_drain = 1200;
+        snprintf(message, message_size,
+                 "ETERNAL SANCTUARY PROTECTS YOU FOR 1200 TURNS!");
+        break;
+    case 38:
+        memset(g->visited, 1, sizeof(g->visited));
+        snprintf(message, message_size,
+                 "WORLD REVEAL MAPS EVERY CELL ON THIS FLOOR!");
+        break;
+    case 39:
+        mw_set_hp_cur(p, mw_hp_max(p));
+        p->sp_cur = p->sp_max;
+        p->poisoned_turns = 0;
+        p->diseased_turns = 0;
+        snprintf(message, message_size,
+                 "FULL RESTORATION RENEWS HEALTH, MAGIC, AND BODY!");
+        break;
     default: return 0;
     }
     return 1;
@@ -2620,6 +3397,14 @@ static int apply_preparation_spell(Game *g, Character *p, int index,
 static int cast_selected_spell(Game *g, Character *p, CombatState *cs,
                                int category, int index, int source,
                                char *message, size_t message_size) {
+    if (category < SPELL_CAT_PERMANENT || category > SPELL_CAT_PRIEST ||
+        index < 0 || index >= mw_spell_catalog_count(p)) {
+        snprintf(message, message_size,
+                 index >= MW_DEEP_SPELL_FIRST ?
+                 "DEEP SPELLS EXIST ONLY IN ENHANCED EXPERIENCE." :
+                 "THAT SPELL DOES NOT EXIST.");
+        return 0;
+    }
     int level = index / 3 + 1;
     int result = -3;
     if (message_size) message[0] = '\0';
@@ -2675,8 +3460,12 @@ static int cast_selected_spell(Game *g, Character *p, CombatState *cs,
     } else {
         --p->papers[category][index];
     }
-    if (category == SPELL_CAT_PERMANENT) p->age += 2592000u;
-    else if (category == SPELL_CAT_PREPARATION) p->age += 180u;
+    if (category == SPELL_CAT_PERMANENT)
+        p->age = p->age > UINT32_MAX - 2592000u ?
+                 UINT32_MAX : p->age + 2592000u;
+    else if (category == SPELL_CAT_PREPARATION)
+        p->age = p->age > UINT32_MAX - 180u ?
+                 UINT32_MAX : p->age + 180u;
     return result;
 }
 
@@ -2695,7 +3484,7 @@ static int choose_cast_category(Game *g, Character *p, CombatState *cs,
         spell_line(g, 8, "8) HELP-PRIEST BATTLE SP.", 7);
     }
     video_present(&g->video);
-    int key = input_getch(&g->input);
+    int key = input_wait_any_key(&g->input);
     int max = include_help ? '8' : '4';
     key = mouse_list_key(g, key, 0, SPELL_PANE_W, SPELL_ROW_H,
                          SPELL_ROW_H, max - '0', '1');
@@ -2713,7 +3502,8 @@ int cmd_cast_spell_menu(Game *g, Character *p, CombatState *cs) {
         spell_notice(g, p, cs, "YOUR CLASS CANNOT READ", "THAT KIND OF SPELLBOOK.");
         return 0;
     }
-    int index = select_spell_index(g, p, cs, category, 0, help, 10);
+    int index = select_spell_index(g, p, cs, category, 0, help,
+                                   (mw_spell_catalog_count(p) + 2) / 3);
     if (index < 0) return 0;
     if (help) {
         show_spell_help(g, p, cs, category, index);
@@ -2726,65 +3516,427 @@ int cmd_cast_spell_menu(Game *g, Character *p, CombatState *cs) {
     return result;
 }
 
-static int use_misc_item(Game *g, Character *p, CombatState *cs) {
-    spell_draw_backdrop(g,p,cs);
-    spell_line(g,0,"USE WHICH MAGIC ITEM?",4);
-    spell_line(g,2,"1) HOLY HAND GRENADE",8);
-    spell_line(g,3,"2) STONE OF TELEPORTATION",8);
-    spell_line(g,4,"3) STONE OF SEEING",8);
-    spell_line(g,5,"4) FLOOR SLOSHER",8);
-    spell_line(g,6,"5) POTION OF HEALING",8);
-    spell_line(g,8,"6) VITAMIN PILL",8);
+/* WORLD shop_magic uses the original 0x2D0 by 0x1AC upper-left pane.
+ * Its title is separate from eight rows spaced 0x32 source pixels apart.
+ * Keep this renderer independent of the denser spell category pages. */
+#define ITEM_PANE_W (0x2D0 * LOGICAL_W / 1600)
+#define ITEM_PANE_H (0x1AC * LOGICAL_H / 1200)
+#define ITEM_MENU_Y (0x28 * LOGICAL_H / 1200)
+#define ITEM_ROW_H  (0x32 * LOGICAL_H / 1200)
+
+static const char *const use_item_menu[8] = {
+    "WHICH TYPE OF ITEM?",
+    "",
+    "1) SCROLL",
+    "2) WAND",
+    "3) PAPER",
+    "4) MAGIC VITAMIN PILL",
+    "5) OTHER",
+    ""
+};
+
+static const char *const vitamin_pill_menu[8] = {
+    "PRESS 1-6 TO TAKE A PILL:",
+    "1) GREEN PILL",
+    "2) ORANGE PILL",
+    "3) YELLOW PILL",
+    "4) RED PILL",
+    "5) BLUE PILL",
+    "6) WHITE PILL",
+    "HIT ESCAPE TO RETURN TO GAME"
+};
+
+static const char *const other_item_menu[8] = {
+    "HIT A KEY (1-6):",
+    "1) FLOOR SLOSHER",
+    "2) POTION OF HEALING",
+    "3) WIN GAME",
+    "4) STONE OF SEEING",
+    "5) STONE OF TELEPORTATION",
+    "6) HOLY HAND GRENADE",
+    "ANY OTHER KEY RETURNS TO GAME"
+};
+
+static void item_draw_page(Game *g, Character *p, CombatState *cs,
+                           const char *const lines[8]) {
+    if (cs)
+        game_draw_combat_overlay(g, p, cs->entity_index, cs->monster_type_idx,
+                                 cs->monster_level, cs->monster_hp, "", "", "");
+    else
+        game_draw_exploration(g, p);
+    video_fill_rect(&g->video, 0, 0, ITEM_PANE_W, ITEM_PANE_H, 0);
+    video_draw_text_scaled_xy(&g->video, 0, 0, "USE MAGIC MENU:", 8,
+                              7, 6, 12, 17);
+    for (int row = 0; row < 8; row++)
+        if (lines[row] && lines[row][0])
+            video_draw_text_scaled_xy(&g->video, 0,
+                                      ITEM_MENU_Y + row * ITEM_ROW_H,
+                                      lines[row], 5, 7, 6, 12, 17);
     video_present(&g->video);
-    int key=input_getch(&g->input);
+}
+
+static int item_get_list_key(Game *g, int first_row, int last_row,
+                             int first_key) {
+    int key = input_wait_any_key(&g->input);
     if (key == INPUT_MOUSE_CLICK) {
         int x, y;
         key = -1;
-        if (game_mouse_click_logical(g, &x, &y) && x < SPELL_PANE_W) {
-            int row = y / SPELL_ROW_H;
-            if (row >= 2 && row <= 6) key = '1' + row - 2;
-            else if (row == 8) key = '6';
+        if (game_mouse_click_logical(g, &x, &y) &&
+            x >= 0 && x < ITEM_PANE_W && y >= ITEM_MENU_Y) {
+            int row = (y - ITEM_MENU_Y) / ITEM_ROW_H;
+            if (row >= first_row && row <= last_row)
+                key = first_key + row - first_row;
         }
     }
-    char msg[128]="";
-    if(key=='1' && cs && p->holy_grenade){--p->holy_grenade;cs->monster_hp=0;snprintf(msg,sizeof(msg),"THE HOLY GRENADE DESTROYS THE MONSTER!");spell_notice(g,p,cs,msg,"");return -1;}
-    if(key=='2' && p->stone_teleport){--p->stone_teleport;game_change_floor(g,p,0);game_relocate(g,p);snprintf(msg,sizeof(msg),"THE STONE TELEPORTS YOU TO TOWN!");}
-    else if(key=='3' && p->stone_see){--p->stone_see;memset(g->visited,1,sizeof(g->visited));snprintf(msg,sizeof(msg),"THE ENTIRE LEVEL IS REVEALED!");}
-    else if(key=='4' && p->floor_slosher){int t=g->cur_floor+1+game_rand(g)%25;int max_floor=game_traversal_rules(g)->max_floor;if(t>max_floor)t=max_floor;game_change_floor(g,p,t);game_relocate(g,p);snprintf(msg,sizeof(msg),"THE FLOOR SLOSHES AWAY BENEATH YOU!");}
-    else if(key=='5' && p->potion_heal){--p->potion_heal;p->hp_cur=p->hp_max;snprintf(msg,sizeof(msg),"THE POTION HEALS ALL WOUNDS!");}
-    else if(key=='6'){
-        spell_draw_backdrop(g,p,cs);spell_line(g,0,"1:S 2:I 3:W 4:C 5:A 6:L",4);video_present(&g->video);int k=input_getch(&g->input);
-        if(k==INPUT_MOUSE_CLICK){int x,y;if(game_mouse_click_logical(g,&x,&y)&&y<SPELL_ROW_H)k='1'+(x*6/LOGICAL_W);else k=-1;}
-        u8 *count=NULL;u16 *up=NULL,*down1=NULL,*down2=NULL;
-        if(k=='1'){count=&p->orange_pill;up=&p->stat_str;down1=&p->stat_agi;down2=&p->stat_wis;}
-        else if(k=='2'){count=&p->green_pill;up=&p->stat_int;down1=&p->stat_con;down2=&p->stat_str;}
-        else if(k=='3'){count=&p->blue_pill;up=&p->stat_wis;down1=&p->stat_str;down2=&p->stat_agi;}
-        else if(k=='4'){count=&p->red_pill;up=&p->stat_con;down1=&p->stat_int;down2=&p->stat_wis;}
-        else if(k=='5'){count=&p->white_pill;up=&p->stat_agi;down1=&p->stat_wis;down2=&p->stat_con;}
-        else if(k=='6'){count=&p->yellow_pill;up=&p->stat_luck;down1=&p->stat_con;down2=&p->stat_int;}
-        if(count&&*count){--*count;*up+=4;*down1=*down1>=2?*down1-2:0;*down2=*down2>=2?*down2-2:0;snprintf(msg,sizeof(msg),"THE VITAMIN PERMANENTLY CHANGES YOUR STATS!");}
+    return key;
+}
+
+static void item_show_and_wait(Game *g, Character *p, CombatState *cs,
+                               const char *const lines[8]) {
+    item_draw_page(g, p, cs, lines);
+    input_wait_any_key(&g->input);
+}
+
+static void subtract_stat_safely(u16 *value, unsigned amount) {
+    *value = (u16)(*value >= amount ? *value - amount : 0);
+}
+
+static int apply_vitamin_pill(Character *p, int pill) {
+    u8 *count = NULL;
+    u16 *raised = NULL;
+    u16 *lowered = NULL;
+    switch (pill) {
+    case 0: /* Green: intelligence for dexterity. */
+        count = &p->green_pill;
+        raised = &p->stat_int;
+        lowered = &p->stat_agi;
+        break;
+    case 1: /* Orange: strength for luck. */
+        count = &p->orange_pill;
+        raised = &p->stat_str;
+        lowered = &p->stat_luck;
+        break;
+    case 2: /* Yellow: luck for strength. */
+        count = &p->yellow_pill;
+        raised = &p->stat_luck;
+        lowered = &p->stat_str;
+        break;
+    case 3: /* Red: constitution for wisdom. */
+        count = &p->red_pill;
+        raised = &p->stat_con;
+        lowered = &p->stat_wis;
+        break;
+    case 4: /* Blue: wisdom for constitution. */
+        count = &p->blue_pill;
+        raised = &p->stat_wis;
+        lowered = &p->stat_con;
+        break;
+    case 5: /* White: dexterity for intelligence. */
+        count = &p->white_pill;
+        raised = &p->stat_agi;
+        lowered = &p->stat_int;
+        break;
+    default:
+        return 0;
     }
-    if(*msg)spell_notice(g,p,cs,msg,"");
-    return 0;
+    if (!*count) return 0;
+    --*count;
+    add_stat_capped(raised, 4);
+    subtract_stat_safely(lowered, 2);
+    return 1;
+}
+
+static int use_vitamin_pill(Game *g, Character *p, CombatState *cs) {
+    static const char *const success[6][8] = {
+        {
+            "YOUR INTELLIGENCE HAS BEEN",
+            "  RAISED FOUR AND YOUR",
+            "  DEXTERITY HAS DROPPED TWO",
+            "  POINTS.",
+            "",
+            "HIT ANY KEY...",
+            "",
+            ""
+        },
+        {
+            "YOUR STRENGTH HAS BEEN RAISED",
+            "  FOUR AND YOUR LUCK HAS",
+            "  DROPPED TWO POINTS.",
+            "",
+            "HIT ANY KEY...",
+            "",
+            "",
+            ""
+        },
+        {
+            "YOUR LUCK HAS BEEN RAISED",
+            "  FOUR AND YOUR STRENGTH HAS",
+            "  DROPPED TWO POINTS.",
+            "",
+            "HIT ANY KEY...",
+            "",
+            "",
+            ""
+        },
+        {
+            "YOUR CONSTITUTION HAS BEEN",
+            "  RAISED FOUR AND YOUR WISDOM",
+            "  HAS DROPPED TWO POINTS.",
+            "",
+            "HIT ANY KEY...",
+            "",
+            "",
+            ""
+        },
+        {
+            "YOUR WISDOM HAS BEEN RAISED",
+            "  FOUR AND YOUR CONSTITUTION",
+            "  HAS DROPPED TWO POINTS.",
+            "",
+            "HIT ANY KEY...",
+            "",
+            "",
+            ""
+        },
+        {
+            "YOUR DEXTERITY HAS BEEN",
+            "  RAISED FOUR AND YOUR",
+            "  INTELLIGENCE HAS DROPPED",
+            "  TWO POINTS.",
+            "",
+            "HIT ANY KEY...",
+            "",
+            ""
+        }
+    };
+    static const char *const missing[8] = {
+        "DON'T YOU THINK YOU'D BETTER",
+        "  FIND ONE FIRST? TRY KILLING",
+        "  LEVEL DRAINERS.",
+        "",
+        "HIT ANY KEY...",
+        "",
+        "",
+        ""
+    };
+
+    item_draw_page(g, p, cs, vitamin_pill_menu);
+    int key = item_get_list_key(g, 1, 6, '1');
+    if (key < '1' || key > '6') return 0;
+    int pill = key - '1';
+    if (!apply_vitamin_pill(p, pill)) {
+        item_show_and_wait(g, p, cs, missing);
+        return 0;
+    }
+    item_show_and_wait(g, p, cs, success[pill]);
+    return -6; /* Item consumed; no generic "spell cast" message. */
+}
+
+void game_draw_use_item_test(Game *g, Character *p, CombatState *cs,
+                             int page) {
+    const char *const *lines = use_item_menu;
+    if (page == 1) lines = vitamin_pill_menu;
+    else if (page == 2) lines = other_item_menu;
+    item_draw_page(g, p, cs, lines);
+}
+
+static int use_misc_item(Game *g, Character *p, CombatState *cs) {
+    static const char *const missing_item[8] = {
+        "MAGIC ITEMS ARE MUCH MORE",
+        "  EFFECTIVE WHEN YOU",
+        "  ACTUALLY POSESS THEM.",
+        "KILL SOME MORE MONSTERS,",
+        "  YOU'RE BOUND FIND ONE",
+        "  EVENTUALLY.",
+        "",
+        "HIT ANY KEY..."
+    };
+    static const char *const win_menu[8] = {
+        "PLEASE SELECT ONE:",
+        "",
+        "1) WIN LIFE",
+        "2) BECOME RICH",
+        "3) RULE THE WORLD",
+        "4) LIVE FOREVER",
+        "5) CONTINUE PLAYING GAME",
+        "PRESS 1-5 TO MAKE SELECTION"
+    };
+    static const char *const win_address[8] = {
+        "TO EXECUTE THIS REQUEST SEND",
+        "  ONE MILLION ZILLION DOLLARS",
+        "  TO THE FOLLOWING ADDRESS:",
+        "",
+        "THE MILLION ZILLION DOLLAR CLUB",
+        "13713 MAIN STREET, 317",
+        "MILLIONVILLE, MW, 78701-2509",
+        "HIT ANY KEY..."
+    };
+    static const char *const win_stamp[8] = {
+        "BY THE WAY, A FIRST CLASS STAMP",
+        "TO MORAFF'S WORLD COSTS ONE",
+        "MILLION ZILLION CENTS.",
+        "STAMPS ARE AVAILABLE AT POST",
+        "OFFICES EVERYWHERE (EXCEPT,",
+        "PERHAPS, WHERE YOU ARE).",
+        "",
+        "HIT ANY KEY..."
+    };
+    static const char *const slosher_deep[8] = {
+        "DOESN'T WORK THIS DEEP!",
+        "",
+        "HIT ANY KEY...",
+        "", "", "", "", ""
+    };
+    static const char *const slosher_success[8] = {
+        "YOU ARE SLIPPING THROUGH THE",
+        "  FLOOR. HIT ANY KEY...",
+        "", "", "", "", "", ""
+    };
+    static const char *const potion_success[8] = {
+        "YOU FEEL GREAT! HIT A KEY...",
+        "", "", "", "", "", "", ""
+    };
+    static const char *const seeing_success[8] = {
+        "SUDDENLY YOU FEEL THAT",
+        "  YOU CAN SEE RIGHT",
+        "  THROUGH ALL OF THE",
+        "  WALLS ON THIS LEVEL.",
+        "",
+        "THE STONE VANISHES.",
+        "",
+        "HIT ANY KEY..."
+    };
+    static const char *const teleport_success[8] = {
+        "YOU ARE FLOATING THROUGH",
+        "  SPACE... YOU SEE LOTS",
+        "  OF FANCY COLORS SWIRLING",
+        "  ALL AROUND YOU.",
+        "",
+        "HIT ANY KEY TO MAKE YOUR",
+        "  BODY REMATERIALIZE IN",
+        "  THE TOWN."
+    };
+    static const char *const empty_grenade[8] = {
+        "ARE YOU SURE THAT YOU WANT",
+        "  TO TOSS ONE OF THE MOST",
+        "  POWERFUL MAGIC ITEMS IN",
+        "  MORAFF'S WORLD ONTO AN",
+        "  EMPTY FLOOR?",
+        "",
+        "HIT ANY KEY TO RETHINK THE",
+        "  LOGIC OF THAT MOVE!"
+    };
+    static const char *const caught_grenade[8] = {
+        "   THE MONSTER CATCHES THE",
+        "GRADADE.",
+        "", "", "", "", "", ""
+    };
+    static const char *const returned_grenade[8] = {
+        "  HE THEN LAUGHS HYSTERICALLY",
+        "AND HANDS IT BACK TO YOU.",
+        "  HE REMARKS, 'YOU SHOULDN'T",
+        "PLAY WITH THESE', AND LAUGHS",
+        "EVEN LOUDER AS HE RISES UP",
+        "FOR A DEVESTATING ATTACK!",
+        "",
+        "HIT ANY KEY..."
+    };
+    static const char *const grenade_success[8] = {
+        "A MASSIVE EXPLOSION KILLS",
+        "  THE MONSTER INSTANTLY.",
+        "",
+        "HIT ANY KEY...",
+        "", "", "", ""
+    };
+
+    item_draw_page(g, p, cs, other_item_menu);
+    int key = item_get_list_key(g, 1, 6, '1');
+    if (key < '1' || key > '6') return 0;
+
+    if (key == '3') {
+        item_draw_page(g, p, cs, win_menu);
+        int wish = item_get_list_key(g, 2, 6, '1');
+        if (wish >= '1' && wish <= '4') {
+            item_show_and_wait(g, p, cs, win_address);
+            item_show_and_wait(g, p, cs, win_stamp);
+        }
+        return 0;
+    }
+
+    int has_item =
+        (key == '1' && p->floor_slosher) ||
+        (key == '2' && p->potion_heal) ||
+        (key == '4' && p->stone_see) ||
+        (key == '5' && p->stone_teleport) ||
+        (key == '6' && p->holy_grenade);
+    if (!has_item) {
+        item_show_and_wait(g, p, cs, missing_item);
+        return 0;
+    }
+
+    if (key == '1') {
+        int cap = game_traversal_rules(g)->prep_major_descend_cap;
+        if (g->cur_floor > cap ||
+            g->cur_floor >= game_traversal_rules(g)->max_floor) {
+            item_show_and_wait(g, p, cs, slosher_deep);
+            return 0;
+        }
+        item_show_and_wait(g, p, cs, slosher_success);
+        if (!game_change_floor(g, p, g->cur_floor + 1) ||
+            !game_relocate(g, p))
+            return 0;
+        return -4;
+    }
+    if (key == '2') {
+        --p->potion_heal;
+        mw_set_hp_cur(p, mw_hp_max(p));
+        item_show_and_wait(g, p, cs, potion_success);
+        return -6;
+    }
+    if (key == '4') {
+        --p->stone_see;
+        memset(g->visited, 1, sizeof(g->visited));
+        item_show_and_wait(g, p, cs, seeing_success);
+        return -6;
+    }
+    if (key == '5') {
+        --p->stone_teleport;
+        item_show_and_wait(g, p, cs, teleport_success);
+        if (!game_change_floor(g, p, 0) || !game_relocate(g, p))
+            return 0;
+        return -4;
+    }
+
+    if (!cs || !cs->active || cs->monster_hp <= 0 ||
+        cs->monster_type_idx < 0 ||
+        cs->monster_type_idx >= MONSTER_TYPE_COUNT) {
+        item_show_and_wait(g, p, cs, empty_grenade);
+        return 0;
+    }
+    if (monster_types[cs->monster_type_idx].imm == 100) {
+        item_show_and_wait(g, p, cs, caught_grenade);
+        item_show_and_wait(g, p, cs, returned_grenade);
+        return -6;
+    }
+    --p->holy_grenade;
+    cs->monster_hp = 0;
+    item_show_and_wait(g, p, cs, grenade_success);
+    return -1;
 }
 
 int cmd_use_item(Game *g, Character *p, CombatState *cs) {
-    spell_draw_backdrop(g,p,cs);
-    spell_line(g,0,"USE WHICH TYPE OF ITEM?",4);
-    spell_line(g,2,"1) SCROLL",8);
-    spell_line(g,3,"2) WAND",8);
-    spell_line(g,4,"3) MAGIC PAPER",8);
-    spell_line(g,5,"4) MISC. MAGIC ITEM",8);
-    video_present(&g->video);
-    int key=input_getch(&g->input);
-    key=mouse_list_key(g,key,0,SPELL_PANE_W,2*SPELL_ROW_H,SPELL_ROW_H,4,'1');
-    if(key=='4')return use_misc_item(g,p,cs);
+    item_draw_page(g, p, cs, use_item_menu);
+    int key = item_get_list_key(g, 2, 6, '1');
+    if (key == '4') return use_vitamin_pill(g, p, cs);
+    if (key == '5') return use_misc_item(g, p, cs);
     if(key<'1'||key>'3')return 0;
     int source=key-'0';
-    if(p->class_id==CLASS_FIGHTER && source!=3){spell_notice(g,p,cs,"FIGHTERS CAN CAST ONLY","FROM MAGIC PAPER.");return 0;}
+    if(!mw_universal_access(p) &&
+       p->class_id==CLASS_FIGHTER && source!=3){spell_notice(g,p,cs,"FIGHTERS CAN CAST ONLY","FROM MAGIC PAPER.");return 0;}
     int category=choose_cast_category(g,p,cs,source,0);
     if(category<0)return 0;
-    int index=select_spell_index(g,p,cs,category,source,0,10);
+    int index=select_spell_index(g,p,cs,category,source,0,
+                                 (mw_spell_catalog_count(p)+2)/3);
     if(index<0)return 0;
     char message[160];
     int result=cast_selected_spell(g,p,cs,category,index,source,message,sizeof(message));
@@ -2803,11 +3955,13 @@ int combat_self_test(void) {
     memset(&cs, 0, sizeof(cs));
     game_srand(&g, 1);
     p.class_id = CLASS_WIZARD;
+    mw_set_experience_mode(&p, MW_EXPERIENCE_ENHANCED);
     p.level = 20;
     p.stat_str = 20;
     p.stat_agi = 20;
     p.stat_wis = 20;
-    p.hp_cur = p.hp_max = 100;
+    mw_set_hp_max(&p, 100);
+    mw_set_hp_cur(&p, 100);
     p.sp_cur = p.sp_max = 100.0f;
     cs.monster_type_idx = 0;
     cs.monster_level = 10;
@@ -2816,13 +3970,35 @@ int combat_self_test(void) {
 #define CHECK(expr, label) do { if (!(expr)) { \
     fprintf(stderr, "MAGIC TEST FAIL: %s\n", label); failures++; } } while (0)
     {
+        const char *cursor =
+            "ETERNAL SANCTUARY PROTECTS YOU FOR 1200 TURNS!";
+        char line[SPELL_NOTICE_WRAP_CHARS + 1];
+        char first[SPELL_NOTICE_WRAP_CHARS + 1] = "";
+        char second[SPELL_NOTICE_WRAP_CHARS + 1] = "";
+        int count = 0;
+        while (spell_wrap_next(&cursor, line)) {
+            CHECK(strlen(line) <= SPELL_NOTICE_WRAP_CHARS,
+                  "spell notice line remains inside pane");
+            if (count == 0) snprintf(first, sizeof(first), "%s", line);
+            if (count == 1) snprintf(second, sizeof(second), "%s", line);
+            ++count;
+        }
+        CHECK(count == 2 &&
+              strcmp(first, "ETERNAL SANCTUARY PROTECTS") == 0 &&
+              strcmp(second, "YOU FOR 1200 TURNS!") == 0,
+              "long Enhanced spell notice wraps at a word boundary");
+    }
+    {
         Input input;
         memset(&input, 0, sizeof(input));
         input.keys[0] = 0;
-        input.keys[1] = 0x50;
-        input.tail = 2;
-        CHECK(input_wait_any_key(&input) == 0 && input.head == input.tail,
-              "modal input drains extended Down key");
+        input.keys[1] = 0x51;
+        input.keys[2] = 'v';
+        input.tail = 3;
+        CHECK(input_wait_any_key(&input) == 0 &&
+              input_getch(&input) == 'v' &&
+              input.head == input.tail,
+              "modal input drains Page Down without leaking ASCII Q");
     }
     CHECK(spell_hotkey_for_index(0) == 'A' &&
           spell_hotkey_for_index(25) == 'Z' &&
@@ -2836,6 +4012,47 @@ int combat_self_test(void) {
           spell_index_from_hotkey('4') == 29 &&
           spell_index_from_hotkey('0') == -1,
           "spell selector direct-key decoding");
+    {
+        static const u16 expected[6][6] = {
+            /* STR INT WIS CON AGI LUCK */
+            {20, 24, 20, 20, 18, 20}, /* green */
+            {24, 20, 20, 20, 20, 18}, /* orange */
+            {18, 20, 20, 20, 20, 24}, /* yellow */
+            {20, 20, 18, 24, 20, 20}, /* red */
+            {20, 20, 24, 18, 20, 20}, /* blue */
+            {20, 18, 20, 20, 24, 20}  /* white */
+        };
+        int all_pills_match = 1;
+        for (int pill = 0; pill < 6; pill++) {
+            Character vitamin = {0};
+            vitamin.stat_str = vitamin.stat_int = vitamin.stat_wis = 20;
+            vitamin.stat_con = vitamin.stat_agi = vitamin.stat_luck = 20;
+            u8 *counts[6] = {
+                &vitamin.green_pill, &vitamin.orange_pill,
+                &vitamin.yellow_pill, &vitamin.red_pill,
+                &vitamin.blue_pill, &vitamin.white_pill
+            };
+            *counts[pill] = 1;
+            if (!apply_vitamin_pill(&vitamin, pill) || *counts[pill] ||
+                vitamin.stat_str != expected[pill][0] ||
+                vitamin.stat_int != expected[pill][1] ||
+                vitamin.stat_wis != expected[pill][2] ||
+                vitamin.stat_con != expected[pill][3] ||
+                vitamin.stat_agi != expected[pill][4] ||
+                vitamin.stat_luck != expected[pill][5])
+                all_pills_match = 0;
+        }
+        CHECK(all_pills_match,
+              "original six vitamin pill stat trades and inventory order");
+        Character bounded = {0};
+        bounded.green_pill = 1;
+        bounded.stat_int = MW_PLAYER_STAT_MAX;
+        bounded.stat_agi = 1;
+        CHECK(apply_vitamin_pill(&bounded, 0) &&
+              bounded.stat_int == MW_PLAYER_STAT_MAX &&
+              bounded.stat_agi == 0,
+              "vitamin pills respect widened stat caps without underflow");
+    }
     CHECK(combat_monster_type_valid(84, 2) &&
           !combat_monster_type_valid(84, 1) &&
           combat_monster_type_valid(14, 200) &&
@@ -2881,18 +4098,310 @@ int combat_self_test(void) {
     }
     CHECK(monster_types[112].minL == 375 && monster_types[112].atk > 255 &&
           monster_types[113].minL == 500 && monster_types[113].def > 255 &&
+          monster_types[113].hpF == 220 &&
           monster_types[177].minL == 1000 && monster_types[177].atk > 1000 &&
           combat_calc_monster_hp(&monster_types[177], 1000) > UINT16_MAX,
           "native deep bosses use widened stats and HP");
+    {
+        static const int boss_type[] = {112, 113, 174, 175, 176, 177};
+        static const int boss_floor[] = {375, 500, 625, 750, 875, 1000};
+        int previous_hp = 0;
+        int boss_hp_rises = 1;
+        for (int i = 0; i < 6; i++) {
+            int hp = combat_calc_monster_hp(
+                &monster_types[boss_type[i]], boss_floor[i]);
+            if (hp <= previous_hp) boss_hp_rises = 0;
+            previous_hp = hp;
+        }
+        CHECK(boss_hp_rises,
+              "Enhanced milestone boss HP rises at every quest floor");
+    }
+    {
+        int previous_average = 0;
+        int bands_rise = 1;
+        int every_band_casts = 1;
+        int caster_count = 0;
+        for (int band = 0; band < 15; band++) {
+            int hp_total = 0;
+            int band_casters = 0;
+            for (int slot = 0; slot < 4; slot++) {
+                int type = DEEP_MONSTER_FIRST + band * 4 + slot;
+                hp_total += monster_types[type].hpF;
+                if (combat_monster_spell_chance(type)) {
+                    band_casters++;
+                    caster_count++;
+                }
+            }
+            int average = hp_total / 4;
+            if (average < previous_average) bands_rise = 0;
+            if (!band_casters) every_band_casts = 0;
+            previous_average = average;
+        }
+        CHECK(bands_rise && every_band_casts && caster_count >= 40,
+              "deep HP bands rise and every generation contains casters");
+        CHECK(!strcmp(combat_monster_spell_name(116), "ABYSSAL LANCE") &&
+              !strcmp(combat_monster_spell_name(135), "STARFIRE") &&
+              !strcmp(combat_monster_spell_name(151), "MANA TEMPEST") &&
+              !strcmp(combat_monster_spell_name(177), "ANNIHILATION") &&
+              combat_monster_spell_chance(114) == 0 &&
+              combat_monster_spell_chance(177) == 2,
+              "late monsters receive progression-appropriate signature magic");
+    }
+    {
+        Character victim = {0};
+        mw_set_experience_mode(&victim, MW_EXPERIENCE_ENHANCED);
+        mw_set_hp_max(&victim, 10000);
+        mw_set_hp_cur(&victim, 10000);
+        victim.sp_cur = victim.sp_max = 5000.0f;
+        CombatState caster = {0};
+        caster.active = 1;
+        caster.monster_type_idx = 177;
+        caster.monster_level = 1000;
+        caster.monster_hp = caster.monster_max_hp = 100000;
+        const MonsterSpellProfile *profile = monster_spell_profile(177);
+        int damage = combat_monster_spell_effect(
+            &g, &caster, &victim, profile);
+        CHECK(damage >= 3116 && damage <= 3366 &&
+              strstr(caster.special_message, "ANNIHILATION"),
+              "enemy Annihilation scales against late-game player HP");
+
+        caster.monster_type_idx = 151;
+        caster.monster_level = 725;
+        profile = monster_spell_profile(151);
+        float old_sp = victim.sp_cur;
+        damage = combat_monster_spell_effect(&g, &caster, &victim, profile);
+        CHECK(damage > 0 && victim.sp_cur < old_sp &&
+              strstr(caster.special_message, "MANA TEMPEST"),
+              "enemy Mana Tempest damages health and drains spell points");
+
+        caster.monster_type_idx = 140;
+        caster.monster_level = 575;
+        caster.monster_hp = caster.monster_max_hp = 1;
+        profile = monster_spell_profile(140);
+        damage = combat_monster_spell_effect(&g, &caster, &victim, profile);
+        CHECK(damage == 0 && caster.monster_hp > 1 &&
+              strstr(caster.special_message, "PHOENIX PRAYER"),
+              "enemy restoration magic heals instead of making a melee attack");
+
+        caster.monster_type_idx = 177;
+        caster.monster_level = 1000;
+        victim.antimagic_ring = 5;
+        int dispelled = 0;
+        game_srand(&g, 17);
+        for (int i = 0; i < 128 && !dispelled; i++) {
+            int spell_damage = 0;
+            if (combat_monster_try_spell(
+                    &g, &caster, &victim, &spell_damage) &&
+                strstr(caster.special_message, "DISPELS"))
+                dispelled = 1;
+        }
+        CHECK(dispelled,
+              "anti-magic ring can dispel native enemy spells");
+    }
     mw_set_weapon_enchant(&p, 1, 300);
     mw_set_armor_enchant(&p, 3, 275);
     CHECK(mw_weapon_enchant(&p, 1) == 300 &&
           mw_armor_enchant(&p, 3) == 275,
           "16-bit equipment enchantments exceed byte range");
+    mw_set_weapon_inventory_count(&p, 12, 1);
+    mw_set_armor_inventory_count(&p, 8, 1);
+    mw_set_weapon_inventory_count(&p, 14, 1);
+    mw_set_armor_inventory_count(&p, 10, 1);
+    mw_set_weapon_inventory_count(&p, 19, 1);
+    mw_set_armor_inventory_count(&p, 15, 1);
+    mw_set_weapon_enchant(&p, 12, 725);
+    mw_set_armor_enchant(&p, 8, 640);
+    mw_set_weapon_enchant(&p, 14, 950);
+    mw_set_armor_enchant(&p, 10, 925);
+    mw_set_weapon_enchant(&p, 19, 1400);
+    mw_set_armor_enchant(&p, 15, 1350);
+    CHECK(mw_weapon_inventory_count(&p, 12) == 1 &&
+          mw_armor_inventory_count(&p, 8) == 1 &&
+          mw_weapon_enchant(&p, 12) == 725 &&
+          mw_armor_enchant(&p, 8) == 640 &&
+          mw_weapon_inventory_count(&p, 14) == 1 &&
+          mw_armor_inventory_count(&p, 10) == 1 &&
+          mw_weapon_enchant(&p, 14) == 950 &&
+          mw_armor_enchant(&p, 10) == 925 &&
+          mw_weapon_inventory_count(&p, 19) == 1 &&
+          mw_armor_inventory_count(&p, 15) == 1 &&
+          mw_weapon_enchant(&p, 19) == 1400 &&
+          mw_armor_enchant(&p, 15) == 1350,
+          "Enhanced equipment inventory and enchant storage");
+    {
+        Character v2 = {0};
+        v2.native.magic = MW_NATIVE_CHARACTER_MAGIC;
+        v2.native.version = 2;
+        v2.native.quest_flags = (u16)((1u << 9) | (1u << 12));
+        v2.native.weapon_enchant[1] = 333;
+        v2.native.experience_mode = MW_EXPERIENCE_ENHANCED;
+        mw_character_native_ensure(&v2);
+        CHECK(mw_character_native_valid(&v2) &&
+              mw_weapon_enchant(&v2, 1) == 333 &&
+              mw_weapon_inventory_count(&v2, 12) == 1 &&
+              mw_armor_inventory_count(&v2, 8) == 1 &&
+              mw_weapon_inventory_count(&v2, 16) == 1 &&
+              mw_armor_inventory_count(&v2, 12) == 1 &&
+              v2.native.deep_magic_marker == MW_DEEP_MAGIC_MARKER &&
+              v2.spells[0][31] && v2.spells[3][34],
+              "V2 Enhanced save equipment migration");
+    }
+    {
+        Character old_monk = {0};
+        memset(old_monk.spells, 1, sizeof(old_monk.spells));
+        memset(old_monk.scrolls, 1, sizeof(old_monk.scrolls));
+        old_monk.native.magic = MW_NATIVE_CHARACTER_MAGIC;
+        old_monk.native.version = 5;
+        old_monk.native.experience_mode = MW_EXPERIENCE_ENHANCED;
+        old_monk.native.quest_flags = (u16)(1u << 8);
+        mw_character_native_ensure(&old_monk);
+        CHECK(old_monk.spells[0][30] &&
+              !old_monk.spells[0][31] &&
+              !old_monk.spells[3][34] &&
+              !old_monk.scrolls[0][30] &&
+              old_monk.native.deep_magic_marker == MW_DEEP_MAGIC_MARKER,
+              "legacy reserved spell slots migrate to earned deep magic");
+    }
+    {
+        Character v3 = {0};
+        v3.native.magic = MW_NATIVE_CHARACTER_MAGIC;
+        v3.native.version = 3;
+        v3.native.experience_mode = MW_EXPERIENCE_ENHANCED;
+        v3.native.deep_magic_marker = MW_DEEP_MAGIC_MARKER;
+        v3.native.relic_arcane_ring = 0xFF;
+        v3.native.relic_phoenix_cooldown = 0xFFFF;
+        mw_character_native_ensure(&v3);
+        CHECK(mw_character_native_valid(&v3) &&
+              v3.native.deep_magic_marker == MW_DEEP_MAGIC_MARKER &&
+              !mw_relic_count(&v3) &&
+              !v3.native.relic_phoenix_cooldown,
+              "V3 reserved bytes migrate safely to empty V6 relic storage");
+    }
+    {
+        Character v4 = {0};
+        v4.native.magic = MW_NATIVE_CHARACTER_MAGIC;
+        v4.native.version = 4;
+        v4.native.experience_mode = MW_EXPERIENCE_ENHANCED;
+        v4.native.quest_flags = MW_FINAL_GEAR_QUEST_FLAG;
+        v4.native.relic_arcane_ring = 1;
+        v4.native.relic_phoenix_seal = 1;
+        v4.native.relic_phoenix_cooldown = 123;
+        v4.native.final_weapon_inventory = 0xFF;
+        v4.native.final_armor_enchant = INT16_MAX;
+        mw_character_native_ensure(&v4);
+        CHECK(mw_character_native_valid(&v4) &&
+              mw_relic_owned(&v4, MW_RELIC_ARCANE_RING) &&
+              mw_relic_owned(&v4, MW_RELIC_PHOENIX_SEAL) &&
+              v4.native.relic_phoenix_cooldown == 123 &&
+              !(mw_quest_flags(&v4) & MW_FINAL_GEAR_QUEST_FLAG) &&
+              !mw_weapon_inventory_count(&v4, 14) &&
+              !mw_armor_inventory_count(&v4, 10) &&
+              !mw_weapon_enchant(&v4, 14) &&
+              !mw_armor_enchant(&v4, 10),
+              "V4 relic save migrates safely to empty V6 late gear");
+    }
+    {
+        Character v5 = {0};
+        v5.hp_cur = 54321;
+        v5.hp_max = 60000;
+        v5.native.magic = MW_NATIVE_CHARACTER_MAGIC;
+        v5.native.version = 5;
+        v5.native.experience_mode = MW_EXPERIENCE_ENHANCED;
+        v5.native.quest_flags = MW_FINAL_GEAR_QUEST_FLAG;
+        v5.native.relic_arcane_ring = 1;
+        v5.native.enhanced_weapon_inventory[1] = 2;
+        v5.native.enhanced_weapon_enchant[1] = 450;
+        v5.native.final_armor_inventory = 3;
+        v5.native.final_armor_enchant = 900;
+        mw_character_native_ensure(&v5);
+        CHECK(mw_character_native_valid(&v5) &&
+              mw_relic_owned(&v5, MW_RELIC_ARCANE_RING) &&
+              mw_hp_cur(&v5) == 54321 && mw_hp_max(&v5) == 60000 &&
+              mw_weapon_inventory_count(&v5, 16) == 2 &&
+              mw_weapon_enchant(&v5, 16) == 450 &&
+              mw_armor_inventory_count(&v5, 14) == 3 &&
+              mw_armor_enchant(&v5, 14) == 900 &&
+              mw_late_gear_unlocked(&v5, 4) &&
+              mw_late_gear_unlocked(&v5, 6),
+              "V5 health, relics, and late gear migrate into V6");
+    }
+    {
+        Character hidden = {0};
+        char line[96];
+        format_equipment_line(&hidden, 0, 7, 7, line, sizeof(line));
+        CHECK(strstr(line, "--------") && !strstr(line, "GREAT"),
+              "uncollected weapon name remains hidden");
+        mw_set_weapon_inventory_count(&hidden, 7, 1);
+        mw_set_weapon_enchant(&hidden, 7, 42);
+        format_equipment_line(&hidden, 0, 7, 7, line, sizeof(line));
+        CHECK(strstr(line, "GREAT SWORD") && strstr(line, ", PLUS 42"),
+              "collected weapon name and enchant are shown");
+    }
+    p.class_id = CLASS_FIGHTER;
+    CHECK(combat_weapon_allowed(&p, 7) &&
+          combat_weapon_allowed(&p, 12) &&
+          combat_weapon_allowed(&p, 13) &&
+          combat_weapon_allowed(&p, 14) &&
+          combat_weapon_allowed(&p, 19) &&
+          combat_armor_allowed(&p, 8) &&
+          combat_armor_allowed(&p, 9) &&
+          combat_armor_allowed(&p, 10) &&
+          combat_armor_allowed(&p, 15),
+          "fighter equipment permissions");
+    p.class_id = CLASS_WIZARD;
+    CHECK(combat_weapon_allowed(&p, 1) &&
+          combat_weapon_allowed(&p, 4) &&
+          combat_weapon_allowed(&p, 12) &&
+          !combat_weapon_allowed(&p, 2) &&
+          !combat_weapon_allowed(&p, 13) &&
+          !combat_weapon_allowed(&p, 14) &&
+          !combat_armor_allowed(&p, 8) &&
+          !combat_armor_allowed(&p, 10),
+          "wizard equipment permissions");
+    p.class_id = CLASS_MONK;
+    CHECK(!combat_weapon_allowed(&p, 12) &&
+          !combat_weapon_allowed(&p, 14) &&
+          combat_armor_allowed(&p, 1) &&
+          combat_armor_allowed(&p, 8) &&
+          !combat_armor_allowed(&p, 9) &&
+          !combat_armor_allowed(&p, 10),
+          "monk equipment permissions");
+    p.class_id = CLASS_WIZARD;
     CHECK(class_can_read_spellbook(&p, SPELL_CAT_WIZARD), "wizard book access");
     p.class_id = CLASS_FIGHTER;
     CHECK(!class_can_read_spellbook(&p, SPELL_CAT_PREPARATION), "fighter book denial");
+    p.class_id = CLASS_MONK;
+    p.spells[SPELL_CAT_PREPARATION][30] = 0;
+    CHECK(spell_is_available(&p, SPELL_CAT_PREPARATION, 0, 0, 0) &&
+          !spell_is_available(&p, SPELL_CAT_PREPARATION, 30, 0, 0),
+          "monk retains original catalog but must earn deep spells");
+    p.class_id = CLASS_FIGHTER;
+    p.scrolls[SPELL_CAT_WIZARD][0] = 1;
+    mw_set_quest_flags(&p, (u16)(mw_quest_flags(&p) |
+                                  MW_UNIVERSAL_ACCESS_FLAG));
+    CHECK(combat_weapon_allowed(&p, 14) &&
+          combat_armor_allowed(&p, 10) &&
+          class_can_read_spellbook(&p, SPELL_CAT_WIZARD) &&
+          spell_is_available(&p, SPELL_CAT_WIZARD, 0, 1, 0),
+          "max-character universal equipment and magic access");
+    mw_set_quest_flags(&p, (u16)(mw_quest_flags(&p) &
+                                  ~MW_UNIVERSAL_ACCESS_FLAG));
     p.class_id = CLASS_WIZARD;
+
+    p.stat_str = MW_PLAYER_STAT_MAX;
+    p.eff_battle_str = 0;
+    apply_battle_spell(&g, &cs, &p, &wiz_spells[4], 2);
+    CHECK(p.stat_str == MW_PLAYER_STAT_MAX && p.eff_battle_str == 0,
+          "battle strength cannot overflow max stat");
+    mw_set_hp_max(&p, MW_PLAYER_HP_MAX);
+    mw_set_hp_cur(&p, MW_PLAYER_HP_MAX);
+    apply_permanent_spell(&g, &p, &cs, 1, message, sizeof(message));
+    CHECK(mw_hp_cur(&p) == MW_PLAYER_HP_MAX &&
+          mw_hp_max(&p) == MW_PLAYER_HP_MAX,
+          "permanent health cannot overflow max HP");
+    p.stat_str = 20;
+    mw_set_hp_max(&p, 100);
+    mw_set_hp_cur(&p, 100);
 
     apply_preparation_spell(&g, &p, 8, message, sizeof(message));
     CHECK(p.stat_str == 25 && p.eff_str_bonus == 1, "preparation strength");
@@ -2979,7 +4488,112 @@ int combat_self_test(void) {
     CHECK(apply_permanent_spell(&g, &p, NULL, 6, message, sizeof(message)) &&
           mw_weapon_enchant(&p, 1) == 2, "permanent weapon enchant");
     CHECK(apply_permanent_spell(&g, &p, NULL, 26, message, sizeof(message)) &&
-          p.hp_max == 125 && p.hp_cur == 125, "permanent health");
+          mw_hp_max(&p) == 125 && mw_hp_cur(&p) == 125,
+          "permanent health");
+    CHECK(apply_permanent_spell(&g, &p, NULL, 30, message, sizeof(message)) &&
+          mw_weapon_enchant(&p, 1) == 150,
+          "deep permanent weapon enchant");
+    p.equipped_armor = 3;
+    mw_set_armor_enchant(&p, 3, 0);
+    CHECK(apply_permanent_spell(&g, &p, NULL, 31, message, sizeof(message)) &&
+          mw_armor_enchant(&p, 3) == 100,
+          "deep permanent armor enchant");
+    CHECK(apply_permanent_spell(&g, &p, NULL, 32, message, sizeof(message)) &&
+          mw_body_armor_plus(&p) == 100,
+          "deep permanent body armor");
+    CHECK(apply_permanent_spell(&g, &p, NULL, 35, message, sizeof(message)) &&
+          mw_weapon_enchant(&p, 1) == 500,
+          "ascendant permanent weapon enchant");
+    CHECK(apply_permanent_spell(&g, &p, NULL, 36, message, sizeof(message)) &&
+          mw_armor_enchant(&p, 3) == 350,
+          "ascendant permanent armor enchant");
+    CHECK(apply_permanent_spell(&g, &p, NULL, 37, message, sizeof(message)) &&
+          mw_body_armor_plus(&p) == 300,
+          "ascendant permanent body armor");
+    memset(g.visited, 0, sizeof(g.visited));
+    CHECK(apply_preparation_spell(&g, &p, 32, message, sizeof(message)) &&
+          p.eff_protect_lv == 5 && p.eff_protect_turns == 600 &&
+          p.eff_resist_poison == 600 && p.eff_resist_disease == 600 &&
+          p.eff_anti_cold == 600 && p.eff_anti_fire == 600 &&
+          p.eff_resist_drain == 600,
+          "deep sanctuary grants every defense");
+    CHECK(apply_preparation_spell(&g, &p, 33, message, sizeof(message)) &&
+          g.visited[0][0] && g.visited[MAP_H - 1][MAP_W - 1],
+          "cartographer eye reveals the current floor");
+    p.eff_protect_lv = 0;
+    p.eff_protect_turns = p.eff_resist_poison = 0;
+    CHECK(apply_preparation_spell(&g, &p, 37, message, sizeof(message)) &&
+          p.eff_protect_lv == 8 && p.eff_protect_turns == 1200 &&
+          p.eff_resist_poison == 1200,
+          "eternal sanctuary grants tier-eight defense");
+    memset(&cs, 0, sizeof(cs));
+    cs.active = 1;
+    cs.monster_type_idx = 0;
+    cs.monster_level = 1000;
+    cs.monster_hp = cs.monster_max_hp = 100000;
+    CHECK(apply_battle_spell(&g, &cs, &p, &wiz_spells[31], 11) == -3 &&
+          cs.monster_stopped == 30 && p.eff_stop_monster == 30,
+          "deep time stop duration");
+    CHECK(apply_battle_spell(&g, &cs, &p, &wiz_spells[34], 12) == 30000,
+          "deep percent damage");
+    {
+        int annihilation =
+            apply_battle_spell(&g, &cs, &p, &wiz_spells[39], 14);
+        CHECK(annihilation >= 60000 && annihilation <= 120000,
+              "level-fourteen annihilation damage");
+    }
+    mw_set_hp_cur(&p, 1);
+    p.poisoned_turns = 10;
+    p.diseased_turns = 20;
+    CHECK(apply_battle_spell(&g, &cs, &p, &priest_spells[30], 11) == -3 &&
+          mw_hp_cur(&p) == mw_hp_max(&p) &&
+          !p.poisoned_turns && !p.diseased_turns,
+          "greater restoration cures all");
+    p.eff_protect_lv = 0;
+    p.eff_protect_turns = p.eff_resist_poison = 0;
+    CHECK(apply_battle_spell(&g, &cs, &p, &priest_spells[31], 11) == -3 &&
+          p.eff_protect_lv == 6 && p.eff_protect_turns == 180 &&
+          p.eff_resist_poison == 180,
+          "divine aegis protection and resistance");
+    p.sp_cur = 1.0f;
+    mw_set_hp_cur(&p, 1);
+    p.poisoned_turns = p.diseased_turns = 10;
+    CHECK(apply_battle_spell(&g, &cs, &p, &priest_spells[35], 12) == -3 &&
+          mw_hp_cur(&p) == mw_hp_max(&p) && p.sp_cur == p.sp_max &&
+          !p.poisoned_turns && !p.diseased_turns,
+          "mass restoration restores health, magic, and status");
+    p.wands[SPELL_CAT_WIZARD][32] = 2;
+    {
+        int result = cast_selected_spell(&g, &p, &cs, SPELL_CAT_WIZARD,
+                                         32, 2, message, sizeof(message));
+        CHECK(result >= 5000 && result <= 12000 &&
+              p.wands[SPELL_CAT_WIZARD][32] == 1,
+              "deep wand casts and consumes one charge");
+    }
+    p.scrolls[SPELL_CAT_PRIEST][30] = 1;
+    mw_set_hp_cur(&p, 1);
+    p.poisoned_turns = p.diseased_turns = 10;
+    CHECK(cast_selected_spell(&g, &p, &cs, SPELL_CAT_PRIEST, 30, 1,
+                              message, sizeof(message)) == -3 &&
+          !p.scrolls[SPELL_CAT_PRIEST][30] &&
+          mw_hp_cur(&p) == mw_hp_max(&p) &&
+          !p.poisoned_turns && !p.diseased_turns,
+          "deep scroll casts and is consumed");
+    p.papers[SPELL_CAT_WIZARD][30] = 1;
+    CHECK(cast_selected_spell(&g, &p, &cs, SPELL_CAT_WIZARD, 30, 3,
+                              message, sizeof(message)) ==
+              (int)p.level * 25 + 500 &&
+          !p.papers[SPELL_CAT_WIZARD][30],
+          "deep paper casts and is consumed");
+    mw_set_experience_mode(&p, MW_EXPERIENCE_CLASSIC);
+    p.scrolls[SPELL_CAT_WIZARD][30] = 1;
+    CHECK(!spell_is_available(&p, SPELL_CAT_WIZARD, 30, 1, 0) &&
+          cast_selected_spell(&g, &p, &cs, SPELL_CAT_WIZARD, 30, 1,
+                              message, sizeof(message)) == 0 &&
+          p.scrolls[SPELL_CAT_WIZARD][30] == 1 &&
+          strstr(message, "ENHANCED"),
+          "Classic hides and preserves Enhanced spell items");
+    mw_set_experience_mode(&p, MW_EXPERIENCE_ENHANCED);
 
     g.dungeon_max_floor = MAX_DUNGEON_FLOOR;
     CHECK(game_traversal_rules(&g)->prep_ascend_max_floor == 260 &&
@@ -3038,9 +4652,11 @@ int combat_self_test(void) {
                               message, sizeof(message)) == 25 &&
           p.wands[SPELL_CAT_WIZARD][5] == 1, "wand charge and battle damage");
 
-    p.hp_cur = p.hp_max = 100;
+    mw_set_hp_max(&p, 100);
+    mw_set_hp_cur(&p, 100);
     g.cheat_god_mode = 1;
-    CHECK(combat_apply_player_damage(&g, &p, 999) == 0 && p.hp_cur == 100,
+    CHECK(combat_apply_player_damage(&g, &p, 999, NULL) == 0 &&
+          mw_hp_cur(&p) == 100,
           "god mode blocks incoming HP damage");
     p.sp_cur = 0.0f;
     p.sp_max = 50.0f;
@@ -3051,8 +4667,63 @@ int combat_self_test(void) {
           p.papers[SPELL_CAT_PREPARATION][2] == 7,
           "god mode casts learned spells free without consuming paper");
     g.cheat_god_mode = 0;
-    CHECK(combat_apply_player_damage(&g, &p, 25) == 25 && p.hp_cur == 75,
+    CHECK(combat_apply_player_damage(&g, &p, 25, NULL) == 25 &&
+          mw_hp_cur(&p) == 75,
           "normal incoming HP damage restored");
+    mw_set_hp_max(&p, 100000);
+    mw_set_hp_cur(&p, 100000);
+    CHECK(combat_apply_player_damage(&g, &p, 25000, NULL) == 25000 &&
+          mw_hp_cur(&p) == 75000 && mw_hp_max(&p) == 100000,
+          "Enhanced HP remains live above the legacy 16-bit ceiling");
+    {
+        Character relic = {0};
+        mw_set_experience_mode(&relic, MW_EXPERIENCE_ENHANCED);
+        relic.level = 100;
+        mw_set_hp_max(&relic, 100);
+        mw_set_hp_cur(&relic, 20);
+        relic.sp_cur = 0.0f;
+        relic.sp_max = 20.0f;
+        mw_set_relic_owned(&relic, MW_RELIC_ARCANE_RING, 1);
+        for (int i = 0; i < 4; i++) character_tick_effects(&g, &relic);
+        CHECK(relic.sp_cur == 1.0f &&
+              relic.native.relic_regen_phase == 0,
+              "Arcane Renewal restores one SP every four actions");
+
+        mw_set_relic_owned(&relic, MW_RELIC_BLOODSTONE_SIGNET, 1);
+        CHECK(combat_apply_bloodstone(&relic, 200) == 10 &&
+              mw_hp_cur(&relic) == 30,
+              "Bloodstone heals five percent with level cap");
+
+        mw_set_relic_owned(&relic, MW_RELIC_DEEPWARD_AMULET, 1);
+        mw_set_hp_cur(&relic, 100);
+        CHECK(combat_apply_player_damage(&g, &relic, 20, NULL) == 17 &&
+              mw_hp_cur(&relic) == 83,
+              "Deepward reduces incoming monster damage fifteen percent");
+        relic.poisoned_turns = 1;
+        relic.stat_str = 20;
+        character_tick_effects(&g, &relic);
+        CHECK(relic.poisoned_turns == 900 && relic.stat_str == 19,
+              "Deepward doubles time between poison and disease drains");
+
+        mw_set_relic_owned(&relic, MW_RELIC_PHOENIX_SEAL, 1);
+        mw_set_hp_cur(&relic, 10);
+        int phoenix_saved = 0;
+        CHECK(combat_apply_player_damage(&g, &relic, 999,
+                                         &phoenix_saved) == 9 &&
+              phoenix_saved && mw_hp_cur(&relic) == 1 &&
+              relic.native.relic_phoenix_cooldown == 301,
+              "Phoenix Seal prevents lethal strike and starts cooldown");
+        character_tick_effects(&g, &relic);
+        CHECK(relic.native.relic_phoenix_cooldown == 300,
+              "Phoenix Seal cooldown advances with player actions");
+
+        mw_set_relic_owned(&relic, MW_RELIC_SAGE_PRISM, 1);
+        CHECK(mw_relic_count(&relic) == MW_RELIC_COUNT,
+              "all five Enhanced relics persist independently");
+        mw_set_experience_mode(&relic, MW_EXPERIENCE_CLASSIC);
+        CHECK(mw_relic_count(&relic) == 0,
+              "Enhanced relics are inert and hidden in Classic mode");
+    }
 #undef CHECK
     printf("Magic/equipment/status self-test: %s (%d failure%s)\n",
            failures ? "FAIL" : "PASS", failures, failures == 1 ? "" : "s");

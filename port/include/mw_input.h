@@ -20,9 +20,11 @@
 #define INPUT_MODEL_VIEWER   0x108  /* Ctrl+F5 */
 #define INPUT_MOUSE_WHEEL_UP 0x109
 #define INPUT_MOUSE_WHEEL_DOWN 0x10A
+#define INPUT_MAX_CHARACTER 0x10B  /* Ctrl+Shift+Alt+F12 */
 
 typedef struct {
     int keys[KEY_QUEUE_SIZE];
+    SDL_Keymod key_mods[KEY_QUEUE_SIZE];
     int event_x[KEY_QUEUE_SIZE];
     int event_y[KEY_QUEUE_SIZE];
     int head;
@@ -32,6 +34,7 @@ typedef struct {
     int mouse_x;
     int mouse_y;
     unsigned mouse_motion_serial;
+    SDL_Keymod last_key_mods;
     int quit_requested;
 } Input;
 
@@ -43,6 +46,7 @@ int  input_wait_any_key(Input *inp);  /* consumes a complete key, including exte
 int  input_poll_quit(Input *inp);     /* returns 1 if window close requested */
 void input_last_mouse_click(Input *inp, int *x, int *y);
 void input_mouse_position(Input *inp, int *x, int *y, unsigned *serial);
+SDL_Keymod input_last_key_modifiers(const Input *inp);
 
 /* Map SDL keysym to the DOS-compatible value the game expects.
  * Most keys map to ASCII. Arrow keys map to 0x00 + scancode (two-byte sequence). */

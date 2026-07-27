@@ -9,7 +9,10 @@ Enhanced mode.
 | Total floors | 251: town floor 0 plus dungeon floors 1-250 | 1001: town floor 0 plus dungeon floors 1-1000 |
 | Monster progression | Original monster roster through floor 250 | Original roster plus new variants and late-game monster tiers on floors 251-1000 |
 | Quest progression | Original eight quest bosses through floor 200 | Original quest chain plus bosses at floors 375, 500, 625, 750, 875, and 1000 |
-| Quest rewards | Original equipment rewards through the final classic boss | Additional +200, +300, +450, +600, +800, and +1000 weapon-enchantment orbs |
+| Quest rewards | Original equipment rewards through the final classic boss | Additional +200, +300, +450, +600, +800, and +1000 weapon-enchantment orbs plus eight late weapon/armor tiers distributed from floor 375 through 1000 |
+| Spell catalog | Original 30 spells in each of four families | Original catalog plus 40 deep spells, with one spell per family unlocked at every 100-floor milestone and matching scrolls, wands, and papers |
+| Super-rare relics | None | Five passive relics begin dropping from floor 350: spell regeneration, melee life-steal, deep damage/status protection, bonus experience, and lethal-strike survival |
+| Effect display | Original Spells in Effect pages 1 and 2 | Original pages plus clickable page 3 for automatic magic items, relic mechanics, SP-regeneration timing, and Phoenix recharge |
 | Digging | Original depth rules; allowed through floor 120 | Proportionally extended depth rules; allowed through floor 480 |
 | Ascend magic | Original cutoff at floor 65 | Proportionally extended cutoff at floor 260 |
 | Descend magic | Original cutoff at floor 123 | Proportionally extended cutoff at floor 492 |
@@ -34,7 +37,8 @@ not only ordinary ladders. In Classic mode:
   town floor 0, and Relocate remains confined to the current floor.
 
 Enhanced mode uses the corresponding scaled traversal values shown above and
-the explicit deep-dungeon geometry documented in `DEEP_DUNGEON.md`.
+the explicit deep-dungeon geometry documented in `DEEP_DUNGEON.md`. Its
+additional magic is cataloged in `DEEP_SPELLS.md`.
 
 Both modes retain the native port's interface, mouse controls, Beastiary,
 shops, trainer, model viewer, bug fixes, save integrity checks, and optional

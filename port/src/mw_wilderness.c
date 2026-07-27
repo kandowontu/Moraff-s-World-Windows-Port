@@ -314,6 +314,36 @@ static int wilderness_click_direction(Game *g) {
     return -1;
 }
 
+static int wilderness_movement_delta(int key, int scan, SDL_Keymod mods,
+                                     int *out_dx, int *out_dy) {
+    int dx = 0, dy = 0;
+    if (key >= '1' && key <= '9' && key != '5') {
+        /* WORLD receives the fast cursor forms as numeric-keypad digits. */
+        int column = (key - '1') % 3;
+        int row = (key - '1') / 3;
+        dx = (column - 1) * 3;
+        dy = (1 - row) * 3;
+    } else if (key == 0) {
+        int distance = (mods & KMOD_SHIFT) ? 3 : 1;
+        switch (scan) {
+        case 0x47: dx = -distance; dy = -distance; break;
+        case 0x48:                 dy = -distance; break;
+        case 0x49: dx =  distance; dy = -distance; break;
+        case 0x4B: dx = -distance;                 break;
+        case 0x4D: dx =  distance;                 break;
+        case 0x4F: dx = -distance; dy =  distance; break;
+        case 0x50:                 dy =  distance; break;
+        case 0x51: dx =  distance; dy =  distance; break;
+        default: return 0;
+        }
+    } else {
+        return 0;
+    }
+    if (out_dx) *out_dx = dx;
+    if (out_dy) *out_dy = dy;
+    return dx != 0 || dy != 0;
+}
+
 static int prompt_key(Game *g, const char *a, const char *b,
                       const char *c, int wanted) {
     Video *v = &g->video;
@@ -322,18 +352,16 @@ static int prompt_key(Game *g, const char *a, const char *b,
     video_draw_text_scaled_xy(v, 8, 36, b, 5, 2, 3, 2, 3);
     video_draw_text_scaled_xy(v, 8, 68, c, 4, 2, 3, 2, 3);
     video_present(v);
-    for (;;) {
-        int key = input_getch(&g->input);
-        if (key == INPUT_MOUSE_CLICK) {
-            int x, y;
-            if (game_mouse_click_logical(g, &x, &y) && x < 570 && y < 124)
-                return wanted;
-        }
-        if (key == wanted || key == wanted - 32) return wanted;
-        if (key == 0x1B || key == 'n' || key == 'N' || input_poll_quit(&g->input))
-            return 0;
-        if (key == 0) (void)input_getch(&g->input);
+    int key = input_wait_any_key(&g->input);
+    if (key == INPUT_MOUSE_CLICK) {
+        int x, y;
+        if (game_mouse_click_logical(g, &x, &y) && x < 570 && y < 124)
+            return wanted;
     }
+    if (wanted && (key == wanted ||
+                   (wanted >= 'a' && wanted <= 'z' && key == wanted - 32)))
+        return wanted;
+    return 0;
 }
 
 static u32 boat_price(const Character *p) {
@@ -343,10 +371,20 @@ static u32 boat_price(const Character *p) {
     return price > 0xFFFFFFFFull ? 0xFFFFFFFFu : (u32)price;
 }
 
+static int wilderness_terrain_is_land(int height) {
+    return height > 0;
+}
+
+static int wilderness_terrain_is_water(int height) {
+    return height < 0;
+}
+
 static int try_move(Game *g, Character *p, int dx, int dy) {
     int nx = wrap_coord(g->wilderness_x + dx, WILD_X_MIN, WILD_X_MAX, WILD_X_SPAN);
     int ny = wrap_coord(g->wilderness_y + dy, WILD_Y_MIN, WILD_Y_MAX, WILD_Y_SPAN);
-    int target_land = wilderness_height(g, nx, ny) > 0;
+    int target_height = wilderness_height(g, nx, ny);
+    int target_land = wilderness_terrain_is_land(target_height);
+    int target_water = wilderness_terrain_is_water(target_height);
 
     if (g->wilderness_boat && target_land) {
         if (!prompt_key(g, "DO YOU WISH TO LEAVE YOUR BOAT?",
@@ -354,14 +392,14 @@ static int try_move(Game *g, Character *p, int dx, int dy) {
                         "HIT 'L' TO LEAVE THE BOAT; ANY OTHER KEY TO REMAIN.", 'l'))
             return 0;
         g->wilderness_boat = 0;
-    } else if (!g->wilderness_boat && !target_land) {
+    } else if (!g->wilderness_boat && target_water) {
         u32 price = boat_price(p);
         char cost[96];
-        snprintf(cost, sizeof(cost), "A BOAT WILL COST YOU %u JEWEL PIECES.", price);
+        snprintf(cost, sizeof(cost), "A BOAT WILL COST YOU %u JEWEL STONES.", price);
         if (p->jewels_pocket < price) {
             mw_audio_play(&g->audio, MW_SFX_ERROR);
             prompt_key(g, "YOU WILL HAVE TO BUY A BOAT TO TRAVEL IN WATER.", cost,
-                       "COME BACK WHEN YOU HAVE MORE MONEY. HIT ANY KEY...", 0x0D);
+                       "COME BACK WHEN YOU HAVE MORE MONEY. HIT ANY KEY...", 0);
             return 0;
         }
         if (!prompt_key(g, "YOU WILL HAVE TO BUY A BOAT TO TRAVEL IN WATER.", cost,
@@ -420,18 +458,19 @@ static void wilderness_help(Game *g) {
     video_clear(v, 0);
     const char *lines[] = {
         "TRAVELLING IN THE WILDERNESS",
-        "ARROW KEYS MOVE ONE LANDSCAPE STEP; HOME/END/PAGE KEYS MOVE DIAGONALLY.",
+        "CURSOR KEYS MOVE ONE STEP; HOLD A CURSOR KEY TO KEEP MOVING.",
+        "SHIFT-CURSOR MOVES THREE STEPS; HOME/END/PAGE KEYS MOVE DIAGONALLY.",
         "THE WORLD WRAPS AT EVERY EDGE, EXACTLY AS THE ORIGINAL WORLD DOES.",
         "BLUE TERRAIN IS WATER. YOU MUST BUY A BOAT BEFORE ENTERING IT.",
         "LEAVING A BOAT ON SHORE MAY FORFEIT IT, JUST AS THE ORIGINAL WARNS.",
         "A YELLOW D MARKS THE DUNGEON GENERATED FOR THE CURRENT REGION.",
         "MOVE CLOSE TO THE D AND PRESS E TO ENTER ITS FLOOR-ZERO TOWN.",
         "MONSTERS ARE ONLY FOUND IN DUNGEONS; NONE SPAWN IN THE WILDERNESS.",
-        "W SHOWS THE COMPLETE 64 BY 64 WORLD MAP. Q RETURNS TO THE DUNGEON.",
+        "W SHOWS THE COMPLETE WORLD MAP. Q RETURNS TO THE DUNGEON.",
         "HIT ANY KEY TO RETURN..."
     };
-    for (int i = 0; i < 10; i++)
-        video_draw_text_scaled_xy(v, 16, 20 + i * 48, lines[i], i ? 5 : 8,
+    for (int i = 0; i < 11; i++)
+        video_draw_text_scaled_xy(v, 16, 16 + i * 44, lines[i], i ? 5 : 8,
                                   2, 3, 2, 3);
     video_present(v);
     input_wait_any_key(&g->input);
@@ -497,6 +536,8 @@ static int wilderness_run_internal(Game *g, Character *p, int test_mode) {
             else if (dir == 1) dy = 1;
             else if (dir == 2) dx = -1;
             else if (dir == 3) dx = 1;
+        } else if (key == INPUT_MAX_CHARACTER && !test_mode) {
+            game_debug_max_character(g, p);
         } else if (key == INPUT_MODEL_VIEWER) {
             model_viewer_run(g);
         } else if (key == INPUT_TRAINER && !test_mode) {
@@ -506,14 +547,8 @@ static int wilderness_run_internal(Game *g, Character *p, int test_mode) {
         } else if (key == 0) {
             int scan = input_getch(&g->input);
             if (scan == 0x3B) wilderness_help(g);
-            else if (scan == 0x48) dy = -1;
-            else if (scan == 0x50) dy = 1;
-            else if (scan == 0x4B) dx = -1;
-            else if (scan == 0x4D) dx = 1;
-            else if (scan == 0x47) { dx = -3; dy = -3; }
-            else if (scan == 0x49) { dx = 3; dy = -3; }
-            else if (scan == 0x4F) { dx = -3; dy = 3; }
-            else if (scan == 0x51) { dx = 3; dy = 3; }
+            else wilderness_movement_delta(
+                0, scan, input_last_key_modifiers(&g->input), &dx, &dy);
         } else if (key == 'w' || key == 'W') {
             draw_world_overview(g);
         } else if (key == 'h' || key == 'H') {
@@ -539,6 +574,8 @@ static int wilderness_run_internal(Game *g, Character *p, int test_mode) {
             } else {
                 mw_audio_play(&g->audio, MW_SFX_ERROR);
             }
+        } else {
+            wilderness_movement_delta(key, -1, KMOD_NONE, &dx, &dy);
         }
         if (dx || dy) try_move(g, p, dx, dy);
     }
@@ -572,6 +609,7 @@ void wilderness_draw_test(Game *g, Character *p) {
 
 int wilderness_self_test(void) {
     int failures = 0;
+    int dx = 0, dy = 0;
     if (map_height_code(0x4F) != 14 || map_height_code(0x50) != 28 ||
         map_height_code(0x20) != -20) failures++;
     /* Literal WORLD seam behavior: 0x3F80 is a duplicate boundary sample. */
@@ -580,6 +618,35 @@ int wilderness_self_test(void) {
     if (wrap_coord(0x3F, WILD_X_MIN, WILD_X_MAX, WILD_X_SPAN) != 0x3F)
         failures++;
     if (wilderness_dungeon_number(8, 11) < 1) failures++;
+    if (!wilderness_movement_delta(0, 0x48, KMOD_NONE, &dx, &dy) ||
+        dx != 0 || dy != -1 ||
+        !wilderness_movement_delta(0, 0x51, KMOD_LSHIFT, &dx, &dy) ||
+        dx != 3 || dy != 3 ||
+        !wilderness_movement_delta('7', -1, KMOD_NONE, &dx, &dy) ||
+        dx != -3 || dy != -3)
+        failures++;
+    if (!wilderness_terrain_is_water(-1) ||
+        wilderness_terrain_is_water(0) ||
+        !wilderness_terrain_is_land(1) ||
+        wilderness_terrain_is_land(0))
+        failures++;
+    {
+        Character price_test = {0};
+        price_test.level = 10;
+        if (boat_price(&price_test) != 10726u) failures++;
+    }
+    {
+        Input input = {0};
+        input.keys[0] = 0;
+        input.keys[1] = 0x48;
+        input.key_mods[0] = KMOD_LSHIFT;
+        input.key_mods[1] = KMOD_LSHIFT;
+        input.tail = 2;
+        if (input_getch(&input) != 0 ||
+            input_getch(&input) != 0x48 ||
+            !(input_last_key_modifiers(&input) & KMOD_SHIFT))
+            failures++;
+    }
 
     Game *g = (Game *)calloc(1, sizeof(*g));
     if (!g) {

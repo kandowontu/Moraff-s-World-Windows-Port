@@ -81,6 +81,9 @@ add_custom_command(TARGET moraffs_world POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/EXPERIENCE_MODES.md"
         "$<TARGET_FILE_DIR:moraffs_world>/EXPERIENCE_MODES.md"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/DEEP_SPELLS.md"
+        "$<TARGET_FILE_DIR:moraffs_world>/DEEP_SPELLS.md"
     COMMAND ${CMAKE_COMMAND} -E echo
         "Build complete. Run moraffs_world with its local game data files."
 )

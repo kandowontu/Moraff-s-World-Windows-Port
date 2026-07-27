@@ -59,7 +59,7 @@ Source comments use the corresponding tags `MW_PORT`,
 | `[x]` | `use_item` `0x0F4E7` | Original expanded-map `GO WEST/EAST/NORTH/SOUTH` hint toward live quest records `0x68..0x6F` |
 | `[x]` | `examine_item` `0x0E3C8`, `func_0E578` | Original ZOOM chooser, arrow/mouse compass selection, full-screen directional viewport, adjacent-monster label and three view-size modes |
 | `[x]` | `func_26C03` and help-text dispatch | Four help categories plus spell help pages |
-| `[x]` | `func_0C031` | Both spells-in-effect pages |
+| `[x]` | `func_0C031` | Both original spells-in-effect pages; Enhanced adds a third passive magic/relic status page |
 | `[x]` | `func_0DF4A`, `func_0DBA5`, `func_0DBE8` | Statistics and status displays |
 | `[x]` | `shop_finances` `0x0803D` | Money and stone display |
 | `[x]` | `func_0DDAA` | Pockets, spells, scrolls, wands, papers, pills and misc-item inventory pages |
@@ -85,11 +85,11 @@ missing subsystem.
 |---|---|---|
 | `[x]` | `func_09185`, `func_091B1`, `func_091CD` | Monster records, floor eligibility, ordinary/boss separation and spawn selection |
 | `[x]` | `load_monster_map`, `func_09DA6`, `func_09E0D`, `func_09E73`, `func_09EA8`, `func_0A03B`, `func_0A20C`, `func_0A318`, `func_0A36A`, `func_0A39C` | Persistent monster floors, deaths, HP and pit/world history |
-| `[x]` | `func_09148`, `combat_encounter` `0x018FE` | Viewport encounter setup and fight loop |
+| `[x]` | `func_09148`, `combat_encounter` `0x018FE`, combat branches of `func_0F6E5` | Viewport encounter setup and original non-modal combat: each Fight/Cast/Item/Wait action resolves one exchange, then the full movement and command dispatcher remains available |
 | `[x]` | `combat_attack` `0x00AFB`, `func_0A7FF`, `func_0AC4F`, `func_0AD33`, `func_0AD6C` | Player and monster attack resolution, armor, weapon and damage formulas |
 | `[x]` | Combat helpers `0x00D04..0x0446B` | Monster misses, physical attacks, breaths, poison, disease, level/stat drains and status attacks |
-| `[x]` | `select_weapon` `0x04538` and its inventory helpers | Weapon selection, owned/equipped state and enchantments |
-| `[x]` | `spell_menu` `0x00436`, `combat_event` `0x005DB`, `cast_spell` `0x0079A` | Unified spell/scroll/wand/paper selector and casting dispatch |
+| `[x]` | `select_weapon` `0x04538` plus armor and inventory helpers | Original upper-left eight-line selectors, hidden `--------` names, exact class/profession errors, owned/equipped state and enchantments |
+| `[x]` | `spell_menu` `0x00436`, `combat_event` `0x005DB`, `cast_spell` `0x0079A` | Unified spell/scroll/wand/paper selector and casting dispatch; Enhanced adds a paged 40-spell deep extension (ten per family) while Classic retains the original 120 total entries |
 | `[x]` | `func_10E9A`, `func_10EC6`, `func_10EF2`, `func_10F1E`, `func_10FE5`, `func_110AC`, `func_110CE`, `func_110F0`, `func_11112`, `func_11134`, `func_11156` | Permanent/preparation spell effects and selection helpers |
 | `[x]` | `func_1158A`, `func_115B6`, `func_115E2`, `func_116CA`, `func_11753`, `func_1177D`, `func_117A7` | Battle spell setup, buffs, resistances, healing and monster effects |
 | `[x]` | `weapon_glow`, `func_11876`, `func_118DC`, `func_119D5`, `func_11AEC`, `func_11B18`, `weapon_effect`, `func_11BE0`, `func_11C16`, `func_11C4C`, `func_11C82`, `func_11CB8`, `func_11CEE`, `func_11DA5` | Weapon spell visuals/effects, damage spells, cures, holds, drains and expiration state |
@@ -126,7 +126,8 @@ software cursor.
 - `[x]` Native mouse selection is active in character slots/creation, town and
   shop services, rewards, pockets, equipment, combat, bestiary, spell-source
   menus, the original 30-spell grid, trainer fields, wilderness movement,
-  numeric amounts and character-name entry.
+  numeric amounts, character-name entry, and the mode-dependent 30/40-entry
+  spell and trainer grids.
 - `[x]` `func_08EA2`, `select_player`, `character_menu`, `func_0E578`,
   `func_0F6E5`, `check_key`, and `func_26B38` behavior is covered by click hit
   maps, continuous hover feedback, DOS extended-key draining and SDL cursor
@@ -166,6 +167,35 @@ computed tables resolve to implemented combat attacks, spell grids/effects,
 shop/reward selections, monster/boss rewards, renderer cases, or native
 platform replacements listed below. No additional dormant gameplay command or
 wholly absent single-player subsystem was found.
+
+### Dialogue ownership audit (2026-07-25)
+
+The live dungeon command dispatcher and every nested Use Item path were
+cross-checked against `WORLD.C`/`WORLD.ASM`.  The original uses three distinct
+screen regions, which the native port now preserves:
+
+- Short entry menus and notices use only the upper-left pane (source
+  coordinates `0,0` through `0x2D3,0x1AE`): Use Item source/category menus,
+  casting category/help menus, weapons, armor, drops, finances, experience,
+  spells-in-effect, shops, rewards, trap-door notices, and ordinary errors.
+- The live 30-item selector used to cast a spellbook or consume a scroll,
+  wand, or paper uses the full-width top strip (`y <= 0x1AE`) while retaining
+  the map, lower three viewports, and both status regions below it.
+- Long information pages replace only the full-height left column: View
+  Stats, Help/details, and miscellaneous pockets.  The three right-hand
+  viewport/command/status regions remain visible.
+- `func_1E77B`, the original read-only 30-row spellbook/scroll/wand/paper
+  table reached through **Pockets**, is the intentional full-display page and
+  retains its original coordinates.  It is not used while casting or using an
+  item.  Expanded map, directional zoom, Beastiary, trainer, game statistics,
+  wilderness, title/creation, and game-over are also intentional modes rather
+  than dialogue overlays.
+
+The obsolete early-port battle/preparation selectors remain solely for source
+comparison and are unreachable from the active dispatcher.  `--test-magic`
+now enters the spellbook, scroll, wand, and paper selectors and performs
+pixel-exact checks that each live dialog leaves every pixel outside its
+assigned pane or top strip unchanged.
 
 ## Platform replacements (not gameplay backlog)
 
@@ -207,6 +237,19 @@ old loading/information window.
   unlock.
 - `[+]` Mouse-selectable trainer fields, spell grids, equipment and printed
   footer commands.
+- `[+]` Eight Enhanced-only late equipment tiers, saved in the native
+  character extension and distributed through boss rewards and forge caches
+  from floor 375 through floor 1000.
+- `[+]` Forty Enhanced deep spells (ten per original family), matching magic
+  items, and signature enemy casting throughout all fifteen late-game monster
+  generations. Enemy percentage damage is player-scaled, restoration heals
+  its caster, Mana Tempest drains SP, and the Anti-Magic Ring can dispel these
+  native enemy spells.
+- `[+]` Five Enhanced-only super-rare deep relics with staggered floor gates:
+  spell regeneration, melee life-steal, damage/status mitigation, bonus
+  experience, and cooldown-based lethal-strike survival. Ownership and
+  cooldown are save-backed, reported in Pockets/Stats and the Enhanced-only
+  third effect page, and editable only on Enhanced trainer pages.
 - `[+]` SHA-256 ownership/integrity gate for the original executables.
 - `[+]` Self-tests and screenshot/test harnesses in `main.c`.
 
