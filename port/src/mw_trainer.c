@@ -1367,7 +1367,9 @@ int trainer_self_test(void) {
     if (strcmp(combat_spell_name(SPELL_CAT_PERMANENT, 39),
                "CHARGE ASCENDANT WAND") != 0) failures++;
     if (strcmp(combat_spell_name(SPELL_CAT_PREPARATION, 39),
-               "FULL RESTORATION") != 0) failures++;
+               "SOUL ANCHOR") != 0) failures++;
+    if (strcmp(combat_spell_name(SPELL_CAT_PRIEST, 35),
+               "LIFE CONVERGENCE") != 0) failures++;
     if (strcmp(combat_spell_name(SPELL_CAT_WIZARD, 39),
                "ANNIHILATION") != 0) failures++;
     if (strcmp(combat_spell_name(SPELL_CAT_PRIEST, 39),

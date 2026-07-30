@@ -6,6 +6,8 @@ family and cannot display, cast, create, or find these additions.
 
 Press Page Down from any spell, scroll, wand, paper, or spell-help selector to
 open the deep-spell page. Page Up returns to the original level 1-10 list.
+Enhanced selectors show a large directional arrow and the current page in the
+top strip; the paging badge can also be clicked.
 Deep magic spans levels 11-14 and uses the displayed spell level as its
 spell-point cost when cast from a spellbook.
 
@@ -21,11 +23,11 @@ each 100-floor milestone. The unlock mask is stored with the character.
 | 300 | Body Armor Level 100 | Deep Sanctuary | Void Nova | Holy Cataclysm |
 | 400 | Write Deep Scroll | Cartographer's Eye | Soul Rend | Celestial Stasis |
 | 500 | Charge Deep Wand | Town Portal | Oblivion | Final Judgment |
-| 600 | Enchant Weapon Level 500 | Rift Descend | Starfire | Mass Restoration |
+| 600 | Enchant Weapon Level 500 | Rift Descend | Starfire | Life Convergence |
 | 700 | Enchant Armor Level 350 | Rift Ascend | Chrono Lock | Eternal Ward |
 | 800 | Body Armor Level 300 | Eternal Sanctuary | Reality Rupture | Wrath of Heaven |
 | 900 | Write Ascendant Scroll | World Reveal | Mana Tempest | Phoenix Prayer |
-| 1000 | Charge Ascendant Wand | Full Restoration | Annihilation | Divine Verdict |
+| 1000 | Charge Ascendant Wand | Soul Anchor | Annihilation | Divine Verdict |
 
 ## Permanent spells
 
@@ -50,7 +52,7 @@ take one month, and a spellbook cast permanently spends maximum spell points.
 | Eternal Sanctuary | Protection tier 8 and every resistance for at least 1,200 turns. |
 | Cartographer's Eye / World Reveal | Reveals every map cell on the current floor. |
 | Town Portal | Returns the caster to a safe position in town. |
-| Full Restoration | Restores all HP and SP and cures poison and disease. |
+| Soul Anchor | Binds the caster's current floor and position as a one-use raise-dead return point. Death consumes the anchor, restores the character through the normal raise-contract flow, and costs one Constitution. It does not restore HP or SP when cast. |
 
 ## Wizard battle spells
 
@@ -75,7 +77,8 @@ take one month, and a spellbook cast permanently spends maximum spell points.
 | Holy Cataclysm | 3,500-9,000 damage. |
 | Celestial Stasis | Stops a non-immune monster for 30 turns. |
 | Final Judgment | 20% maximum monster HP plus 4,000 damage. |
-| Mass Restoration / Phoenix Prayer | Restores HP and SP and cures poison and disease. |
+| Life Convergence | Deals 10% of the monster's current HP plus 2,000 damage. Half that damage heals the caster, capped at one-third maximum HP; it neither restores SP nor cures status effects. |
+| Phoenix Prayer | Heals half maximum HP, cures poison and disease, grants protection tier 7 for 300 turns, and fire resistance for 600 turns. It does not restore SP. |
 | Wrath of Heaven | 12,000-26,000 damage. |
 | Divine Verdict | 50% maximum monster HP plus 30,000 damage. |
 

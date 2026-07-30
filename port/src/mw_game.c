@@ -2138,29 +2138,20 @@ static void draw_ladder_hole(Game *g, ProjRect p, int delta, float depth,
  * every viewport column.  WORLD.PIC index 0 is the original ladder artwork;
  * monster indices are mapped in combat.  Trapdoors are discovered by text at
  * the party's position in the original and have no first-person marker. */
-static int tint_actor_color(int color, int tint) {
-    if (!tint || color <= 0 || color >= 16) return color;
-    /* Keep grayscale shading and white glints intact.  Every chromatic VGA
-       family has a dark (1-6) and bright (9-14) member. */
-    if (color == 7 || color == 8 || color == 15) return color;
-    int family = tint & 7;
-    if (!family) return 8;
-    return color >= 9 ? family + 8 : family;
-}
-
-static void draw_pic_billboard(Game *g, int pic_index, int cx, int top,
-                               int draw_h, float depth,
-                               int vx, int vy, int vw, int vh,
-                               const float *wall_depth, int replace_color,
-                               int tint) {
-    if (pic_index < 0 || pic_index >= g->world_pic_count || draw_h < 2) return;
+static void draw_pic_billboard_sized(Game *g, int pic_index, int cx, int top,
+                                     int draw_w, int draw_h, float depth,
+                                     int vx, int vy, int vw, int vh,
+                                     const float *wall_depth,
+                                     int replace_color, int tint) {
+    if (pic_index < 0 || pic_index >= g->world_pic_count ||
+        draw_w < 2 || draw_h < 2)
+        return;
     const u8 *pic = g->world_pic_data[pic_index];
     int pic_size = g->world_pic_sizes[pic_index];
     if (!pic || pic_size < 0x192) return;
     const int rows_count = 200, table_size = 0x190;
     const u8 *data = pic + table_size;
     int data_len = pic_size - table_size;
-    int draw_w = draw_h * 3 / 4;
     int left = cx - draw_w / 2;
 
     for (int row = 0; row < rows_count; row++) {
@@ -2185,9 +2176,7 @@ static void draw_pic_billboard(Game *g, int pic_index, int cx, int top,
                 run = data[ptr++];
                 if (!run) run = 255;
             }
-            if (color == 17 && replace_color >= 0)
-                color = replace_color;
-            color = tint_actor_color(color, tint);
+            color = combat_remap_monster_color(color, replace_color, tint);
             if (color != 0 && color != 16 && color != 32) {
                 int sx0 = left + xpos * draw_w / 256;
                 int sx1 = left + (xpos + run) * draw_w / 256;
@@ -2206,6 +2195,16 @@ static void draw_pic_billboard(Game *g, int pic_index, int cx, int top,
         }
     }
     g->video.dirty = 1;
+}
+
+static void draw_pic_billboard(Game *g, int pic_index, int cx, int top,
+                               int draw_h, float depth,
+                               int vx, int vy, int vw, int vh,
+                               const float *wall_depth, int replace_color,
+                               int tint) {
+    draw_pic_billboard_sized(g, pic_index, cx, top, draw_h * 3 / 4, draw_h,
+                             depth, vx, vy, vw, vh, wall_depth,
+                             replace_color, tint);
 }
 
 typedef struct ViewActor {
@@ -3133,7 +3132,7 @@ static const char *prep_names[MW_ENHANCED_SPELL_COUNT] = {
     "ABYSS DESCEND","ABYSS ASCEND","DEEP SANCTUARY",
     "CARTOGRAPHER'S EYE","TOWN PORTAL",
     "RIFT DESCEND","RIFT ASCEND","ETERNAL SANCTUARY",
-    "WORLD REVEAL","FULL RESTORATION",
+    "WORLD REVEAL","SOUL ANCHOR",
 };
 static const char *wiz_names[MW_ENHANCED_SPELL_COUNT] = {
     "SLEEP","MAGIC ZAP","MINOR PROTECTION",
@@ -3163,7 +3162,7 @@ static const char *priest_names[MW_ENHANCED_SPELL_COUNT] = {
     "ULTRA PROTECTION","FAST HEAL","MAJOR SHOCK",
     "GREATER RESTORATION","DIVINE AEGIS","HOLY CATACLYSM",
     "CELESTIAL STASIS","FINAL JUDGMENT",
-    "MASS RESTORATION","ETERNAL WARD","WRATH OF HEAVEN",
+    "LIFE CONVERGENCE","ETERNAL WARD","WRATH OF HEAVEN",
     "PHOENIX PRAYER","DIVINE VERDICT",
 };
 
@@ -5934,7 +5933,7 @@ static const HelpTopic help_topics[] = {
     {'P', "VIEW CONTENTS OF POCKETS",
      "Opens spellbooks, scrolls, wands, papers, miscellaneous magic items, pills, rings, body armor, and gauntlet inventory pages."},
     {'Q', "QUIT AND SAVE POSITION",
-     "Writes the character, explored dungeon, monsters, pitfalls, and bestiary record, then returns to the launcher. S performs the same save without quitting."},
+     "Writes the character, explored dungeon, monsters, pitfalls, and bestiary record, then returns to the title screen. S performs the same save without leaving the character."},
     {'J', "BEASTIARY",
      "Lists every spawnable monster as ???? until your first kill. Discovered entries show their original picture, statistics, floor range, and kill count. Press F or click the picture for a full-screen view."},
     {'S', "SAVE AND CONTINUE",
@@ -6566,7 +6565,7 @@ static int player_select_screen(Game *g) {
         }
     }
 
-    video_draw_text(v, SX(0), SY(1100), "HIT ESCAPE TO QUIT", 5);
+    video_draw_text(v, SX(0), SY(1100), "HIT ESCAPE OR Q TO QUIT", 5);
     video_present(v);
 
     while (1) {
@@ -6586,7 +6585,7 @@ static int player_select_screen(Game *g) {
         if (key >= '0' && key <= '9') {
             return key - '0';
         }
-        if (key == 0x1B) return -1;
+        if (key == 0x1B || key == 'q' || key == 'Q') return -1;
     }
 }
 
@@ -7836,19 +7835,292 @@ void game_draw_combat_overlay(Game *g, Character *player,
     draw_combat_message(&g->video, y, message_bottom, line, 15);
 }
 
+/* MW_PORT: WORLD func_1FC56 (0x1FC56), the original title introduction.
+ * WORLD grows a fresh randomly selected monster on every frame without
+ * erasing the previous actors, producing the remembered crowd of monsters
+ * "popping" into the lower screen.  Its projection starts at 15 source units,
+ * advances by three through 70 and then by eight through 0x127.  The native
+ * enhanced roster is deliberately sampled at regular showcase intervals;
+ * all other selections retain WORLD's original 9/57/100 weighted families. */
+static void title_draw_centered(Game *g, int y, const char *text, u8 color,
+                                int scale_num, int scale_den) {
+    int advance = g->video.font_advance > 0 ? g->video.font_advance : 12;
+    int width = (int)strlen(text) * advance * scale_num / scale_den;
+    int x = (LOGICAL_W - width) / 2;
+    video_draw_text_scaled(&g->video, x, y, text, color,
+                           scale_num, scale_den);
+}
+
+enum {
+    TITLE_SOURCE_W = 1600,
+    TITLE_SOURCE_H = 1200,
+    TITLE_BLUE_SOURCE_Y = 230,
+    TITLE_GRAY_SOURCE_Y = 450
+};
+
+static int title_scale_source_y(int source_y) {
+    /* WORLD scales against the maximum source and destination coordinates,
+     * not their pixel counts: source_y * 767 / 1199 in 1024x768 mode. */
+    return source_y * (LOGICAL_H - 1) / (TITLE_SOURCE_H - 1);
+}
+
+static void title_load_original_palette(Video *v) {
+    video_load_vga_default_palette(v);
+
+    /* Captured 1024x768x256 DAC values from WORLD func_1FC56.  The original
+     * driver expands each six-bit channel by shifting it left two bits.  Keep
+     * these title colors exact instead of using the native renderer's rounded
+     * six-to-eight-bit conversion. */
+    video_set_palette(v, 1,   0,   0, 152); /* royal-blue middle field */
+    video_set_palette(v, 3,  80, 200, 252); /* copyright cyan */
+    video_set_palette(v, 5, 212,  80,  40); /* title/prompt orange */
+    video_set_palette(v, 13, 52,  52,  52); /* lower charcoal field */
+}
+
+static void title_draw_base(Game *g) {
+    Video *v = &g->video;
+    int blue_y = title_scale_source_y(TITLE_BLUE_SOURCE_Y);
+    int gray_y = title_scale_source_y(TITLE_GRAY_SOURCE_Y);
+
+    title_load_original_palette(v);
+    video_clear(v, 0);
+
+    /* WORLD func_1FC56 paints these after the heading.  Its filled rectangle
+     * stops before y2, so the original screen has one black scanline beneath
+     * the gray field at y=767.  The title text lies above both rectangles and
+     * is therefore equivalent (and clearer here) when drawn afterward. */
+    video_fill_rect(v, 0, blue_y, LOGICAL_W, gray_y - blue_y, 1);
+    video_fill_rect(v, 0, gray_y, LOGICAL_W,
+                    (LOGICAL_H - 1) - gray_y, 13);
+
+    title_draw_centered(g, 0, "MORAFF'S WORLD", 5, 2, 1);
+    title_draw_centered(g, 78, "VERSION 6.1, COPYRIGHT 1993,", 3, 1, 1);
+    title_draw_centered(g, 116, "ALL RIGHTS RESERVED", 3, 1, 1);
+    title_draw_centered(g, 732, "ANY KEY CONTINUES - ESC OR Q QUITS",
+                        5, 3, 4);
+}
+
+static int title_pick_original_monster(Game *g) {
+    for (int attempt = 0; attempt < 256; attempt++) {
+        int type;
+        if (game_rand(g) * 2 / 0x8000 != 0)
+            type = game_rand(g) * 9 / 0x8000;
+        else if (game_rand(g) * 3 / 0x8000 != 0)
+            type = game_rand(g) * 57 / 0x8000;
+        else
+            type = game_rand(g) * 100 / 0x8000;
+        if (combat_monster_type_spawnable(type)) return type;
+    }
+    return 0; /* Ogre is the original table's safe first actor. */
+}
+
+static int title_pick_monster(Game *g, int popup_index) {
+    static const int enhanced_showcase[] = {
+        112, /* Violet Abyss King */
+        114, /* Azure Ogre */
+        138, /* Runic Stone Lord */
+        150, /* Crimson Lich */
+        166, /* Abyssal Dragon */
+        174, /* Cobalt Rift Tyrant */
+        176, /* Viridian Eternity Dragon */
+        177  /* Radiant Moraff Ascendant */
+    };
+
+    if (popup_index % 6 == 5) {
+        int showcase = popup_index / 6;
+        int count = (int)(sizeof(enhanced_showcase) /
+                          sizeof(enhanced_showcase[0]));
+        int type = enhanced_showcase[showcase % count];
+        if (combat_monster_type_spawnable(type)) return type;
+    }
+    return title_pick_original_monster(g);
+}
+
+static void title_draw_monster_popup(Game *g, int type, int source_size) {
+    int pic = get_monster_pic_index_ext(type);
+    if (pic < 2) return;
+
+    /* Exact WORLD 1600x1200 title geometry:
+     *   x1 = random(1580 - 2*size) + 10
+     *   x2 = x1 + 2*size
+     *   y1 = 410 - size/2
+     *   y2 = 410 + 5*size/2
+     * Scale those source coordinates to the native 1024x768 surface. */
+    int source_width = source_size * 2;
+    int source_span = 1580 - source_width;
+    if (source_span < 1) source_span = 1;
+    int source_left = 10 + game_rand(g) * source_span / 0x8000;
+    int source_center = source_left + source_size;
+    int draw_w = (source_width * LOGICAL_W + TITLE_SOURCE_W / 2) /
+                 TITLE_SOURCE_W;
+    int draw_h = (source_size * 3 * LOGICAL_H + TITLE_SOURCE_H / 2) /
+                 TITLE_SOURCE_H;
+    int cx = (source_center * LOGICAL_W + TITLE_SOURCE_W / 2) /
+             TITLE_SOURCE_W;
+    int top = ((820 - source_size) * LOGICAL_H + TITLE_SOURCE_H) /
+              (TITLE_SOURCE_H * 2);
+
+    draw_pic_billboard_sized(g, pic, cx, top, draw_w, draw_h, 0.0f,
+                             0, 0, LOGICAL_W, LOGICAL_H, NULL,
+                             get_monster_color_ext(type),
+                             get_monster_tint_ext(type));
+}
+
+static void title_draw_credit_card(Game *g) {
+    Video *v = &g->video;
+
+    /* The original finishes the monster sequence by laying its credit block
+     * over the lower field.  The black inset and VGA-colored rails preserve
+     * that readable panel at modern pixel-perfect output. */
+    video_fill_rect(v, 78, 482, 868, 238, 0);
+    video_fill_rect(v, 78, 482, 868, 2, 13);
+    video_fill_rect(v, 78, 718, 868, 2, 2);
+    video_fill_rect(v, 78, 482, 2, 238, 1);
+    video_fill_rect(v, 944, 482, 2, 238, 1);
+
+    title_draw_centered(g, 490, "WRITTEN AND PRODUCED BY STEVE MORAFF",
+                        6, 1, 1);
+    title_draw_centered(g, 528, "ARTWORK BY RODNEY PAGE", 3, 1, 1);
+    title_draw_centered(g, 566, "ADDITIONAL ARTWORK AND TESTING BY",
+                        8, 1, 1);
+    title_draw_centered(g, 604, "MARTIN AND LAURIE NOEL", 8, 1, 1);
+    title_draw_centered(g, 642, "FINANCED BY OUR REGISTERED USERS",
+                        5, 1, 1);
+    title_draw_centered(g, 680, "1024 X 768 NATIVE EDITION BY KANDOWONTU",
+                        15, 3, 4);
+}
+
+static int title_key_requests_exit(int key) {
+    return key == 0x1B || key == 'q' || key == 'Q';
+}
+
+int game_title_input_self_test(void) {
+    static const int exit_keys[] = { 0x1B, 'q', 'Q' };
+    static const int continue_keys[] = {
+        ' ', '\r', 'a', INPUT_MOUSE_CLICK, 0
+    };
+    int failures = 0;
+
+    for (size_t i = 0; i < sizeof(exit_keys) / sizeof(exit_keys[0]); i++)
+        if (!title_key_requests_exit(exit_keys[i])) failures++;
+    for (size_t i = 0;
+         i < sizeof(continue_keys) / sizeof(continue_keys[0]); i++)
+        if (title_key_requests_exit(continue_keys[i])) failures++;
+    return failures;
+}
+
+int game_title_background_self_test(Game *g) {
+    if (!g) return 1;
+
+    int failures = 0;
+    int blue_y = title_scale_source_y(TITLE_BLUE_SOURCE_Y);
+    int gray_y = title_scale_source_y(TITLE_GRAY_SOURCE_Y);
+    title_draw_base(g);
+
+    /* Sample the unobstructed left edge at every transition. */
+    if (video_get_pixel(&g->video, 0, blue_y - 1) != 0) failures++;
+    if (video_get_pixel(&g->video, 0, blue_y) != 1) failures++;
+    if (video_get_pixel(&g->video, 0, gray_y - 1) != 1) failures++;
+    if (video_get_pixel(&g->video, 0, gray_y) != 13) failures++;
+    if (video_get_pixel(&g->video, 0, LOGICAL_H - 2) != 13) failures++;
+    if (video_get_pixel(&g->video, 0, LOGICAL_H - 1) != 0) failures++;
+
+    const PaletteEntry *pal = g->video.palette;
+    if (pal[1].r != 0 || pal[1].g != 0 || pal[1].b != 152) failures++;
+    if (pal[3].r != 80 || pal[3].g != 200 || pal[3].b != 252) failures++;
+    if (pal[5].r != 212 || pal[5].g != 80 || pal[5].b != 40) failures++;
+    if (pal[13].r != 52 || pal[13].g != 52 || pal[13].b != 52) failures++;
+    return failures;
+}
+
+/* Returns -1 for an explicit application-exit request, +1 to leave the
+ * introduction for character selection, and zero when the delay expires.
+ * input_wait_any_key drains the scan byte of DOS-style extended keys so an
+ * arrow/Page key cannot leak into the selection screen. */
+static int title_wait_interruptible(Game *g, u32 delay_ms) {
+    u32 start = SDL_GetTicks();
+    while ((u32)(SDL_GetTicks() - start) < delay_ms) {
+        if (input_poll_quit(&g->input)) return -1;
+        if (input_kbhit(&g->input)) {
+            int key = input_wait_any_key(&g->input);
+            return title_key_requests_exit(key) ? -1 : 1;
+        }
+        u32 elapsed = (u32)(SDL_GetTicks() - start);
+        u32 remaining = delay_ms > elapsed ? delay_ms - elapsed : 0;
+        SDL_Delay(remaining > 10 ? 10 : remaining);
+    }
+    return 0;
+}
+
+static int game_run_title_intro(Game *g) {
+    int popup_index = 0;
+
+    for (;;) {
+        title_draw_base(g);
+        video_present(&g->video);
+
+        int source_size = 15;
+        while (source_size < 0x127) {
+            source_size += source_size < 0x46 ? 3 : 8;
+            int delay_ms = 0x1A4 - source_size;
+            if (delay_ms > 0) {
+                int action = title_wait_interruptible(g, (u32)delay_ms);
+                if (action != 0) return action > 0;
+            }
+
+            int type = title_pick_monster(g, popup_index++);
+            title_draw_monster_popup(g, type, source_size);
+            video_present(&g->video);
+        }
+
+        /* WORLD waits twelve 250ms ticks on the finished lineup. */
+        int action = title_wait_interruptible(g, 12u * 250u);
+        if (action != 0) return action > 0;
+
+        title_draw_credit_card(g);
+        video_present(&g->video);
+
+        /* The original credit card remains for thirty-two 250ms ticks before
+         * the introduction begins again. */
+        action = title_wait_interruptible(g, 32u * 250u);
+        if (action != 0) return action > 0;
+    }
+}
+
+void game_draw_title_preview(Game *g, int show_credits) {
+    u32 saved_rand = g->rand_state;
+    int source_size = 15;
+    int popup_index = 0;
+
+    game_srand(g, 0x1FC56u);
+    title_draw_base(g);
+    while (source_size < 0x127) {
+        source_size += source_size < 0x46 ? 3 : 8;
+        int type = title_pick_monster(g, popup_index++);
+        title_draw_monster_popup(g, type, source_size);
+    }
+    if (show_credits) title_draw_credit_card(g);
+    g->rand_state = saved_rand;
+}
+
+void game_draw_title_background_preview(Game *g) {
+    title_draw_base(g);
+}
+
+static void game_leave_character_session(Game *g) {
+    /* Every caller has already saved the character and world.  Detaching the
+     * slot prevents game_shutdown from writing that stale session again if
+     * the player subsequently exits from the title screen. */
+    g->active_save_slot = -1;
+    g->monster_adjacent = 0;
+}
+
 void game_run(Game *g) {
     Video *v = &g->video;
 
 title_screen:
     ;
-    /* Title screen */
-    video_clear(v, 0);
-    video_draw_text(v, 180, 100, "MORAFF'S WORLD", 14);
-    video_draw_text(v, 130, 140, "1024 X 768 NATIVE EDITION", 7);
-    video_draw_text(v, 160, 200, "Press any key to continue...", 15);
-    video_present(v);
-    input_wait_any_key(&g->input);
-    if (input_poll_quit(&g->input)) return;
+    if (!game_run_title_intro(g)) return;
 
     /* Player selection.  Cancelling a partially designed character returns
      * to the slot list without creating or overwriting a save. */
@@ -7895,8 +8167,6 @@ title_screen:
 
     game_load_world_state(g, slot);
 
-resume_exploration:
-    ;
     reveal_around_player(g);
     game_apply_pitfall_interactive(g, player);
 
@@ -8162,7 +8432,8 @@ resume_exploration:
             video_draw_text(v, 180, 200, "GAME SAVED.", 15);
             video_present(v);
             SDL_Delay(1000);
-            break;
+            game_leave_character_session(g);
+            goto title_screen;
         } else if (key == 0) {
             int scan = input_getch(&g->input);
             int direction = -1;
@@ -8206,7 +8477,6 @@ resume_exploration:
 
 game_over:
     ;
-    int death_raised = 0;
     int permanent_death = 0;
     if (mw_hp_cur(player) == 0) {
         video_clear(v, 0);
@@ -8214,7 +8484,7 @@ game_over:
         if (player->raise_x != 0xFFFFu) {
             video_draw_text(v, 80, 260, "YOUR RAISE CONTRACT SAVES YOU!", 10);
             int return_floor, return_x, return_y;
-            death_raised = character_apply_raise_contract(
+            int death_raised = character_apply_raise_contract(
                 player, &return_floor, &return_x, &return_y);
             if (death_raised) {
                 game_change_floor(g, player, return_floor);
@@ -8239,14 +8509,12 @@ game_over:
     game_save_character(g, slot);
     game_save_world_state(g);
 
-    /* Death is a session transition, never a process-exit request.  A raise
-     * resumes the restored character immediately.  Permanent death leaves a
-     * zero-HP tombstone on disk for legacy fidelity, exposes the slot for a
-     * replacement character, and returns through the normal launcher flow. */
-    if (death_raised && !input_poll_quit(&g->input))
-        goto resume_exploration;
-    if (permanent_death && !input_poll_quit(&g->input)) {
-        g->char_exists[slot] = 0;
-        goto title_screen;
-    }
+    /* Closing the SDL window is the only in-session process-exit path.
+     * Gameplay Q and every completed death flow return to the animated title.
+     * A successfully raised character remains selectable with its recovered
+     * position/HP, while a permanent-death tombstone frees the save slot. */
+    if (input_poll_quit(&g->input)) return;
+    if (permanent_death) g->char_exists[slot] = 0;
+    game_leave_character_session(g);
+    goto title_screen;
 }

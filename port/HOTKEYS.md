@@ -50,14 +50,16 @@ presents.
 
 | Control | Function |
 | --- | --- |
-| `Page Up` / `Page Down`, or `A` / `D` | Select the previous or next graphic, wrapping at both ends. |
+| `Page Up` / `Page Down`, or `A` / `D` | Select the previous or next palette variant, wrapping at both ends. Every used monster recolor/tint is grouped with its source silhouette; wall textures include the complete repeating 77-floor palette cycle. |
+| `W` / `S` | Jump to the previous or next source-model group. |
 | `Tab` | Cycle through `WORLD.PIC`, `WALL.PIC`, and the loaded font glyphs. |
-| `Home` / `End` | Select the first or last graphic in the current set. |
+| `Home` / `End` | Select the first or last model variant in the current set. |
 | Mouse wheel, `Up` / `Down`, or `+` / `-` | Adjust fit-relative zoom in smooth 0.05× steps, from 0.05× through 20×. |
 | `Left` / `Right` | Rotate by one degree. |
 | `[` / `]` | Rotate by five degrees. |
 | `,` / `.` | Fine rotation in 0.1-degree steps. |
 | `R` | Restore fit zoom and zero rotation. |
+| `F`, or click `F FULLSCREEN` | Show the selected palette variant edge-to-edge at its current zoom and rotation. Press any key or mouse button to return. |
 | `Escape` or `Ctrl+F5` | Return to the game. |
 
 Noclip, God Mode, Open Floor Mode, the wilderness sandbox, and the Beastiary

@@ -119,6 +119,7 @@ int  combat_monster_spell_chance(int type_idx);
 int  get_monster_pic_index_ext(int type_idx);
 int  get_monster_color_ext(int type_idx);
 int  get_monster_tint_ext(int type_idx);
+int  combat_remap_monster_color(int color, int replace_color, int tint);
 
 /* Equipment selection commands (non-combat) */
 void cmd_weapons(Game *g, Character *player);

@@ -31,7 +31,8 @@ Source comments use the corresponding tags `MW_PORT`,
 | `[x]` | `func_037B5`, `func_19115` | Complete `ROLL.TXT` character-creation flow, race rolls, rerolls, name, sex and class selection |
 | `[x]` | `func_0A4CF`, `func_0A51B`, `func_0A548`, `func_0A60D` | Packed 0x928-byte character save/load in `game_load_character` / `game_save_character` |
 | `[x]` | `inn_service`, `func_0A6F2`, `func_0A751` | Experience thresholds, inn rest, level gains, age, HP/SP recovery |
-| `[x]` | Dungeon portions of `func_0F5CD`, `func_0F6E5` | `game_init`, `game_run`, status, keyboard command dispatch, movement, save/quit, death and raise contract |
+| `[x]` | Dungeon portions of `func_0F5CD`, `func_0F6E5` | `game_init`, `game_run`, status, keyboard command dispatch, movement, save/quit-to-title, death-to-title and raise contract |
+| `[x]` | `func_1FC56` | Original black/royal-blue/charcoal 1024x768 title backdrop and DAC colors, cumulative monster-pop introduction, weighted original roster, timed credit card and interruptible input; native showcase slots add selected Enhanced monsters; Esc/Q explicitly exit |
 
 ### Dungeon generation, state, movement, and map
 
@@ -242,9 +243,9 @@ old loading/information window.
   from floor 375 through floor 1000.
 - `[+]` Forty Enhanced deep spells (ten per original family), matching magic
   items, and signature enemy casting throughout all fifteen late-game monster
-  generations. Enemy percentage damage is player-scaled, restoration heals
-  its caster, Mana Tempest drains SP, and the Anti-Magic Ring can dispel these
-  native enemy spells.
+  generations. Enemy percentage damage is player-scaled, restorative magic
+  heals its caster, Life Convergence drains and heals, Mana Tempest drains SP,
+  and the Anti-Magic Ring can dispel these native enemy spells.
 - `[+]` Five Enhanced-only super-rare deep relics with staggered floor gates:
   spell regeneration, melee life-steal, damage/status mitigation, bonus
   experience, and cooldown-based lethal-strike survival. Ownership and
