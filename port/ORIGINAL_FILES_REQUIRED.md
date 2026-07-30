@@ -7,10 +7,18 @@ MoraffWare. They are not part of this native-port release and are not covered
 by its MIT license. Copy them from your own legally obtained Moraff's World
 installation.
 
+## Approved executable variants
+
+| File | Exact tested size | CRC-32 | SHA-256 |
+|---|---:|---|---|
+| `MW.EXE` | 12,823 bytes | `30C074B7` | `6EA1A430AE34185399CF3C19ACFADDEC8DC52A20D59EED9172F266C5EF7858B9` |
+| `WORLD.EXE` | 229,480 bytes | `9ABA4217` | `04ADD8AA22947896A5A53D7698DB92CE33F4C9AFEE9D23831B37E40416092365` |
+| `WORLD.EXE` | 104,316 bytes | `2FDC68F1` | `DC5DC918028AA36FFA63723BD149CF3BAC89CC705C31E3F44A779C13FBC7CA80` |
+
+## Original data reference set
+
 | File | Exact tested size | SHA-256 |
 |---|---:|---|
-| `MW.EXE` | 12,823 bytes | `6EA1A430AE34185399CF3C19ACFADDEC8DC52A20D59EED9172F266C5EF7858B9` |
-| `WORLD.EXE` | 229,480 bytes | `04ADD8AA22947896A5A53D7698DB92CE33F4C9AFEE9D23831B37E40416092365` |
 | `DUNG.BIN` | 12,800 bytes | `21BD042DC85053D9C75A72AF809A63CE0C71A5A432CB203D6DC44F67BDF06793` |
 | `WORLDMAP.BIN` | 4,096 bytes | `30365804B518F8520948418B869DF28E815573B663A723F38A640F9261B9B52C` |
 | `H.BIN` | 6,162 bytes | `E5ACA256884211D2143FABC84A677C2565BFE6164E59C91345BC2BCBB7936F34` |
@@ -22,13 +30,13 @@ installation.
 
 ## What the program enforces
 
-The program requires all ten filenames to exist. It additionally enforces the
-exact size and SHA-256 checksum shown above for `MW.EXE` and `WORLD.EXE`.
-Hashes for the eight data files document the asset set used to develop and
-test this release.
+The program requires all ten filenames to exist. It additionally enforces an
+approved combination of exact size, CRC-32, and SHA-256 for `MW.EXE` and
+`WORLD.EXE`. Hashes for the eight data files document the asset set used to
+develop and test this release.
 
-`WORLD.EXE` in the tested set is the 229,480-byte executable. Do not substitute
-a compressed, modified, or different-release executable.
+Either listed `WORLD.EXE` variant is accepted. Do not substitute a modified,
+truncated, or unknown executable.
 
 ## Final directory example
 

@@ -5,8 +5,8 @@
 #include <string.h>
 
 /* MW_PLATFORM_REPLACEMENT: original func_08BDF copy-protection/startup check
- * is intentionally replaced by deterministic SHA-256 validation of the two
- * locally supplied original executables. */
+ * is intentionally replaced by deterministic size, CRC-32, and SHA-256
+ * validation of the two locally supplied original executables. */
 
 typedef struct Sha256Context {
     uint32_t state[8];
@@ -15,30 +15,42 @@ typedef struct Sha256Context {
     size_t block_used;
 } Sha256Context;
 
-typedef struct RequiredExecutable {
+typedef struct RequiredExecutableVariant {
     const char *name;
     uint64_t size;
+    uint32_t crc32;
     uint8_t digest[32];
-} RequiredExecutable;
+} RequiredExecutableVariant;
 
-/* Hashes of the original executables supplied with this Moraff's World
-   distribution.  Requiring both files prevents the native port from being
-   distributed or launched without the original game. */
-static const RequiredExecutable required_executables[] = {
+/* Approved executable variants from original Moraff's World distributions.
+   Requiring MW.EXE plus one known WORLD.EXE prevents the native port from
+   being distributed or launched without the original game. */
+static const RequiredExecutableVariant executable_variants[] = {
     {
-        "MW.EXE", 12823,
+        "MW.EXE", 12823, 0x30c074b7,
         {0x6e,0xa1,0xa4,0x30,0xae,0x34,0x18,0x53,
          0x99,0xcf,0x3c,0x19,0xac,0xfa,0xdd,0xec,
          0x8d,0xc5,0x2a,0x20,0xd5,0x9e,0xed,0x91,
          0x72,0xf2,0x66,0xc5,0xef,0x78,0x58,0xb9}
     },
     {
-        "WORLD.EXE", 229480,
+        "WORLD.EXE", 229480, 0x9aba4217,
         {0x04,0xad,0xd8,0xaa,0x22,0x94,0x78,0x96,
          0xa5,0xa5,0x3d,0x76,0x98,0xdb,0x92,0xce,
          0x33,0xf4,0xc9,0xaf,0xee,0x9d,0x23,0x83,
          0x1b,0x37,0xe4,0x04,0x16,0x09,0x23,0x65}
+    },
+    {
+        "WORLD.EXE", 104316, 0x2fdc68f1,
+        {0xdc,0x5d,0xc9,0x18,0x02,0x8a,0xa3,0x6f,
+         0xfa,0x63,0x72,0x3b,0xd1,0x49,0xcf,0x3b,
+         0xac,0x89,0xcc,0x70,0x5c,0x31,0xe3,0xf4,
+         0x4a,0x77,0x9c,0x13,0xfb,0xc7,0xca,0x80}
     }
+};
+
+static const char *const required_executable_names[] = {
+    "MW.EXE", "WORLD.EXE"
 };
 
 static const uint32_t sha256_k[64] = {
@@ -143,17 +155,29 @@ static void sha256_finish(Sha256Context *ctx, uint8_t digest[32]) {
     }
 }
 
-static int hash_file(const char *path, uint8_t digest[32], uint64_t *size) {
+static uint32_t crc32_update(uint32_t crc, const uint8_t *data, size_t size) {
+    while (size--) {
+        crc ^= *data++;
+        for (int bit = 0; bit < 8; bit++)
+            crc = (crc >> 1) ^ (0xedb88320u & (uint32_t)-(int32_t)(crc & 1));
+    }
+    return crc;
+}
+
+static int hash_file(const char *path, uint8_t digest[32], uint64_t *size,
+                     uint32_t *crc32) {
     FILE *file = fopen(path, "rb");
     if (!file) return 0;
     Sha256Context ctx;
     sha256_init(&ctx);
     uint8_t buffer[8192];
     uint64_t total = 0;
+    uint32_t crc = UINT32_MAX;
     for (;;) {
         size_t got = fread(buffer, 1, sizeof(buffer), file);
         if (got) {
             sha256_update(&ctx, buffer, got);
+            crc = crc32_update(crc, buffer, got);
             total += got;
         }
         if (got < sizeof(buffer)) {
@@ -164,32 +188,49 @@ static int hash_file(const char *path, uint8_t digest[32], uint64_t *size) {
     fclose(file);
     sha256_finish(&ctx, digest);
     if (size) *size = total;
+    if (crc32) *crc32 = ~crc;
     return 1;
 }
 
 int integrity_verify_original_executables(const char *directory,
                                           char *error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
-    for (size_t i = 0; i < sizeof(required_executables) /
-                            sizeof(required_executables[0]); i++) {
-        const RequiredExecutable *required = &required_executables[i];
+    for (size_t i = 0; i < sizeof(required_executable_names) /
+                            sizeof(required_executable_names[0]); i++) {
+        const char *required_name = required_executable_names[i];
         char path[512];
-        snprintf(path, sizeof(path), "%s/%s", directory, required->name);
+        snprintf(path, sizeof(path), "%s/%s", directory, required_name);
         uint8_t actual[32];
         uint64_t actual_size = 0;
-        if (!hash_file(path, actual, &actual_size)) {
+        uint32_t actual_crc32 = 0;
+        if (!hash_file(path, actual, &actual_size, &actual_crc32)) {
             if (error && error_size)
                 snprintf(error, error_size,
                          "%s is missing. Copy the original executable beside moraffs_world.exe.",
-                         required->name);
+                         required_name);
             return 0;
         }
-        if (actual_size != required->size ||
-            memcmp(actual, required->digest, sizeof(actual)) != 0) {
+        int matched = 0;
+        for (size_t variant_index = 0;
+             variant_index < sizeof(executable_variants) /
+                             sizeof(executable_variants[0]);
+             variant_index++) {
+            const RequiredExecutableVariant *variant =
+                &executable_variants[variant_index];
+            if (strcmp(required_name, variant->name) == 0 &&
+                actual_size == variant->size &&
+                actual_crc32 == variant->crc32 &&
+                memcmp(actual, variant->digest, sizeof(actual)) == 0) {
+                matched = 1;
+                break;
+            }
+        }
+        if (!matched) {
             if (error && error_size)
                 snprintf(error, error_size,
-                         "%s does not match the required original game executable.",
-                         required->name);
+                         "%s is not an approved original executable (size %llu, CRC-32 %08X).",
+                         required_name, (unsigned long long)actual_size,
+                         (unsigned)actual_crc32);
             return 0;
         }
     }

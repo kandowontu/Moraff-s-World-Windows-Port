@@ -30,9 +30,10 @@ original game files.
    subdirectory.
 4. Run `moraffs_world.exe`.
 
-The port verifies the size and SHA-256 checksum of `MW.EXE` and `WORLD.EXE`
-before it starts. See [ORIGINAL_FILES_REQUIRED.md](ORIGINAL_FILES_REQUIRED.md)
-for the exact tested sizes and checksums of all ten files.
+The port verifies the size, CRC-32, and SHA-256 checksum of `MW.EXE` and
+`WORLD.EXE` before it starts. See
+[ORIGINAL_FILES_REQUIRED.md](ORIGINAL_FILES_REQUIRED.md) for the approved
+executable variants and exact tested checksums of all ten files.
 
 ## System requirements
 
@@ -85,9 +86,9 @@ subdirectory. Copy all ten directly beside `moraffs_world.exe`.
 
 ### “Original game verification failed”
 
-`MW.EXE` or `WORLD.EXE` is not the tested original version. Compare its size
-and SHA-256 value with `ORIGINAL_FILES_REQUIRED.md`. A renamed, packed,
-patched, truncated, or different-release executable will not pass.
+`MW.EXE` or `WORLD.EXE` is not one of the approved original variants. Compare
+its size, CRC-32, and SHA-256 values with `ORIGINAL_FILES_REQUIRED.md`. A
+renamed, patched, truncated, or unknown executable will not pass.
 
 ### The game cannot save
 
