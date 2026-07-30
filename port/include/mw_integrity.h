@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-/* Verify the exact original executables required beside the native port. */
+/* Verify approved size/CRC-32/SHA-256 executable variants beside the port. */
 int integrity_verify_original_executables(const char *directory,
                                           char *error, size_t error_size);
 

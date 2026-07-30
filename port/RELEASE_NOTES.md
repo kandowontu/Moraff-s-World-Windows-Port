@@ -1,4 +1,4 @@
-# Release notes — Version 1.0
+# Release notes — Version 1.0.1
 
 Released July 30, 2026.
 
@@ -10,6 +10,8 @@ from their own installation.
 
 Highlights include:
 
+- Startup validation now recognizes both approved original `WORLD.EXE`
+  distribution variants using their exact size, CRC-32, and SHA-256 values
 - Native 64-bit Windows executable and 1024×768 game layout
 - Four original-style directional viewports and progressive dungeon map
 - Classic 251-floor experience
