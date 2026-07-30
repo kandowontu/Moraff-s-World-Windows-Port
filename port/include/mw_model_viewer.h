@@ -14,6 +14,8 @@ enum {
 void model_viewer_run(struct Game *g);
 void model_viewer_draw_test(struct Game *g, int set, int index,
                             float zoom, float angle_degrees);
+void model_viewer_draw_fullscreen_test(struct Game *g, int set, int index,
+                                       float zoom, float angle_degrees);
 int model_viewer_self_test(struct Game *g);
 
 #endif /* MW_MODEL_VIEWER_H */

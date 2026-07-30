@@ -238,6 +238,43 @@ static int run_test_bestiary(const char *data_dir, int selected) {
     return (failures || rc < 0) ? 1 : 0;
 }
 
+static int run_test_title(const char *data_dir) {
+    Game game;
+    if (game_init(&game, data_dir) < 0) return 1;
+    int input_failures = game_title_input_self_test();
+    int background_failures = game_title_background_self_test(&game);
+
+    char background_path[300], lineup_path[300], credits_path[300];
+    snprintf(background_path, sizeof(background_path),
+             "%s/test_title_background.bmp", data_dir);
+    snprintf(lineup_path, sizeof(lineup_path), "%s/test_title.bmp", data_dir);
+    snprintf(credits_path, sizeof(credits_path),
+             "%s/test_title_credits.bmp", data_dir);
+
+    game_draw_title_background_preview(&game);
+    int background_rc = save_framebuffer_bmp(&game.video, background_path);
+    if (background_rc == 0) printf("Saved: %s\n", background_path);
+
+    game_draw_title_preview(&game, 0);
+    int lineup_rc = save_framebuffer_bmp(&game.video, lineup_path);
+    if (lineup_rc == 0) printf("Saved: %s\n", lineup_path);
+
+    game_draw_title_preview(&game, 1);
+    int credits_rc = save_framebuffer_bmp(&game.video, credits_path);
+    if (credits_rc == 0) printf("Saved: %s\n", credits_path);
+
+    video_present(&game.video);
+    SDL_Delay(100);
+    game.active_save_slot = -1;
+    game_shutdown(&game);
+    printf("Title Esc/Q exit and continue-key coverage: %s (%d failures)\n",
+           input_failures ? "FAIL" : "PASS", input_failures);
+    printf("Title 1024x768 background/palette coverage: %s (%d failures)\n",
+           background_failures ? "FAIL" : "PASS", background_failures);
+    return input_failures || background_failures ||
+           background_rc < 0 || lineup_rc < 0 || credits_rc < 0;
+}
+
 static int run_test_trainer(const char *data_dir) {
     Game game;
     if (game_init(&game, data_dir) < 0) return 1;
@@ -386,6 +423,31 @@ static int run_test_model_viewer(const char *data_dir) {
                            game.world_pic_count > 2 ? 2 : 0,
                            1.15f, 17.5f);
     snprintf(bmp_path, sizeof(bmp_path), "%s/test_model_viewer.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    /* The first monster model has adjacent Enhanced palette variants in the
+       grouped catalog; retain the next frame to catch tint regressions. */
+    model_viewer_draw_test(&game, MODEL_VIEWER_WORLD,
+                           game.world_pic_count > 2 ? 3 : 0,
+                           1.15f, 17.5f);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_model_viewer_variant.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    model_viewer_draw_fullscreen_test(
+        &game, MODEL_VIEWER_WORLD,
+        game.world_pic_count > 2 ? 3 : 0, 1.15f, 17.5f);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_model_viewer_fullscreen.bmp", data_dir);
+    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    /* WALL.PIC variants are ordered by the actual 77-floor palette cycle. */
+    model_viewer_draw_test(&game, MODEL_VIEWER_WALL, 1, 1.0f, 0.0f);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_model_viewer_wall_palette.bmp", data_dir);
     if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
     else printf("Saved: %s\n", bmp_path);
     printf("Graphics/model viewer coverage: %s (%d failures)\n",
@@ -826,6 +888,7 @@ int main(int argc, char *argv[]) {
     int test_trainer_mode = 0;
     int test_wilderness_mode = 0;
     int test_model_viewer_mode = 0;
+    int test_title_mode = 0;
     int test_x = 19, test_y = 20, test_floor = 787;
     int test_monster_type = 57; /* default: ball */
 
@@ -880,6 +943,8 @@ int main(int argc, char *argv[]) {
             test_wilderness_mode = 1;
         } else if (strcmp(argv[i], "--test-model-viewer") == 0) {
             test_model_viewer_mode = 1;
+        } else if (strcmp(argv[i], "--test-title") == 0) {
+            test_title_mode = 1;
         }
     }
 
@@ -932,6 +997,12 @@ int main(int argc, char *argv[]) {
 
     if (test_model_viewer_mode) {
         int rc = run_test_model_viewer(data_dir);
+        SDL_Quit();
+        return rc;
+    }
+
+    if (test_title_mode) {
+        int rc = run_test_title(data_dir);
         SDL_Quit();
         return rc;
     }

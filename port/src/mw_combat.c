@@ -397,7 +397,7 @@ typedef enum {
     BS_RESIST_DRAIN, BS_PASS_WALL, BS_RELOCATE, BS_POWER_WEAPON,
     BS_BUFF_STR_SPD, BS_STOP, BS_SHOCK_125, BS_SHOCK_300,
     BS_HEAL_FIXED, BS_HEAL_ALL, BS_DRAIN_SCALE, BS_DAMAGE_PERCENT,
-    BS_RESTORE_ALL, BS_FULL_RESTORE, BS_AEGIS,
+    BS_RESTORE_ALL, BS_LIFE_CONVERGENCE, BS_PHOENIX_PRAYER, BS_AEGIS,
 } BattleSpellType;
 
 typedef struct {
@@ -440,9 +440,9 @@ static const BattleSpellDef priest_spells[MW_ENHANCED_SPELL_COUNT] = {
     /* L10*/ {BS_BUFF_PROTECT,4,0}, {BS_HEAL_ALL,0,0},       {BS_SHOCK_300,0,0},
     /* L11*/ {BS_RESTORE_ALL,0,0},  {BS_AEGIS,6,180},         {BS_DAMAGE_RANGE,3500,9000},
     /* L12*/ {BS_STOP,30,0},        {BS_DAMAGE_PERCENT,20,4000},
-              {BS_FULL_RESTORE,0,0},
+              {BS_LIFE_CONVERGENCE,10,2000},
     /* L13*/ {BS_AEGIS,8,1200},     {BS_DAMAGE_RANGE,12000,26000},
-              {BS_FULL_RESTORE,0,0},
+              {BS_PHOENIX_PRAYER,7,300},
     /* L14*/ {BS_DAMAGE_PERCENT,50,30000},
 };
 
@@ -477,7 +477,7 @@ static const char *priest_spell_names[MW_ENHANCED_SPELL_COUNT] = {
     "ULTRA PROTECTION","FAST HEAL","MAJOR SHOCK",
     "GREATER RESTORATION","DIVINE AEGIS","HOLY CATACLYSM",
     "CELESTIAL STASIS","FINAL JUDGMENT",
-    "MASS RESTORATION","ETERNAL WARD","WRATH OF HEAVEN",
+    "LIFE CONVERGENCE","ETERNAL WARD","WRATH OF HEAVEN",
     "PHOENIX PRAYER","DIVINE VERDICT",
 };
 
@@ -513,7 +513,7 @@ static const char *preparation_spell_names[MW_ENHANCED_SPELL_COUNT] = {
     "ABYSS DESCEND","ABYSS ASCEND","DEEP SANCTUARY",
     "CARTOGRAPHER'S EYE","TOWN PORTAL",
     "RIFT DESCEND","RIFT ASCEND","ETERNAL SANCTUARY",
-    "WORLD REVEAL","FULL RESTORATION"
+    "WORLD REVEAL","SOUL ANCHOR"
 };
 
 static const char *const *spell_names_for_category(int category) {
@@ -975,6 +975,22 @@ int get_monster_tint_ext(int type_idx) {
     return deep_monster_tint[type_idx - DEEP_MONSTER_FIRST];
 }
 
+/* Shared by every place that displays monster art.  Original balls,
+ * puffballs, and dragons replace WORLD.PIC color 17.  Enhanced monsters then
+ * remap the remaining chromatic VGA colors into their assigned tint family,
+ * preserving black, transparency, grayscale shading, and white glints. */
+int combat_remap_monster_color(int color, int replace_color, int tint) {
+    if (color == 17 && replace_color >= 0)
+        color = replace_color;
+    if (!tint || color <= 0 || color >= 16)
+        return color;
+    if (color == 7 || color == 8 || color == 15)
+        return color;
+    int family = tint & 7;
+    if (!family) return 8;
+    return color >= 9 ? family + 8 : family;
+}
+
 int combat_monster_type_spawnable(int type_idx) {
     /* The last eligibility test in WORLD func_091CD follows the monster's
      * raw picture byte through DS:11EF and rerolls when that virtual slot was
@@ -1246,14 +1262,12 @@ int combat_monster_drain_amount(int type) {
 static int combat_monster_spell_heal(CombatState *cs,
                                      const MonsterSpellProfile *profile) {
     if (profile->category != SPELL_CAT_PRIEST ||
-        (profile->index != 30 && profile->index != 35 &&
-         profile->index != 38))
+        (profile->index != 30 && profile->index != 38))
         return -1;
     const MonsterType *mt = &monster_types[cs->monster_type_idx];
     int cap = combat_calc_monster_hp(mt, cs->monster_level);
     if (cap < cs->monster_hp) cap = cs->monster_hp;
-    int divisor = profile->index == 30 ? 10 :
-                  profile->index == 35 ? 8 : 5;
+    int divisor = profile->index == 30 ? 10 : 5;
     int64_t amount = cap / divisor + cs->monster_level;
     int64_t healed = (int64_t)cs->monster_hp + amount;
     if (healed > cap) healed = cap;
@@ -1274,6 +1288,33 @@ static int combat_monster_spell_effect(Game *g, CombatState *cs,
                                        const MonsterSpellProfile *profile) {
     const MonsterType *mt = &monster_types[cs->monster_type_idx];
     const char *spell = combat_spell_name(profile->category, profile->index);
+    if (profile->category == SPELL_CAT_PRIEST && profile->index == 35) {
+        int cap = combat_calc_monster_hp(mt, cs->monster_level);
+        if (cap < cs->monster_hp) cap = cs->monster_hp;
+        int64_t heal = cap / 12 + cs->monster_level;
+        int64_t healed = (int64_t)cs->monster_hp + heal;
+        if (healed > cap) healed = cap;
+        int restored = (int)(healed - cs->monster_hp);
+        if (restored < 0) restored = 0;
+        cs->monster_hp = (int)healed;
+        if (cs->monster_max_hp < cs->monster_hp)
+            cs->monster_max_hp = cs->monster_hp;
+
+        uint64_t damage = (uint64_t)mw_hp_max(player) / 14u +
+                          (unsigned)(cs->monster_level > 0 ?
+                                     cs->monster_level : 1) / 2u +
+                          (unsigned)mt->dmg / 2u;
+        damage += (unsigned)game_rand(g) %
+                  ((unsigned)(cs->monster_level > 0 ?
+                              cs->monster_level : 1) / 4u + 1u);
+        if (damage < 1) damage = 1;
+        if (damage > INT_MAX) damage = INT_MAX;
+        cs->special_used = 1;
+        snprintf(cs->special_message, sizeof(cs->special_message),
+                 "THE %.24s CASTS LIFE CONVERGENCE, DRAINING YOU AND HEALING %d!",
+                 mt->name, restored);
+        return (int)damage;
+    }
     int restored = combat_monster_spell_heal(cs, profile);
     cs->special_used = 1;
     if (restored >= 0) {
@@ -1759,12 +1800,39 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
         player->diseased_turns = 0;
         return -3;
 
-    case BS_FULL_RESTORE:
-        mw_set_hp_cur(player, mw_hp_max(player));
-        player->sp_cur = player->sp_max;
+    case BS_LIFE_CONVERGENCE: {
+        int divisor = sd->param1 > 0 ? sd->param1 : 10;
+        int64_t damage = (cs->monster_hp > 0 ?
+                          (int64_t)cs->monster_hp : 0) / divisor +
+                         sd->param2;
+        uint64_t heal = damage > 0 ? (uint64_t)damage / 2u : 0u;
+        uint64_t heal_cap = (uint64_t)mw_hp_max(player) / 3u;
+        if (heal_cap < 1) heal_cap = 1;
+        if (heal > heal_cap) heal = heal_cap;
+        if (heal > UINT_MAX) heal = UINT_MAX;
+        heal_hp_capped(player, (unsigned)heal);
+        if (damage < 1) damage = 1;
+        if (damage > INT_MAX) damage = INT_MAX;
+        return (int)damage;
+    }
+
+    case BS_PHOENIX_PRAYER: {
+        unsigned heal = mw_hp_max(player) / 2u;
+        u16 duration = (u16)(sd->param2 > 0 ? sd->param2 : 300);
+        u16 fire_duration = duration <= UINT16_MAX / 2 ?
+                            (u16)(duration * 2) : UINT16_MAX;
+        if (heal < 1) heal = 1;
+        heal_hp_capped(player, heal);
         player->poisoned_turns = 0;
         player->diseased_turns = 0;
+        if (player->eff_protect_lv < (u8)sd->param1)
+            player->eff_protect_lv = (u8)sd->param1;
+        if (player->eff_protect_turns < duration)
+            player->eff_protect_turns = duration;
+        if (player->eff_anti_fire < fire_duration)
+            player->eff_anti_fire = fire_duration;
         return -3;
+    }
 
     case BS_AEGIS: {
         u16 duration = (u16)(sd->param2 > 0 ? sd->param2 : 60);
@@ -2135,6 +2203,51 @@ static int equipment_y(int dos_y) {
     return dos_y * LOGICAL_H / 1200;
 }
 
+#define PAGE_BADGE_H 25
+#define EQUIPMENT_PAGE_BADGE_W 94
+
+/* Enhanced-only selectors have more entries than WORLD's original screens.
+ * Draw the paging affordance instead of relying on a small text hint: the
+ * outlined badge names the key and page, while the filled arrow makes the
+ * direction visible at a glance even at the native 1024x768 resolution. */
+static void draw_page_badge(Video *v, int x, int y, int w, int page,
+                            int compact) {
+    char label[24];
+    const int arrow_w = 19;
+    const int arrow_x = x + w - arrow_w - 4;
+    const int cx = arrow_x + arrow_w / 2;
+    const int label_xsn = compact ? 7 : 5;
+    const int label_xsd = compact ? 10 : 6;
+
+    if (compact)
+        snprintf(label, sizeof(label), "%s P%d",
+                 page ? "PGUP" : "PGDN", page + 1);
+    else
+        snprintf(label, sizeof(label), "%s PAGE %d OF 2",
+                 page ? "PGUP" : "PGDN", page + 1);
+    video_fill_rect(v, x, y, w, PAGE_BADGE_H, 1);
+    video_hline(v, x, y, w, 14);
+    video_hline(v, x, y + PAGE_BADGE_H - 1, w, 14);
+    video_vline(v, x, y, PAGE_BADGE_H, 14);
+    video_vline(v, x + w - 1, y, PAGE_BADGE_H, 14);
+    video_draw_text_scaled_xy(v, x + 4, y + 3, label, 15,
+                              label_xsn, label_xsd, 12, 17);
+
+    if (page) {
+        video_fill_rect(v, cx - 2, y + 9, 5, 11, 14);
+        for (int row = 0; row < 7; row++)
+            video_hline(v, cx - row, y + 8 - row, row * 2 + 1, 14);
+    } else {
+        video_fill_rect(v, cx - 2, y + 4, 5, 11, 14);
+        for (int row = 0; row < 7; row++)
+            video_hline(v, cx - row, y + 15 + row, row * 2 + 1, 14);
+    }
+}
+
+static int equipment_page_badge_x(void) {
+    return equipment_x(0x2D3) - EQUIPMENT_PAGE_BADGE_W;
+}
+
 static void equipment_clear_pane(Video *v) {
     video_fill_rect(v, 0, 0, equipment_x(0x2D3), equipment_y(0x1AE), 0);
 }
@@ -2211,13 +2324,31 @@ static void draw_equipment_page(Game *g, Character *player,
         equipment_text(v, equipment_y(0x28 + row * 0x32), line, 5);
     }
 
-    /* WORLD's original page is untouched in Classic.  Enhanced adds only a
-       small page cue in otherwise-unused right-hand space. */
+    /* WORLD's original page is untouched in Classic. */
     if (mw_experience_mode(player) == MW_EXPERIENCE_ENHANCED)
-        video_draw_text_scaled_xy(v, equipment_x(0x270), 0,
-                                  page ? "PGUP" : "PGDN",
-                                  10, 7, 6, 12, 17);
+        draw_page_badge(v, equipment_page_badge_x(), 0,
+                        EQUIPMENT_PAGE_BADGE_W, page, 1);
     video_present(v);
+}
+
+static int equipment_mouse_key(Game *g, int key, int *page,
+                               const Character *player) {
+    int x, y;
+    if (key != INPUT_MOUSE_CLICK) return key;
+    if (!game_mouse_click_logical(g, &x, &y)) return -2;
+    if (mw_experience_mode(player) == MW_EXPERIENCE_ENHANCED &&
+        x >= equipment_page_badge_x() &&
+        x < equipment_page_badge_x() + EQUIPMENT_PAGE_BADGE_W &&
+        y >= 0 && y < PAGE_BADGE_H) {
+        *page = !*page;
+        return -1;
+    }
+    if (x >= 0 && x < equipment_x(0x2D3) &&
+        y >= equipment_y(0x28)) {
+        int row = (y - equipment_y(0x28)) / equipment_y(0x32);
+        if (row >= 0 && row < 8) return '1' + row;
+    }
+    return -2;
 }
 
 static int equipment_page_key(Game *g, int key, int *page,
@@ -2250,9 +2381,7 @@ void cmd_weapons(Game *g, Character *player) {
         draw_equipment_page(g, player, 0, page);
         int key = input_getch(&g->input);
         if (input_poll_quit(&g->input) || key == 0x1B) return;
-        key = mouse_list_key(g, key, 0, equipment_x(0x2D3),
-                             equipment_y(0x28), equipment_y(0x32),
-                             8, '1');
+        key = equipment_mouse_key(g, key, &page, player);
         key = equipment_page_key(g, key, &page, player);
         if (key == -1) continue;
         if (key < '1' || key > '8') continue;
@@ -2278,9 +2407,7 @@ void cmd_armor(Game *g, Character *player) {
         draw_equipment_page(g, player, 1, page);
         int key = input_getch(&g->input);
         if (input_poll_quit(&g->input) || key == 0x1B) return;
-        key = mouse_list_key(g, key, 0, equipment_x(0x2D3),
-                             equipment_y(0x28), equipment_y(0x32),
-                             8, '1');
+        key = equipment_mouse_key(g, key, &page, player);
         key = equipment_page_key(g, key, &page, player);
         if (key == -1) continue;
         if (key < '1' || key > '8') continue;
@@ -2617,6 +2744,8 @@ void cmd_cast_prep_spell(Game *g, Character *player) {
 #define SPELL_SELECTOR_ROW_H 25
 #define SPELL_SELECTOR_COL_2 (0x20C * LOGICAL_W / 1600)
 #define SPELL_SELECTOR_COL_3 (0x430 * LOGICAL_W / 1600)
+#define SPELL_PAGE_BADGE_W 210
+#define SPELL_PAGE_BADGE_X (LOGICAL_W - 120 - SPELL_PAGE_BADGE_W - 6)
 #define SPELL_NOTICE_WRAP_CHARS 29
 #define SPELL_NOTICE_LAST_ROW 9
 
@@ -2775,8 +2904,8 @@ static int select_spell_index(Game *g, Character *p, CombatState *cs,
              "SELECT A SPELL-SPELLS USE ONE SPELL POINT PER LEVEL:" :
              "SELECT A SPELL FROM THE FOLLOWING:")), 4);
         if (deep_enabled)
-            spell_selector_text(g, LOGICAL_W - 180, 0,
-                                page ? "PGUP" : "PGDN", 10);
+            draw_page_badge(&g->video, SPELL_PAGE_BADGE_X, 0,
+                            SPELL_PAGE_BADGE_W, page, 0);
         spell_selector_text(g, LOGICAL_W - 90, 0, "ESCAPE", 3);
 
         if (!page) {
@@ -2826,8 +2955,9 @@ static int select_spell_index(Game *g, Character *p, CombatState *cs,
             if (!game_mouse_click_logical(g, &x, &y)) continue;
             if (y < SPELL_SELECTOR_ROW_H && x >= LOGICAL_W - 120)
                 return -1;
-            if (deep_enabled && y < SPELL_SELECTOR_ROW_H &&
-                x >= LOGICAL_W - 210) {
+            if (deep_enabled && y < PAGE_BADGE_H &&
+                x >= SPELL_PAGE_BADGE_X &&
+                x < SPELL_PAGE_BADGE_X + SPELL_PAGE_BADGE_W) {
                 page = !page;
                 continue;
             }
@@ -2919,7 +3049,7 @@ static void spell_help_text(Game *g, int category, int index,
         else if (index == 36) append_text(out, size, "MOVES UP ONE HUNDRED FLOORS, CLAMPING AT TOWN. ");
         else if (index == 37) append_text(out, size, "GRANTS PROTECTION TIER 8 AND EVERY RESISTANCE FOR AT LEAST 1200 TURNS. ");
         else if (index == 38) append_text(out, size, "REVEALS EVERY MAP CELL ON THE CURRENT FLOOR. ");
-        else if (index == 39) append_text(out, size, "FULLY RESTORES HP AND SP AND CURES POISON AND DISEASE. ");
+        else if (index == 39) append_text(out, size, "BINDS A ONE-USE RAISE-DEAD RETURN POINT TO THE CASTER'S CURRENT FLOOR AND POSITION; DEATH CONSUMES IT AND COSTS ONE CONSTITUTION. ");
         else if (index == 2) append_text(out, size, "HEALS 1-20 HP, WITH A SMALL WISDOM BONUS. ");
         else if (index == 6) append_text(out, size, "HEALS 10-40 HP, WITH A SMALL WISDOM BONUS. ");
         else if (index == 15) append_text(out, size, "HEALS 20-90 HP, WITH A SMALL WISDOM BONUS. ");
@@ -2989,7 +3119,12 @@ static void spell_help_text(Game *g, int category, int index,
              "RESTORES %d HP DURING COMBAT. ", sd->param1); break;
         case BS_HEAL_ALL: append_text(out, size, "RESTORES CURRENT HP TO MAXIMUM DURING COMBAT. "); break;
         case BS_RESTORE_ALL: append_text(out, size, "RESTORES CURRENT HP TO MAXIMUM AND CURES POISON AND DISEASE DURING COMBAT. "); break;
-        case BS_FULL_RESTORE: append_text(out, size, "RESTORES HP AND SP TO MAXIMUM AND CURES POISON AND DISEASE DURING COMBAT. "); break;
+        case BS_LIFE_CONVERGENCE: snprintf(out + strlen(out), size - strlen(out),
+             "DRAINS %d PERCENT OF CURRENT MONSTER HP PLUS %d DAMAGE; HALF THE DAMAGE HEALS THE CASTER, CAPPED AT ONE-THIRD MAXIMUM HP. ",
+             sd->param1 > 0 ? 100 / sd->param1 : 10, sd->param2); break;
+        case BS_PHOENIX_PRAYER: snprintf(out + strlen(out), size - strlen(out),
+             "HEALS HALF MAXIMUM HP, CURES POISON AND DISEASE, GRANTS PROTECTION TIER %d FOR %d TURNS, AND FIRE RESISTANCE FOR %d TURNS. ",
+             sd->param1, sd->param2, sd->param2 * 2); break;
         case BS_AEGIS: snprintf(out + strlen(out), size - strlen(out),
              "GRANTS PROTECTION TIER %d AND ALL FIVE RESISTANCES FOR AT LEAST %d TURNS. ",
              sd->param1, sd->param2); break;
@@ -3381,14 +3516,22 @@ static int apply_preparation_spell(Game *g, Character *p, int index,
         snprintf(message, message_size,
                  "WORLD REVEAL MAPS EVERY CELL ON THIS FLOOR!");
         break;
-    case 39:
-        mw_set_hp_cur(p, mw_hp_max(p));
-        p->sp_cur = p->sp_max;
-        p->poisoned_turns = 0;
-        p->diseased_turns = 0;
+    case 39: {
+        int anchor_floor = g->cur_floor;
+        int anchor_x = g->cur_x;
+        int anchor_y = g->cur_y;
+        if (anchor_floor < 0) anchor_floor = 0;
+        if (anchor_floor > game_traversal_rules(g)->max_floor)
+            anchor_floor = game_traversal_rules(g)->max_floor;
+        if (anchor_x < 0 || anchor_x >= MAP_W) anchor_x = MAP_W / 2;
+        if (anchor_y < 0 || anchor_y >= MAP_H) anchor_y = MAP_H / 2;
+        p->raise_floor = (u16)anchor_floor;
+        p->raise_x = (u16)anchor_x;
+        p->raise_y = (u16)anchor_y;
         snprintf(message, message_size,
-                 "FULL RESTORATION RENEWS HEALTH, MAGIC, AND BODY!");
+                 "YOUR SOUL IS ANCHORED HERE AGAINST ONE DEATH!");
         break;
+    }
     default: return 0;
     }
     return 1;
@@ -4174,6 +4317,16 @@ int combat_self_test(void) {
               strstr(caster.special_message, "MANA TEMPEST"),
               "enemy Mana Tempest damages health and drains spell points");
 
+        caster.monster_type_idx = 136;
+        caster.monster_level = 625;
+        caster.monster_hp = 1;
+        caster.monster_max_hp = 100000;
+        profile = monster_spell_profile(136);
+        damage = combat_monster_spell_effect(&g, &caster, &victim, profile);
+        CHECK(damage > 0 && caster.monster_hp > 1 &&
+              strstr(caster.special_message, "LIFE CONVERGENCE"),
+              "enemy Life Convergence drains the player and heals its caster");
+
         caster.monster_type_idx = 140;
         caster.monster_level = 575;
         caster.monster_hp = caster.monster_max_hp = 1;
@@ -4526,6 +4679,19 @@ int combat_self_test(void) {
           p.eff_protect_lv == 8 && p.eff_protect_turns == 1200 &&
           p.eff_resist_poison == 1200,
           "eternal sanctuary grants tier-eight defense");
+    g.cur_floor = 777;
+    g.cur_x = 12;
+    g.cur_y = 34;
+    p.raise_x = UINT16_MAX;
+    p.sp_cur = 7.0f;
+    mw_set_hp_cur(&p, 3);
+    p.poisoned_turns = 11;
+    p.diseased_turns = 22;
+    CHECK(apply_preparation_spell(&g, &p, 39, message, sizeof(message)) &&
+          p.raise_floor == 777 && p.raise_x == 12 && p.raise_y == 34 &&
+          mw_hp_cur(&p) == 3 && p.sp_cur == 7.0f &&
+          p.poisoned_turns == 11 && p.diseased_turns == 22,
+          "soul anchor binds one raise point without restoring resources");
     memset(&cs, 0, sizeof(cs));
     cs.active = 1;
     cs.monster_type_idx = 0;
@@ -4558,10 +4724,27 @@ int combat_self_test(void) {
     p.sp_cur = 1.0f;
     mw_set_hp_cur(&p, 1);
     p.poisoned_turns = p.diseased_turns = 10;
-    CHECK(apply_battle_spell(&g, &cs, &p, &priest_spells[35], 12) == -3 &&
-          mw_hp_cur(&p) == mw_hp_max(&p) && p.sp_cur == p.sp_max &&
-          !p.poisoned_turns && !p.diseased_turns,
-          "mass restoration restores health, magic, and status");
+    {
+        int convergence =
+            apply_battle_spell(&g, &cs, &p, &priest_spells[35], 12);
+        CHECK(convergence == 12000 &&
+              mw_hp_cur(&p) == 1 + mw_hp_max(&p) / 3 &&
+              p.sp_cur == 1.0f &&
+              p.poisoned_turns == 10 && p.diseased_turns == 10,
+              "life convergence trades monster vitality for capped healing");
+    }
+    p.sp_cur = 9.0f;
+    mw_set_hp_cur(&p, 1);
+    p.poisoned_turns = p.diseased_turns = 10;
+    p.eff_protect_lv = 0;
+    p.eff_protect_turns = p.eff_anti_fire = 0;
+    CHECK(apply_battle_spell(&g, &cs, &p, &priest_spells[38], 13) == -3 &&
+          mw_hp_cur(&p) == 1 + mw_hp_max(&p) / 2 &&
+          p.sp_cur == 9.0f &&
+          !p.poisoned_turns && !p.diseased_turns &&
+          p.eff_protect_lv == 7 && p.eff_protect_turns == 300 &&
+          p.eff_anti_fire == 600,
+          "phoenix prayer heals and wards without restoring spell points");
     p.wands[SPELL_CAT_WIZARD][32] = 2;
     {
         int result = cast_selected_spell(&g, &p, &cs, SPELL_CAT_WIZARD,

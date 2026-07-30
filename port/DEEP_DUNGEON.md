@@ -71,8 +71,9 @@ with a signature level 11-14 spell. Early casters make an attempt about once
 per four or five responses, later casters about once per three, and milestone
 bosses once per two or three. Their versions of percentage-damage spells are
 scaled to player health rather than copying the player spell's enormous flat
-monster damage. Restoration spells heal the caster, and Mana Tempest also
-drains current spell points. The Anti-Magic Ring now has an Enhanced-only
+monster damage. Restorative enemy spells heal their caster, Life Convergence
+both drains the player and heals its caster, and Mana Tempest also drains
+current spell points. The Anti-Magic Ring now has an Enhanced-only
 purpose: every plus grants an 8% chance to dispel one of these enemy spells.
 The Beastiary lists each monster's spell and casting frequency.
 
@@ -123,7 +124,9 @@ does not create another cache.
 
 The original eight-line `W` and `A` selectors remain unchanged on their first
 page. Enhanced mode adds a full eight-line Page Down page; Page Up
-returns to the original equipment. As in WORLD.EXE, an uncollected item's name
+returns to the original equipment. A large directional page badge in the
+selector header shows which key reveals the other page and can also be clicked.
+As in WORLD.EXE, an uncollected item's name
 is shown only as `--------`, and selecting gear forbidden to the character's
 class displays the original multi-line error message.
 

@@ -151,6 +151,10 @@ int  game_init(Game *g, const char *data_dir);
 void game_shutdown(Game *g);
 void game_run(Game *g);
 void game_draw_exploration(Game *g, Character *player);
+void game_draw_title_preview(Game *g, int show_credits);
+void game_draw_title_background_preview(Game *g);
+int  game_title_input_self_test(void);
+int  game_title_background_self_test(Game *g);
 void game_draw_combat_overlay(Game *g, Character *player,
                               int entity_index, int monster_type,
                               int monster_level, int monster_hp,
