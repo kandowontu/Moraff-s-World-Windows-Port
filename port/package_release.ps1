@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.0.1"
+    [string]$Version = "1.1.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,6 +48,7 @@ $files = [ordered]@{
     (Join-Path $sourceRoot "EXPERIENCE_MODES.md") = "EXPERIENCE_MODES.md"
     (Join-Path $sourceRoot "DEEP_DUNGEON.md") = "DEEP_DUNGEON.md"
     (Join-Path $sourceRoot "DEEP_SPELLS.md") = "DEEP_SPELLS.md"
+    (Join-Path $sourceRoot "COLOSSEUM.md") = "COLOSSEUM.md"
 }
 
 foreach ($entry in $files.GetEnumerator()) {

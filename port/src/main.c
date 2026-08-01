@@ -334,7 +334,8 @@ static int run_test_trainer(const char *data_dir) {
             dummy.papers[row][col] = (u8)(((row + col * 2) % 7) == 0);
         }
     }
-    trainer_draw_grid_test(&game, &dummy, 2, SPELL_CAT_PREPARATION, 34);
+    trainer_draw_grid_test(&game, &dummy, 2, SPELL_CAT_PREPARATION,
+                           MW_ENHANCED_SPELL_COUNT - 1);
     snprintf(bmp_path, sizeof(bmp_path), "%s/test_trainer.bmp", data_dir);
     if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
     else printf("Saved: %s\n", bmp_path);
@@ -497,8 +498,26 @@ static int run_test_magic(const char *data_dir) {
     if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
     else printf("Saved: %s\n", bmp_path);
 
-    /* Enhanced adds a second page for levels 11-14 without changing the
-       original selector page or its hotkeys. */
+    game_draw_character_races_test(game);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_enhanced_race_selector.bmp", data_dir);
+    if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    game_draw_character_card_test(game);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_character_card.bmp", data_dir);
+    if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    game_draw_character_classes_test(game);
+    snprintf(bmp_path, sizeof(bmp_path),
+             "%s/test_enhanced_class_selector.bmp", data_dir);
+    if (save_framebuffer_bmp(&game->video, bmp_path) < 0) failures++;
+    else printf("Saved: %s\n", bmp_path);
+
+    /* Enhanced adds one two-column continuation page for levels 11-15
+       without changing the original selector page or its hotkeys. */
     game->input.keys[game->input.tail] = '2';
     game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
     game->input.keys[game->input.tail] = 0;

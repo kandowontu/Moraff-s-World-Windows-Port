@@ -7,10 +7,12 @@ Enhanced mode.
 | Feature | Classic Experience | Enhanced Experience |
 |---|---|---|
 | Total floors | 251: town floor 0 plus dungeon floors 1-250 | 1001: town floor 0 plus dungeon floors 1-1000 |
+| Races | Original eight races | Original races plus Dragonkin and Celestial; Dragonkin favor STR/CON, while Celestials favor INT/WIS/LUCK |
+| Classes | Original seven classes | Original classes plus Spellblade and Paladin; both use late martial gear, with Spellblades learning wizard magic and Paladins learning priest magic |
 | Monster progression | Original monster roster through floor 250 | Original roster plus new variants and late-game monster tiers on floors 251-1000 |
 | Quest progression | Original eight quest bosses through floor 200 | Original quest chain plus bosses at floors 375, 500, 625, 750, 875, and 1000 |
 | Quest rewards | Original equipment rewards through the final classic boss | Additional +200, +300, +450, +600, +800, and +1000 weapon-enchantment orbs plus eight late weapon/armor tiers distributed from floor 375 through 1000 |
-| Spell catalog | Original 30 spells in each of four families | Original catalog plus 40 deep spells, with one spell per family unlocked at every 100-floor milestone and matching scrolls, wands, and papers |
+| Spell catalog | Original 30 spells in each of four families | Original catalog plus 60 deep spells (15 per family), progressively unlocked through floor 1000 with matching scrolls, wands, and papers |
 | Super-rare relics | None | Five passive relics begin dropping from floor 350: spell regeneration, melee life-steal, deep damage/status protection, bonus experience, and lethal-strike survival |
 | Effect display | Original Spells in Effect pages 1 and 2 | Original pages plus clickable page 3 for automatic magic items, relic mechanics, SP-regeneration timing, and Phoenix recharge |
 | Digging | Original depth rules; allowed through floor 120 | Proportionally extended depth rules; allowed through floor 480 |
@@ -47,3 +49,6 @@ removing quality-of-life features.
 
 The selected experience and its maximum floor are shown on the Game Stats
 screen (`G`).
+
+The character/trainer level cap is 3,000 in both modes. Dungeon depth remains
+mode-specific and is independent of player level.

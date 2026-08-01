@@ -76,6 +76,16 @@ typedef struct Game {
     u8    wall_color_r;         /* hidden '*': palette background red */
     u8    wall_color_g;         /* hidden '(': palette background green */
     u8    wall_color_b;         /* hidden ')': palette background blue */
+    int   palette_floor_override; /* Ctrl+F3, -1 follows current floor */
+    int   wall_texture_offset;    /* Ctrl+F3 stone-pattern phase */
+    /* Native Colosseum presentation state.  Arena progression lives only in
+       COLOSSEUM#.SAV; these fields merely let the shared combat renderer draw
+       the active round and are never written into an adventure save. */
+    int   arena_active;
+    u32   arena_round;
+    u32   arena_streak;
+    u32   arena_best;
+    int   arena_champion;
     u8   *dungeon_data;         /* loaded from dung.bin */
     int   dungeon_data_size;
     u8   *worldmap_data;        /* loaded from worldmap.bin */
@@ -163,6 +173,9 @@ void game_draw_combat_overlay(Game *g, Character *player,
 void game_draw_bestiary_test(Game *g, int selected);
 void game_draw_game_stats_test(Game *g, Character *player);
 void game_draw_effects_test(Game *g, Character *player, int page);
+void game_draw_character_races_test(Game *g);
+void game_draw_character_card_test(Game *g);
+void game_draw_character_classes_test(Game *g);
 int  game_ui_self_test(Game *g);
 int  game_dialog_ui_self_test(Game *g, Character *player);
 void game_update_visibility(Game *g);

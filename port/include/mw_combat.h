@@ -48,6 +48,11 @@ int combat_armor_defense(int armor);
 int combat_armor_weight(int armor);
 int combat_weapon_allowed(const Character *player, int weapon);
 int combat_armor_allowed(const Character *player, int armor);
+/* Power Weapon I-III preserve WORLD's original dice.  Enhanced adds IV-VI
+ * and treats every tier as a minimum, so a spell can never weaken late gear. */
+int combat_power_weapon_max_damage(int power_weapon_level);
+int combat_effective_damage_max(int equipped_weapon, int power_weapon_level,
+                                int enhanced);
 
 /* ── Combat state ── */
 typedef struct {
@@ -81,7 +86,7 @@ typedef enum {
     SPELL_CAT_PRIEST = 3
 } SpellCategory;
 
-/* Canonical display name for one of the four 30-entry spell tables. */
+/* Canonical display name for one of the four mode-aware spell tables. */
 const char *combat_spell_name(int category, int index);
 
 /* Combat lifecycle */

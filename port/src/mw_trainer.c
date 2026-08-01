@@ -76,8 +76,10 @@ typedef struct TrainerState {
 /* Exact 45-field order from TRAINER.ASM, followed by Enhanced-only native
  * rows that are omitted entirely for Classic characters. */
 static const TrainerField trainer_fields[] = {
-    FIELD(race, TF_RACE, "Race", RACE_COUNT - 1),
-    FIELD(class_id, TF_CLASS, "Class", CLASS_COUNT - 1),
+    FIELD_MODE(race, TF_RACE, "Race",
+               MW_CLASSIC_RACE_COUNT - 1, RACE_COUNT - 1),
+    FIELD_MODE(class_id, TF_CLASS, "Class",
+               MW_CLASSIC_CLASS_COUNT - 1, CLASS_COUNT - 1),
     FIELD(sex, TF_SEX, "Sex", 1),
     FIELD(level, TF_U16, "Level", MW_PLAYER_LEVEL_MAX),
     FIELD_MODE(hp_cur, TF_HP_CURRENT, "HP Current",
@@ -157,10 +159,10 @@ static const TrainerField effect_fields[] = {
                INT16_MAX, UINT16_MAX),
     FIELD_MODE(eff_slow_mon, TF_U16, "Slow Monster",
                INT16_MAX, UINT16_MAX),
-    FIELD(eff_pwr_weapon, TF_U8, "Power Weapon", 3),
+    FIELD_MODE(eff_pwr_weapon, TF_U8, "Power Weapon", 3, 6),
     FIELD_MODE(eff_pwr_wpn_turns, TF_U16, "Pwr Wpn Turns",
                INT16_MAX, UINT16_MAX),
-    FIELD_MODE(eff_protect_lv, TF_U8, "Protect Level", 5, 8),
+    FIELD_MODE(eff_protect_lv, TF_U8, "Protect Level", 5, 10),
     FIELD_MODE(eff_protect_turns, TF_U16, "Protect Turns",
                INT16_MAX, UINT16_MAX),
     FIELD_MODE(eff_resist_poison, TF_U16, "Resist Poison",
@@ -508,7 +510,8 @@ static void trainer_draw_grid(Game *g, Character *p, const TrainerState *state) 
     u8 (*grid)[45] = trainer_grid(p, state->grid_set);
     int spell_count = mw_spell_catalog_count(p);
     int level_count = (spell_count + 2) / 3;
-    int grid_cell_w = spell_count > 35 ? 13 :
+    int grid_cell_w = spell_count > 40 ? 12 :
+                      spell_count > 35 ? 13 :
                       spell_count > MW_ORIGINAL_SPELL_COUNT ? 15 : 17;
 
     trainer_text(v, TRAINER_BOX_X + 18, TRAINER_CONTENT_Y + 12,
@@ -841,7 +844,8 @@ static int trainer_mouse_key(Game *g, Character *p,
             GRID_ROW_H_LOCAL = 54
         };
         int spell_count = mw_spell_catalog_count(p);
-        int grid_cell_w = spell_count > 35 ? 13 :
+        int grid_cell_w = spell_count > 40 ? 12 :
+                          spell_count > 35 ? 13 :
                           spell_count > MW_ORIGINAL_SPELL_COUNT ? 15 : 17;
         int row = (y - (GRID_ROW_Y - 3)) / GRID_ROW_H_LOCAL;
         if (y >= GRID_ROW_Y - 3 && row >= 0 && row < 4) {
@@ -1264,10 +1268,10 @@ int trainer_self_test(void) {
     if (trainer_field_count(&p) != 50 || trainer_effect_count(&p) != 24)
         failures++;
     if (input_sdl_to_dos(SDLK_F12, KMOD_CTRL) != INPUT_TRAINER) failures++;
-    if (input_sdl_to_dos(SDLK_F12, KMOD_NONE) != 0) failures++;
+    if (input_sdl_to_dos(SDLK_F12, KMOD_NONE) != -0x86) failures++;
     if (input_sdl_to_dos(SDLK_F11, KMOD_CTRL) != INPUT_WILDERNESS_TEST)
         failures++;
-    if (input_sdl_to_dos(SDLK_F11, KMOD_NONE) != 0) failures++;
+    if (input_sdl_to_dos(SDLK_F11, KMOD_NONE) != -0x85) failures++;
 
     trainer_field_set(&p, &trainer_fields[12], 1234);
     if (p.stat_str != 1234) failures++;
@@ -1280,6 +1284,10 @@ int trainer_self_test(void) {
     if (mw_hp_cur(&p) != MW_PLAYER_HP_MAX) failures++;
     trainer_field_set(&p, &trainer_fields[0], 99);
     if (p.race != RACE_COUNT - 1) failures++;
+    trainer_field_set(&p, &trainer_fields[1], 99);
+    if (p.class_id != CLASS_COUNT - 1) failures++;
+    trainer_field_set(&p, &trainer_fields[3], 99999);
+    if (p.level != MW_PLAYER_LEVEL_MAX) failures++;
     trainer_field_set(&p, &trainer_fields[8], 42);
     if (p.age != 42u * MW_AGE_YEAR_UNITS ||
         trainer_field_get(&p, &trainer_fields[8]) != 42) failures++;
@@ -1294,6 +1302,11 @@ int trainer_self_test(void) {
     trainer_field_set(&p, &trainer_fields[11], 9999);
     if (p.floor_depth != MAX_DUNGEON_FLOOR) failures++;
     mw_set_experience_mode(&p, MW_EXPERIENCE_CLASSIC);
+    trainer_field_set(&p, &trainer_fields[0], 99);
+    trainer_field_set(&p, &trainer_fields[1], 99);
+    if (p.race != MW_CLASSIC_RACE_COUNT - 1 ||
+        p.class_id != MW_CLASSIC_CLASS_COUNT - 1)
+        failures++;
     trainer_field_set(&p, &trainer_fields[11], 9999);
     if (p.floor_depth != CLASSIC_DUNGEON_FLOOR) failures++;
     trainer_field_set(&p, &trainer_fields[4], 99999);
@@ -1324,9 +1337,9 @@ int trainer_self_test(void) {
     trainer_field_set(&p, &effect_fields[2], 999);
     if (p.eff_feather != 100) failures++;
     trainer_field_set(&p, &effect_fields[12], 999);
-    if (p.eff_pwr_weapon != 3) failures++;
+    if (p.eff_pwr_weapon != 6) failures++;
     trainer_field_set(&p, &effect_fields[14], 999);
-    if (p.eff_protect_lv != 8) failures++;
+    if (p.eff_protect_lv != 10) failures++;
     trainer_field_set(&p, &trainer_fields[45], 1);
     trainer_field_set(&p, &trainer_fields[49], 1);
     trainer_field_set(&p, &effect_fields[23], 287);
@@ -1335,6 +1348,10 @@ int trainer_self_test(void) {
         p.native.relic_phoenix_cooldown != 287)
         failures++;
     mw_set_experience_mode(&p, MW_EXPERIENCE_CLASSIC);
+    trainer_field_set(&p, &effect_fields[12], 999);
+    if (p.eff_pwr_weapon != 3) failures++;
+    trainer_field_set(&p, &effect_fields[14], 999);
+    if (p.eff_protect_lv != 5) failures++;
     if (trainer_field_count(&p) != TRAINER_CLASSIC_FIELD_COUNT ||
         trainer_effect_count(&p) != TRAINER_CLASSIC_EFFECT_COUNT ||
         mw_relic_count(&p) != 0)
@@ -1374,6 +1391,14 @@ int trainer_self_test(void) {
                "ANNIHILATION") != 0) failures++;
     if (strcmp(combat_spell_name(SPELL_CAT_PRIEST, 39),
                "DIVINE VERDICT") != 0) failures++;
+    if (strcmp(combat_spell_name(SPELL_CAT_PERMANENT, 44),
+               "CHARGE MYTHIC WAND") != 0) failures++;
+    if (strcmp(combat_spell_name(SPELL_CAT_PREPARATION, 44),
+               "PERFECT VITALITY") != 0) failures++;
+    if (strcmp(combat_spell_name(SPELL_CAT_WIZARD, 44),
+               "POWER WEAPON VI") != 0) failures++;
+    if (strcmp(combat_spell_name(SPELL_CAT_PRIEST, 43),
+               "CREATION'S WRATH") != 0) failures++;
 
     TrainerState grid_state;
     memset(&grid_state, 0, sizeof(grid_state));

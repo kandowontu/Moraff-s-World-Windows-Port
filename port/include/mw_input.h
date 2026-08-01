@@ -21,6 +21,9 @@
 #define INPUT_MOUSE_WHEEL_UP 0x109
 #define INPUT_MOUSE_WHEEL_DOWN 0x10A
 #define INPUT_MAX_CHARACTER 0x10B  /* Ctrl+Shift+Alt+F12 */
+#define INPUT_QUEST_BOSS_WARP 0x10C  /* Ctrl+F4 */
+#define INPUT_RANDOMIZE_FLOOR 0x10D  /* Ctrl+F3 */
+#define INPUT_BATTLE_SIMULATOR 0x10E /* Ctrl+F2 */
 
 typedef struct {
     int keys[KEY_QUEUE_SIZE];
@@ -36,6 +39,14 @@ typedef struct {
     unsigned mouse_motion_serial;
     SDL_Keymod last_key_mods;
     int quit_requested;
+    /* WORLD reads the PC BIOS typematic stream rather than owning separate
+       repeat rules for Fight, movement, menus, and text entry.  Keep one
+       active physical key and synthesize the DOS default cadence for every
+       original mapped key; native Ctrl+Fn diagnostics remain single-shot. */
+    int repeat_held;
+    SDL_Keycode repeat_sym;
+    u32 repeat_next;
+    int fight_repeating;
 } Input;
 
 void input_init(Input *inp);
@@ -47,6 +58,7 @@ int  input_poll_quit(Input *inp);     /* returns 1 if window close requested */
 void input_last_mouse_click(Input *inp, int *x, int *y);
 void input_mouse_position(Input *inp, int *x, int *y, unsigned *serial);
 SDL_Keymod input_last_key_modifiers(const Input *inp);
+int  input_self_test(void);
 
 /* Map SDL keysym to the DOS-compatible value the game expects.
  * Most keys map to ASCII. Arrow keys map to 0x00 + scancode (two-byte sequence). */

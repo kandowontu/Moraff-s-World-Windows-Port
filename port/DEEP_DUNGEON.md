@@ -54,10 +54,10 @@ distances. A blocked learned spell, scroll, wand, or paper reports the relevant
 limit without spending spell points or consuming the item. Ladders, trapdoors,
 pitfalls, Open Floor Mode, and town/wilderness transitions are unaffected.
 
-Enhanced also adds a separately gated level 11-14 magic catalog. Its 50- and
-100-floor traversal spells do not replace or loosen the proportional limits
+Enhanced also adds a separately gated level 11-15 magic catalog. Its 50-,
+100-, and 200-floor traversal spells do not replace or loosen the proportional limits
 on the original spells. One entry in every spell family unlocks at each
-100-floor milestone. All 40 effects, unlocks, and item-drop rules are
+listed late-game milestone. All 60 effects, unlocks, and item-drop rules are
 documented in `DEEP_SPELLS.md`.
 
 The deep monsters use the existing resistance and status systems in new
@@ -67,7 +67,7 @@ levels. Their attack, defense, save, agility, damage, and HP-factor values
 continue increasing across fifteen overlapping generation bands.
 
 Magical enemies in every Enhanced generation can replace a melee response
-with a signature level 11-14 spell. Early casters make an attempt about once
+with a signature level 11-15 spell. Early casters make an attempt about once
 per four or five responses, later casters about once per three, and milestone
 bosses once per two or three. Their versions of percentage-damage spells are
 scaled to player health rather than copying the player spell's enormous flat
@@ -89,7 +89,8 @@ The Beastiary lists each monster's spell and casting frequency.
 - Permanent weapon/armor enchantments and the armor, weapon, body-armor,
   ring-protection, and gauntlet bonuses use 16-bit native values.
 - Player level and the six player attributes were already 16-bit and remain
-  so. The trainer permits values through 32767.
+  so. Normal level progression and the trainer stop at level 3,000; the six
+  core attributes retain their 32,767 trainer cap.
 
 The original six-byte `MON.MAP` records are detected and imported
 automatically. Native `MWMON002` caches are also imported. The next world-state

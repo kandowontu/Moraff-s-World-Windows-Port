@@ -22,13 +22,13 @@ typedef int32_t  s32;
 #define MW_EXPERIENCE_ENHANCED 0u
 #define MW_EXPERIENCE_CLASSIC  1u
 #define MW_ORIGINAL_SPELL_COUNT 30
-#define MW_ENHANCED_SPELL_COUNT 40
+#define MW_ENHANCED_SPELL_COUNT 45
 #define MW_DEEP_SPELL_FIRST     30
-#define MW_DEEP_SPELL_COUNT     10
+#define MW_DEEP_SPELL_COUNT     15
 #define MW_DEEP_MAGIC_MARKER   0xD5u
 #define MW_FINAL_GEAR_QUEST_FLAG ((u16)(1u << 14))
 #define MW_UNIVERSAL_ACCESS_FLAG ((u16)(1u << 15))
-#define MW_PLAYER_LEVEL_MAX    1000u
+#define MW_PLAYER_LEVEL_MAX    3000u
 #define MW_PLAYER_STAT_MAX     INT16_MAX
 #define MW_PLAYER_SP_MAX_U32   4294967040u
 #define MW_PLAYER_SP_MAX       ((float)MW_PLAYER_SP_MAX_U32)
@@ -98,9 +98,9 @@ _Static_assert(sizeof(NativeCharacterExtension) == 127,
 typedef struct {
     char name[20];                  /* 0x000 - player name (null-terminated) */
     char _pad_014[20];              /* 0x014 */
-    u8   race;                      /* 0x028 - Human,Elf,Dwarf,Hobbit,Gnome,Ogre,Sprite,Imp */
+    u8   race;                      /* 0x028 - original 8 races + 2 Enhanced races */
     u8   sex;                       /* 0x029 - 0=Male, 1=Female */
-    u8   class_id;                  /* 0x02A - 0=Fighter,1=Worshipper,2=Monk,3=Wizard,4=Priest,5=Sage,6=Mage */
+    u8   class_id;                  /* 0x02A - original 7 classes + 2 Enhanced classes */
     char _pad_02B[6];               /* 0x02B */
     u16  hp_cur;                    /* 0x031 */
     u16  hp_max;                    /* 0x033 */
@@ -723,21 +723,27 @@ static inline int mw_relic_count(const Character *p) {
 /* Race IDs */
 enum {
     RACE_HUMAN = 0, RACE_ELF, RACE_DWARF, RACE_HOBBIT,
-    RACE_GNOME, RACE_OGRE, RACE_SPRITE, RACE_IMP, RACE_COUNT
+    RACE_GNOME, RACE_OGRE, RACE_SPRITE, RACE_IMP,
+    RACE_DRAGONKIN, RACE_CELESTIAL, RACE_COUNT
 };
+#define MW_CLASSIC_RACE_COUNT 8
 
 /* Class IDs */
 enum {
     CLASS_FIGHTER = 0, CLASS_WORSHIPPER, CLASS_MONK, CLASS_WIZARD,
-    CLASS_PRIEST, CLASS_SAGE, CLASS_MAGE, CLASS_COUNT
+    CLASS_PRIEST, CLASS_SAGE, CLASS_MAGE,
+    CLASS_SPELLBLADE, CLASS_PALADIN, CLASS_COUNT
 };
+#define MW_CLASSIC_CLASS_COUNT 7
 
 static const char *race_names[] = {
-    "HUMAN", "ELF", "DWARF", "HOBBIT", "GNOME", "OGRE", "SPRITE", "IMP"
+    "HUMAN", "ELF", "DWARF", "HOBBIT", "GNOME", "OGRE", "SPRITE", "IMP",
+    "DRAGONKIN", "CELESTIAL"
 };
 
 static const char *class_names[] = {
-    "FIGHTER", "WORSHIPPER", "MONK", "WIZARD", "PRIEST", "SAGE", "MAGE"
+    "FIGHTER", "WORSHIPPER", "MONK", "WIZARD", "PRIEST", "SAGE", "MAGE",
+    "SPELLBLADE", "PALADIN"
 };
 
 /* Max players/save slots */

@@ -30,7 +30,7 @@ Source comments use the corresponding tags `MW_PORT`,
 | `[x]` | `select_player` `0x0889F`, `character_menu` `0x092B4` | `mw_game.c`: `player_select_screen`, slot load/save UI; native 16-bit enchant/quest extension auto-imports legacy records |
 | `[x]` | `func_037B5`, `func_19115` | Complete `ROLL.TXT` character-creation flow, race rolls, rerolls, name, sex and class selection |
 | `[x]` | `func_0A4CF`, `func_0A51B`, `func_0A548`, `func_0A60D` | Packed 0x928-byte character save/load in `game_load_character` / `game_save_character` |
-| `[x]` | `inn_service`, `func_0A6F2`, `func_0A751` | Experience thresholds, inn rest, level gains, age, HP/SP recovery |
+| `[x]` | `inn_service`, `func_0A6F2`, `func_0A751` | Experience thresholds, exact class-specific level gains and age; inn restores SP while each earned level adds HP without erasing existing wounds |
 | `[x]` | Dungeon portions of `func_0F5CD`, `func_0F6E5` | `game_init`, `game_run`, status, keyboard command dispatch, movement, save/quit-to-title, death-to-title and raise contract |
 | `[x]` | `func_1FC56` | Original black/royal-blue/charcoal 1024x768 title backdrop and DAC colors, cumulative monster-pop introduction, weighted original roster, timed credit card and interruptible input; native showcase slots add selected Enhanced monsters; Esc/Q explicitly exit |
 
@@ -90,7 +90,7 @@ missing subsystem.
 | `[x]` | `combat_attack` `0x00AFB`, `func_0A7FF`, `func_0AC4F`, `func_0AD33`, `func_0AD6C` | Player and monster attack resolution, armor, weapon and damage formulas |
 | `[x]` | Combat helpers `0x00D04..0x0446B` | Monster misses, physical attacks, breaths, poison, disease, level/stat drains and status attacks |
 | `[x]` | `select_weapon` `0x04538` plus armor and inventory helpers | Original upper-left eight-line selectors, hidden `--------` names, exact class/profession errors, owned/equipped state and enchantments |
-| `[x]` | `spell_menu` `0x00436`, `combat_event` `0x005DB`, `cast_spell` `0x0079A` | Unified spell/scroll/wand/paper selector and casting dispatch; Enhanced adds a paged 40-spell deep extension (ten per family) while Classic retains the original 120 total entries |
+| `[x]` | `spell_menu` `0x00436`, `combat_event` `0x005DB`, `cast_spell` `0x0079A` | Unified spell/scroll/wand/paper selector and casting dispatch; Enhanced places each family's fifteen added level 11-15 spells on one two-column continuation page while Classic retains the original 120 total entries |
 | `[x]` | `func_10E9A`, `func_10EC6`, `func_10EF2`, `func_10F1E`, `func_10FE5`, `func_110AC`, `func_110CE`, `func_110F0`, `func_11112`, `func_11134`, `func_11156` | Permanent/preparation spell effects and selection helpers |
 | `[x]` | `func_1158A`, `func_115B6`, `func_115E2`, `func_116CA`, `func_11753`, `func_1177D`, `func_117A7` | Battle spell setup, buffs, resistances, healing and monster effects |
 | `[x]` | `weapon_glow`, `func_11876`, `func_118DC`, `func_119D5`, `func_11AEC`, `func_11B18`, `weapon_effect`, `func_11BE0`, `func_11C16`, `func_11C4C`, `func_11C82`, `func_11CB8`, `func_11CEE`, `func_11DA5` | Weapon spell visuals/effects, damage spells, cures, holds, drains and expiration state |
@@ -210,8 +210,10 @@ native launcher.
   version preserves the floor-dependent 1024-mode palette.
 - `[=]` Drawing primitives `func_2535D..func_25943`.
 - `[=]` DOS keyboard polling part of `check_key`/`func_26B38`, plus INT 33h
-  mouse detection and software-cursor drawing. Original click mappings that
-  trigger gameplay remain in the partial backlog above.
+  mouse detection and software-cursor drawing. Native input preserves complete
+  zero-plus-scan extended keys, DOS-default 500/92-ms BIOS typematic repeat for
+  every original key, and the keypad numeric/navigation distinction used by
+  wilderness movement; original click mappings are implemented as SDL hit maps.
 - `[=]` BGI/VGA bank, chipset and graphics-runtime code
   `func_28066..func_2B98A`.
 - `[=]` DOS file/path glue from `build_filepath` `0x277E7` through
@@ -228,6 +230,11 @@ old loading/information window.
 
 ## Native extensions
 
+- `[+]` Tabbed character selection with ten isolated Colosseum slots
+  (`COLOSSEUM0.SAV` through `COLOSSEUM9.SAV`). The Enhanced-only roguelike
+  mode persists randomized challengers and reward cards, every-tenth-round
+  champions, rarity-scaled gear/magic, run perks, recovery, and career
+  records without opening any ordinary adventure/world sidecar.
 - `[+]` Bestiary, discovery persistence, kill counts and full-screen monster
   image view.
 - `[+]` Ctrl+F11 non-persistent wilderness test sandbox.
@@ -241,7 +248,7 @@ old loading/information window.
 - `[+]` Eight Enhanced-only late equipment tiers, saved in the native
   character extension and distributed through boss rewards and forge caches
   from floor 375 through floor 1000.
-- `[+]` Forty Enhanced deep spells (ten per original family), matching magic
+- `[+]` Sixty Enhanced deep spells (fifteen per original family), matching magic
   items, and signature enemy casting throughout all fifteen late-game monster
   generations. Enemy percentage damage is player-scaled, restorative magic
   heals its caster, Life Convergence drains and heals, Mana Tempest drains SP,
