@@ -4,8 +4,8 @@
 /* MW_PLATFORM_REPLACEMENT: SDL events replace WORLD check_key (0x26AF2),
  * func_26B38 and the DOS keyboard/INT 33h mouse layer. DOS two-byte extended-key
  * semantics are preserved because func_0F6E5 command dispatch depends on
- * them. The original INT 33h mouse hot-spot layer is only partly represented
- * by SDL click/hover handling; there is no original two-player branch. */
+ * them. SDL click/hover hit maps replace the original INT 33h hot-spot layer;
+ * there is no original two-player branch. */
 
 void input_init(Input *inp) {
     memset(inp, 0, sizeof(*inp));
@@ -21,39 +21,58 @@ static void input_push(Input *inp, int key, int x, int y, SDL_Keymod mods) {
     inp->tail = next;
 }
 
-static int movement_keycode(SDL_Keycode sym) {
-    switch (sym) {
-    case SDLK_UP:
-    case SDLK_DOWN:
-    case SDLK_LEFT:
-    case SDLK_RIGHT:
-    case SDLK_HOME:
-    case SDLK_END:
-    case SDLK_PAGEUP:
-    case SDLK_PAGEDOWN:
-    case SDLK_KP_1:
-    case SDLK_KP_2:
-    case SDLK_KP_3:
-    case SDLK_KP_4:
-    case SDLK_KP_6:
-    case SDLK_KP_7:
-    case SDLK_KP_8:
-    case SDLK_KP_9:
-        return 1;
-    default:
-        return 0;
-    }
+static int input_queue_free(const Input *inp) {
+    int used = (inp->tail - inp->head + KEY_QUEUE_SIZE) % KEY_QUEUE_SIZE;
+    return KEY_QUEUE_SIZE - 1 - used;
 }
 
-static int extended_repeat_already_queued(const Input *inp, int scan,
-                                          SDL_Keymod mods) {
-    if (inp->head == inp->tail) return 0;
-    int scan_index = (inp->tail + KEY_QUEUE_SIZE - 1) % KEY_QUEUE_SIZE;
-    int zero_index = (scan_index + KEY_QUEUE_SIZE - 1) % KEY_QUEUE_SIZE;
-    return scan_index != inp->head &&
-           inp->keys[zero_index] == 0 &&
-           inp->keys[scan_index] == scan &&
-           inp->key_mods[scan_index] == mods;
+/* Enqueue one complete DOS key atomically.  An extended key must never leave
+   a lone zero prefix in a nearly-full queue: the next getch() would otherwise
+   block waiting for a scan byte or reinterpret a later ASCII key as one. */
+static int input_push_dos_key(Input *inp, int dos_key, SDL_Keymod mods) {
+    int needed = dos_key < 0 ? 2 : 1;
+    if (!dos_key || input_queue_free(inp) < needed) return 0;
+    if (dos_key < 0) {
+        input_push(inp, 0, -1, -1, mods);
+        input_push(inp, -dos_key, -1, -1, mods);
+    } else {
+        input_push(inp, dos_key, -1, -1, mods);
+    }
+    return 1;
+}
+
+enum {
+    /* WORLD has no software repeat timer for F: it consumes the PC keyboard
+       BIOS typematic stream through _kbhit/_getch.  These are the standard
+       power-on defaults used by DOS: 500 ms delay and 10.9 characters/sec. */
+    DOS_TYPEMATIC_DELAY_MS = 500,
+    DOS_TYPEMATIC_PERIOD_MS = 92
+};
+
+static int original_repeatable_key(int dos_key) {
+    /* Native commands begin above the byte range and deliberately do not
+       auto-repeat. All original ASCII and extended BIOS keys do. */
+    return dos_key != 0 && dos_key < INPUT_MOUSE_CLICK;
+}
+
+static void input_emit_typematic_repeat(Input *inp) {
+    u32 now;
+    if (!inp->repeat_held) return;
+    now = SDL_GetTicks();
+    if (!SDL_TICKS_PASSED(now, inp->repeat_next)) return;
+    SDL_Keymod mods = SDL_GetModState();
+    int dos_key = input_sdl_to_dos(inp->repeat_sym, mods);
+    if (!original_repeatable_key(dos_key)) {
+        inp->repeat_held = 0;
+        inp->fight_repeating = 0;
+        return;
+    }
+    if (inp->repeat_sym == SDLK_f &&
+        !(mods & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)))
+        inp->fight_repeating = 1;
+    input_push_dos_key(inp, dos_key, mods);
+    /* Do not flood the queue after a modal or paused window. */
+    inp->repeat_next = now + DOS_TYPEMATIC_PERIOD_MS;
 }
 
 void input_pump(Input *inp) {
@@ -65,24 +84,27 @@ void input_pump(Input *inp) {
             break;
         case SDL_KEYDOWN: {
             SDL_Keymod mods = (SDL_Keymod)ev.key.keysym.mod;
-            /* DOS keyboard repeat is what lets WORLD keep walking while a
-             * cursor key is held.  SDL marks those later KEYDOWN events as
-             * repeats; accept them only for movement so held menu commands
-             * cannot fire repeatedly. */
-            if (ev.key.repeat && !movement_keycode(ev.key.keysym.sym)) break;
+            /* Ignore host-generated repeat completely. WORLD received every
+               held key from the BIOS typematic stream at one common cadence;
+               accepting SDL repeat here would make movement platform-specific
+               and would double-repeat alongside the native synthesizer. */
+            if (ev.key.repeat) break;
             int dos_key = input_sdl_to_dos(ev.key.keysym.sym, mods);
-            if (dos_key > 0) {
-                input_push(inp, dos_key, -1, -1, mods);
-            } else if (dos_key < 0) {
-                if (ev.key.repeat &&
-                    extended_repeat_already_queued(inp, -dos_key, mods))
-                    break;
-                /* Extended key: push 0 then scancode */
-                input_push(inp, 0, -1, -1, mods);
-                input_push(inp, -dos_key, -1, -1, mods);
+            input_push_dos_key(inp, dos_key, mods);
+            if (original_repeatable_key(dos_key)) {
+                inp->repeat_held = 1;
+                inp->repeat_sym = ev.key.keysym.sym;
+                inp->repeat_next = SDL_GetTicks() + DOS_TYPEMATIC_DELAY_MS;
+                inp->fight_repeating = 0;
             }
             break;
         }
+        case SDL_KEYUP:
+            if (inp->repeat_held && ev.key.keysym.sym == inp->repeat_sym) {
+                inp->repeat_held = 0;
+                inp->fight_repeating = 0;
+            }
+            break;
         case SDL_MOUSEBUTTONDOWN:
             inp->mouse_x = ev.button.x;
             inp->mouse_y = ev.button.y;
@@ -111,6 +133,7 @@ void input_pump(Input *inp) {
             break;
         }
     }
+    input_emit_typematic_repeat(inp);
 }
 
 int input_kbhit(Input *inp) {
@@ -169,11 +192,16 @@ SDL_Keymod input_last_key_modifiers(const Input *inp) {
  * Returns: >0 for ASCII, <0 for extended scancode (caller pushes 0 then -ret),
  *          0 for keys we don't map. */
 int input_sdl_to_dos(SDL_Keycode sym, SDL_Keymod mod) {
+    const int keypad_numeric =
+        !!(mod & KMOD_NUM) ^ !!(mod & KMOD_SHIFT);
     /* Native-only diagnostic shortcuts use otherwise unused function-key
      * chords, leaving every original WORLD key byte unchanged. */
     if (sym == SDLK_F12 && (mod & KMOD_CTRL) &&
         (mod & KMOD_SHIFT) && (mod & KMOD_ALT))
         return INPUT_MAX_CHARACTER;
+    if (sym == SDLK_F2 && (mod & KMOD_CTRL)) return INPUT_BATTLE_SIMULATOR;
+    if (sym == SDLK_F3 && (mod & KMOD_CTRL)) return INPUT_RANDOMIZE_FLOOR;
+    if (sym == SDLK_F4 && (mod & KMOD_CTRL)) return INPUT_QUEST_BOSS_WARP;
     if (sym == SDLK_F5 && (mod & KMOD_CTRL)) return INPUT_MODEL_VIEWER;
     if (sym == SDLK_F6 && (mod & KMOD_CTRL)) return INPUT_DUNGEON_REROLL;
     if (sym == SDLK_F7 && (mod & KMOD_CTRL)) return INPUT_OPEN_FLOOR_TOGGLE;
@@ -237,18 +265,30 @@ int input_sdl_to_dos(SDL_Keycode sym, SDL_Keymod mod) {
     case SDLK_F8:        return -0x42;
     case SDLK_F9:        return -0x43;
     case SDLK_F10:       return -0x44;
+    case SDLK_F11:       return -0x85;
+    case SDLK_F12:       return -0x86;
 
-    /* Numpad.  SDL reports navigation-pad keys as KP digits on some
-       keyboards when Num Lock is off, so retain their DOS navigation role. */
+    /* DOS BIOS returns ASCII keypad digits when numeric mode is active and a
+       zero+scan pair otherwise. Holding Shift temporarily reverses Num Lock.
+       WORLD uses that distinction in the wilderness: digits move 3 samples,
+       navigation scans move 1. It never reads Shift state directly. */
     case SDLK_KP_ENTER:  return 0x0D;
-    case SDLK_KP_8:      return -0x48;
-    case SDLK_KP_2:      return -0x50;
-    case SDLK_KP_4:      return -0x4B;
-    case SDLK_KP_6:      return -0x4D;
-    case SDLK_KP_7:      return -0x47;
-    case SDLK_KP_1:      return -0x4F;
-    case SDLK_KP_9:      return -0x49;
-    case SDLK_KP_3:      return -0x51;
+    case SDLK_KP_0:      return keypad_numeric ? '0' : -0x52;
+    case SDLK_KP_1:      return keypad_numeric ? '1' : -0x4F;
+    case SDLK_KP_2:      return keypad_numeric ? '2' : -0x50;
+    case SDLK_KP_3:      return keypad_numeric ? '3' : -0x51;
+    case SDLK_KP_4:      return keypad_numeric ? '4' : -0x4B;
+    case SDLK_KP_5:      return keypad_numeric ? '5' : -0x4C;
+    case SDLK_KP_6:      return keypad_numeric ? '6' : -0x4D;
+    case SDLK_KP_7:      return keypad_numeric ? '7' : -0x47;
+    case SDLK_KP_8:      return keypad_numeric ? '8' : -0x48;
+    case SDLK_KP_9:      return keypad_numeric ? '9' : -0x49;
+    case SDLK_KP_PERIOD: return keypad_numeric ? '.' : -0x53;
+    case SDLK_KP_DIVIDE: return '/';
+    case SDLK_KP_MULTIPLY:return '*';
+    case SDLK_KP_MINUS:  return '-';
+    case SDLK_KP_PLUS:   return '+';
+    case SDLK_KP_EQUALS: return '=';
 
     /* Home/End/PgUp/PgDn */
     case SDLK_HOME:      return -0x47;
@@ -260,4 +300,58 @@ int input_sdl_to_dos(SDL_Keycode sym, SDL_Keymod mod) {
 
     default: return 0;
     }
+}
+
+int input_self_test(void) {
+    int failures = 0;
+    Input inp;
+    static const SDL_Keycode keypad_key[10] = {
+        SDLK_KP_0, SDLK_KP_1, SDLK_KP_2, SDLK_KP_3, SDLK_KP_4,
+        SDLK_KP_5, SDLK_KP_6, SDLK_KP_7, SDLK_KP_8, SDLK_KP_9
+    };
+    static const int keypad_scan[10] = {
+        0x52, 0x4F, 0x50, 0x51, 0x4B,
+        0x4C, 0x4D, 0x47, 0x48, 0x49
+    };
+
+    if (DOS_TYPEMATIC_DELAY_MS != 500 || DOS_TYPEMATIC_PERIOD_MS != 92)
+        failures++;
+    for (int i = 0; i < 10; i++) {
+        if (input_sdl_to_dos(keypad_key[i], KMOD_NONE) != -keypad_scan[i] ||
+            input_sdl_to_dos(keypad_key[i], KMOD_NUM) != '0' + i ||
+            input_sdl_to_dos(keypad_key[i], KMOD_SHIFT) != '0' + i ||
+            input_sdl_to_dos(keypad_key[i], KMOD_NUM | KMOD_SHIFT) !=
+                -keypad_scan[i])
+            failures++;
+    }
+    if (input_sdl_to_dos(SDLK_KP_PERIOD, KMOD_NONE) != -0x53 ||
+        input_sdl_to_dos(SDLK_KP_PERIOD, KMOD_NUM) != '.' ||
+        input_sdl_to_dos(SDLK_KP_PLUS, KMOD_NONE) != '+' ||
+        input_sdl_to_dos(SDLK_F11, KMOD_NONE) != -0x85 ||
+        input_sdl_to_dos(SDLK_F12, KMOD_NONE) != -0x86)
+        failures++;
+
+    memset(&inp, 0, sizeof(inp));
+    inp.repeat_held = 1;
+    inp.repeat_sym = SDLK_f;
+    inp.repeat_next = 0;
+    input_emit_typematic_repeat(&inp);
+    if (inp.head == inp.tail || input_getch(&inp) != 'f' ||
+        !inp.fight_repeating)
+        failures++;
+
+    memset(&inp, 0, sizeof(inp));
+    inp.repeat_held = 1;
+    inp.repeat_sym = SDLK_DOWN;
+    inp.repeat_next = 0;
+    input_emit_typematic_repeat(&inp);
+    if (input_getch(&inp) != 0 || input_getch(&inp) != 0x50)
+        failures++;
+
+    memset(&inp, 0, sizeof(inp));
+    inp.tail = KEY_QUEUE_SIZE - 2; /* one usable slot remains */
+    if (input_push_dos_key(&inp, -0x50, KMOD_NONE) ||
+        inp.tail != KEY_QUEUE_SIZE - 2)
+        failures++;
+    return failures;
 }

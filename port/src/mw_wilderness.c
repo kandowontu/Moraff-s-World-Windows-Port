@@ -317,6 +317,7 @@ static int wilderness_click_direction(Game *g) {
 static int wilderness_movement_delta(int key, int scan, SDL_Keymod mods,
                                      int *out_dx, int *out_dy) {
     int dx = 0, dy = 0;
+    (void)mods;
     if (key >= '1' && key <= '9' && key != '5') {
         /* WORLD receives the fast cursor forms as numeric-keypad digits. */
         int column = (key - '1') % 3;
@@ -324,7 +325,7 @@ static int wilderness_movement_delta(int key, int scan, SDL_Keymod mods,
         dx = (column - 1) * 3;
         dy = (1 - row) * 3;
     } else if (key == 0) {
-        int distance = (mods & KMOD_SHIFT) ? 3 : 1;
+        const int distance = 1;
         switch (scan) {
         case 0x47: dx = -distance; dy = -distance; break;
         case 0x48:                 dy = -distance; break;
@@ -459,7 +460,7 @@ static void wilderness_help(Game *g) {
     const char *lines[] = {
         "TRAVELLING IN THE WILDERNESS",
         "CURSOR KEYS MOVE ONE STEP; HOLD A CURSOR KEY TO KEEP MOVING.",
-        "SHIFT-CURSOR MOVES THREE STEPS; HOME/END/PAGE KEYS MOVE DIAGONALLY.",
+        "NUMERIC KEYPAD DIGITS MOVE THREE STEPS; NAVIGATION KEYS MOVE ONE.",
         "THE WORLD WRAPS AT EVERY EDGE, EXACTLY AS THE ORIGINAL WORLD DOES.",
         "BLUE TERRAIN IS WATER. YOU MUST BUY A BOAT BEFORE ENTERING IT.",
         "LEAVING A BOAT ON SHORE MAY FORFEIT IT, JUST AS THE ORIGINAL WARNS.",
@@ -621,7 +622,7 @@ int wilderness_self_test(void) {
     if (!wilderness_movement_delta(0, 0x48, KMOD_NONE, &dx, &dy) ||
         dx != 0 || dy != -1 ||
         !wilderness_movement_delta(0, 0x51, KMOD_LSHIFT, &dx, &dy) ||
-        dx != 3 || dy != 3 ||
+        dx != 1 || dy != 1 ||
         !wilderness_movement_delta('7', -1, KMOD_NONE, &dx, &dy) ||
         dx != -3 || dy != -3)
         failures++;

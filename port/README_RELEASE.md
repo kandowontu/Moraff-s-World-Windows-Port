@@ -1,5 +1,7 @@
 # Moraff's World — 1024×768 Native Edition
 
+Version 1.1 for 64-bit Windows.
+
 An unofficial native Windows preservation port and Enhanced Edition of
 **Moraff's World**, the DOS dungeon crawler created by **Steve Moraff** and
 published by **MoraffWare**.
@@ -52,16 +54,28 @@ New characters can select:
 
 - **Classic** — the original 251-floor scale and original progression limits.
 - **Enhanced** — an extended 1,000-floor dungeon with additional enemies,
-  bosses, equipment, spells, magic items, relics, and late-game quests.
+  bosses, equipment, spells, magic items, relics, late-game quests, two new
+  races (Dragonkin and Celestial), and two new classes (Spellblade and
+  Paladin). Player progression can continue through level 3,000.
 
 The Enhanced additions do not replace Steve Moraff's original content. They
 extend the native port's optional Enhanced mode.
+
+## Colosseum mode
+
+Press `Tab` on character selection to open a second page containing ten
+dedicated Colosseum saves. This Enhanced-only roguelike side game builds a new
+combatant through randomized enemy rounds, champion fights, rarity-scaled
+weapons, armor, magic, healing, and permanent run perks. Its
+`COLOSSEUM0.SAV`-`COLOSSEUM9.SAV` records are isolated from all ordinary
+adventure characters and world state. See `COLOSSEUM.md` for the full rules.
 
 ## Useful documentation
 
 - `EXPERIENCE_MODES.md` — Classic versus Enhanced behavior
 - `DEEP_DUNGEON.md` — Enhanced floors, bosses, equipment, and relics
 - `DEEP_SPELLS.md` — Enhanced spell catalog
+- `COLOSSEUM.md` — separate-save roguelike arena mode
 - `HOTKEYS.md` — controls and optional diagnostic shortcuts
 - `CREDITS.md` — original-game, port, and preservation credits
 - `THIRD_PARTY_NOTICES.md` — SDL and build-tool acknowledgements

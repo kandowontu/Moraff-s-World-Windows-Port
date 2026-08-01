@@ -3,6 +3,8 @@
 #include "mw_trainer.h"
 #include "mw_wilderness.h"
 #include "mw_model_viewer.h"
+#include "mw_battle_simulator.h"
+#include "mw_arena.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,6 +62,14 @@ void game_srand(Game *g, u32 seed) {
 int game_rand(Game *g) {
     g->rand_state = g->rand_state * 0x15A4E35u + 1;
     return (int)((g->rand_state >> 16) & 0x7FFF);
+}
+
+/* Borland's scaled-random idiom in WORLD multiplies the 15-bit rand() value
+   by the requested range.  Modulo gives a different deterministic sequence
+   and noticeably changes low-range rolls such as temple prices and levels. */
+static int original_rand_scaled(Game *g, int range) {
+    if (range <= 0) return 0;
+    return (int)(((unsigned long)game_rand(g) * (unsigned long)range) / 0x8000ul);
 }
 
 static const GameTraversalRules classic_traversal_rules = {
@@ -743,7 +753,8 @@ static const u16 late_gear_floor[LATE_GEAR_TIER_COUNT] = {
 };
 
 static const u16 deep_spell_unlock_floor[MW_DEEP_SPELL_COUNT] = {
-    100, 200, 300, 400, 500, 600, 700, 800, 900, 1000
+    100, 200, 300, 400, 500, 600, 700, 775, 850, 900,
+    925, 950, 975, 990, 1000
 };
 
 static const u16 quest_floor_by_step[QUEST_CHAIN_COUNT] = {
@@ -1267,7 +1278,9 @@ int game_is_known_pitfall(Game *g, int x, int y) {
 }
 
 void game_refresh_world_palette(Game *g) {
-    video_load_world_palette(&g->video, g->cur_floor,
+    int palette_floor = g->palette_floor_override >= 0 ?
+                        g->palette_floor_override : g->cur_floor;
+    video_load_world_palette(&g->video, palette_floor,
                              g->wall_color_r,
                              g->wall_color_g,
                              g->wall_color_b);
@@ -1278,6 +1291,8 @@ int game_change_floor(Game *g, Character *player, int new_floor) {
     if (new_floor == g->cur_floor) return 0;
     save_monster_map(g);
     g->cur_floor = new_floor;
+    g->palette_floor_override = -1;
+    g->wall_texture_offset = 0;
     player->floor_depth = (u16)new_floor;
     /* WORLD rebuilds both floor-dependent DAC bands as soon as the active
      * depth changes, before any transition or modal frame can be shown. */
@@ -1421,6 +1436,7 @@ int game_init(Game *g, const char *data_dir) {
     g->brick_speed = 3;
     g->sound_enabled = 1;
     g->map_player_visible = 1;
+    g->palette_floor_override = -1;
     strncpy(g->game_dir, data_dir, sizeof(g->game_dir) - 1);
 
     if (!SDL_WasInit(SDL_INIT_VIDEO)) {
@@ -2051,6 +2067,8 @@ static void draw_ray_walls(Game *g, int vx, int vy, int vw, int vh, int dir,
             (hit_axis == 1 && ray_y < 0.0f))
             along = 1.0f - along;
         int tx = (int)(along * 256.0f);
+        if (!door && g->wall_texture_offset)
+            tx = (tx + g->wall_texture_offset) & 255;
         if (tx < 0) tx = 0;
         if (tx > 255) tx = 255;
 
@@ -3097,9 +3115,9 @@ static void cmd_view_money(Game *g, Character *p) {
 }
 
 /* ── Spell name tables (extracted from WORLD.EXE pointer tables) ── */
-/* The first 30 entries are the exact original catalog.  Enhanced adds ten
+/* The first 30 entries are the exact original catalog.  Enhanced adds fifteen
  * deep-dungeon spells per family in the save format's previously unused
- * slots 30-39. */
+ * slots 30-44. */
 
 static const char *perm_names[MW_ENHANCED_SPELL_COUNT] = {
     "ENCHANT WEAPON LEVEL 1","EXTRA HEALTH POINT","WRITE SCROLL TO LEVEL 3",
@@ -3117,6 +3135,9 @@ static const char *perm_names[MW_ENHANCED_SPELL_COUNT] = {
     "ENCHANT WEAPON LEVEL 500","ENCHANT ARMOR LEVEL 350",
     "BODY ARMOR LEVEL 300","WRITE ASCENDANT SCROLL",
     "CHARGE ASCENDANT WAND",
+    "ENCHANT WEAPON LEVEL 1000","ENCHANT ARMOR LEVEL 750",
+    "BODY ARMOR LEVEL 650","WRITE MYTHIC SCROLL",
+    "CHARGE MYTHIC WAND",
 };
 static const char *prep_names[MW_ENHANCED_SPELL_COUNT] = {
     "ENCHANT ARMOR LEVEL 1","ENCHANT WEAPON LEVEL 1","LITTLE CURE",
@@ -3133,6 +3154,8 @@ static const char *prep_names[MW_ENHANCED_SPELL_COUNT] = {
     "CARTOGRAPHER'S EYE","TOWN PORTAL",
     "RIFT DESCEND","RIFT ASCEND","ETERNAL SANCTUARY",
     "WORLD REVEAL","SOUL ANCHOR",
+    "TITAN DESCEND","TITAN ASCEND","MYTHIC SANCTUARY",
+    "ASTRAL FORM","PERFECT VITALITY",
 };
 static const char *wiz_names[MW_ENHANCED_SPELL_COUNT] = {
     "SLEEP","MAGIC ZAP","MINOR PROTECTION",
@@ -3148,6 +3171,8 @@ static const char *wiz_names[MW_ENHANCED_SPELL_COUNT] = {
     "ABYSSAL LANCE","TIME STOP","VOID NOVA","SOUL REND","OBLIVION",
     "STARFIRE","CHRONO LOCK","REALITY RUPTURE",
     "MANA TEMPEST","ANNIHILATION",
+    "POWER WEAPON IV","COSMIC IMPLOSION","POWER WEAPON V",
+    "END OF AGES","POWER WEAPON VI",
 };
 static const char *priest_names[MW_ENHANCED_SPELL_COUNT] = {
     "SLEEP","MINOR PROTECTION","STRENGTH",
@@ -3164,6 +3189,8 @@ static const char *priest_names[MW_ENHANCED_SPELL_COUNT] = {
     "CELESTIAL STASIS","FINAL JUDGMENT",
     "LIFE CONVERGENCE","ETERNAL WARD","WRATH OF HEAVEN",
     "PHOENIX PRAYER","DIVINE VERDICT",
+    "POWER WEAPON IV","SERAPHIC REPRIEVE","POWER WEAPON V",
+    "CREATION'S WRATH","POWER WEAPON VI",
 };
 
 static const char **spell_type_names[4] = { perm_names, prep_names, wiz_names, priest_names };
@@ -3173,8 +3200,8 @@ static const char *type_headers[4] = {
 };
 
 /* Color per level: preserve the native cycle through the Enhanced levels. */
-static const u8 level_colors[14] = {
-    6, 8, 3, 4, 5, 7, 6, 8, 3, 4, 5, 7, 6, 8
+static const u8 level_colors[15] = {
+    6, 8, 3, 4, 5, 7, 6, 8, 3, 4, 5, 7, 6, 8, 3
 };
 
 /* ── Command: Pockets - Spell list display ── */
@@ -3254,9 +3281,12 @@ static void cmd_pockets_spells(Game *g, Character *p, u8 data[4][45], int is_wan
            Only the native Enhanced continuation needs an explicit page cue,
            placed in otherwise-unused space on its short deep-spell pages. */
         if (deep) {
+            int cue_y = y + 8;
+            if (cue_y < SY(0x1E0)) cue_y = SY(0x1E0);
+            if (cue_y > LOGICAL_H - 28) cue_y = LOGICAL_H - 28;
             snprintf(line, sizeof(line), "%s PAGE %d/%d - HIT ANY KEY...",
                      title, page + 1, pages);
-            video_draw_text_scaled(v, col_level, SY(0x1E0), line,
+            video_draw_text_scaled(v, col_level, cue_y, line,
                                    15, 3, 4);
         }
         video_present(v);
@@ -3392,6 +3422,18 @@ static void cmd_exp_needed(Game *g, Character *p) {
 
     town_pane_begin(g, p);
     int y = 0;
+
+    if (p->level >= MW_PLAYER_LEVEL_MAX) {
+        snprintf(line, sizeof(line), "MAXIMUM PLAYER LEVEL REACHED: %u",
+                 MW_PLAYER_LEVEL_MAX);
+        y = town_pane_text(g, y, line, 4);
+        snprintf(line, sizeof(line), "CURRENT EXPERIENCE: %.0f", p->experience);
+        y = town_pane_text(g, y, line, 7);
+        town_pane_text(g, y, "NO FURTHER LEVELS CAN BE EARNED.", 15);
+        video_present(v);
+        input_wait_any_key(&g->input);
+        return;
+    }
 
     snprintf(line, sizeof(line), "EXPERIENCE NEEDED FOR LEVEL: %d",
              p->level + 1);
@@ -3923,11 +3965,11 @@ static void town_store(Game *g, Character *p) {
 }
 
 static u32 temple_contract_price(Game *g, Character *p) {
-    unsigned long long price = (unsigned long long)p->level * 500u +
-                               (u32)(game_rand(g) % 20);
-    if (price < 100000u) price = 100000u;
-    if (price > 500000u) price = 500000u;
-    return (u32)price;
+    /* WORLD rolls before the level branch.  Levels 1..60 pay level*500 plus
+       0..19; only levels above 60 are forced to the 500,000-JP ceiling. */
+    u32 variation = (u32)original_rand_scaled(g, 20);
+    if (p->level > 60) return 500000u;
+    return (u32)p->level * 500u + variation;
 }
 
 static void town_temple(Game *g, Character *p) {
@@ -4058,18 +4100,82 @@ static double experience_for_level(int level) {
     return n * n * n * n * n;
 }
 
+typedef struct LevelGrowth {
+    int hp_base;
+    int hp_range;
+    int sp_gain;
+} LevelGrowth;
+
+/* MW_PORT: WORLD far_23075's seven original class branches.  hp_range is the
+   exclusive upper bound passed through WORLD's scaled 15-bit random roll. */
+static LevelGrowth original_level_growth(const Character *p) {
+    LevelGrowth growth = {1 + p->stat_con / 5,
+                          p->stat_con / 4 + 1,
+                          p->class_id == CLASS_FIGHTER ? 0 :
+                          1 + (p->stat_int + p->stat_wis) / 10};
+    switch (p->class_id) {
+    case CLASS_FIGHTER:
+        growth = (LevelGrowth){35,
+            2 * p->stat_con + p->stat_luck / 2 + 10, 0};
+        break;
+    case CLASS_WORSHIPPER:
+        growth = (LevelGrowth){15,
+            p->stat_con / 2 + p->stat_luck / 2 + 10,
+            (2 * p->stat_wis + p->stat_int) / 3};
+        break;
+    case CLASS_MONK:
+        growth = (LevelGrowth){14,
+            p->stat_con / 2 + p->stat_luck / 3 + 5,
+            (p->stat_wis + p->stat_int) / 13};
+        break;
+    case CLASS_WIZARD:
+        growth = (LevelGrowth){13,
+            p->stat_con / 3 + p->stat_luck / 5 + 4,
+            (2 * p->stat_int + p->stat_wis) / 5};
+        break;
+    case CLASS_PRIEST:
+        growth = (LevelGrowth){14,
+            p->stat_con / 2 + p->stat_luck / 3 + 4,
+            (2 * p->stat_wis + p->stat_int) / 5};
+        break;
+    case CLASS_SAGE:
+        growth = (LevelGrowth){55,
+            3 * p->stat_con + p->stat_luck + 17,
+            (p->stat_wis + p->stat_int) / 14};
+        break;
+    case CLASS_MAGE:
+        growth = (LevelGrowth){14,
+            p->stat_con / 2 + p->stat_luck / 3 + 7,
+            (2 * p->stat_int + p->stat_wis) / 8};
+        break;
+    default:
+        /* Enhanced-only classes retain the native extension's balanced
+           generic curve; they have no branch in the 1993 executable. */
+        break;
+    }
+    if (growth.hp_range < 1) growth.hp_range = 1;
+    if (growth.sp_gain < 0) growth.sp_gain = 0;
+    return growth;
+}
+
 static int inn_apply_levels(Game *g, Character *p) {
     int gained = 0;
     if (!isfinite(p->experience) || p->experience < 0.0) p->experience = 0.0;
     while (p->level < MW_PLAYER_LEVEL_MAX &&
            p->experience >= experience_for_level((int)p->level + 1)) {
-        int hp_gain = 1 + p->stat_con / 5 +
-                      game_rand(g) % (p->stat_con / 4 + 1);
-        uint64_t hp = (uint64_t)mw_hp_max(p) + (unsigned)hp_gain;
+        LevelGrowth growth = original_level_growth(p);
+        u32 old_hp_max = mw_hp_max(p);
+        u32 old_hp_cur = mw_hp_cur(p);
+        int hp_gain = growth.hp_base +
+                      original_rand_scaled(g, growth.hp_range);
+        uint64_t hp = (uint64_t)old_hp_max + (unsigned)hp_gain;
         u32 hp_cap = mw_player_hp_cap(p);
         mw_set_hp_max(p, hp > hp_cap ? hp_cap : hp);
-        if (p->class_id != CLASS_FIGHTER) {
-            float sp_gain = (float)(1 + (p->stat_int + p->stat_wis) / 10);
+        /* WORLD adds exactly the realized maximum-HP increase to current HP;
+           resting at the inn therefore preserves the existing wound deficit. */
+        mw_set_hp_cur(p, (uint64_t)old_hp_cur + mw_hp_max(p) - old_hp_max);
+        if (growth.sp_gain) {
+            float sp_gain = (float)growth.sp_gain;
             p->sp_max = p->sp_max > MW_PLAYER_SP_MAX - sp_gain ?
                         MW_PLAYER_SP_MAX : p->sp_max + sp_gain;
         }
@@ -4095,17 +4201,16 @@ static void town_inn(Game *g, Character *p) {
     add_u32_sat(&p->age, 8u * 3600u);
     character_clear_town_effects(p);
     int gained = inn_apply_levels(g, p);
-    mw_set_hp_cur(p, mw_hp_max(p));
     p->sp_cur = p->sp_max;
     if (gained) {
         char line[96];
         snprintf(line, sizeof(line), "YOU GAINED %d LEVEL%s AND ARE NOW LEVEL %u.",
                  gained, gained == 1 ? "" : "S", p->level);
         town_message(g, p, "CONGRATULATIONS! YOU HAVE BECOME MORE POWERFUL.",
-                     line, "YOUR HEALTH AND SPELL POINTS ARE RESTORED.", 6);
+                     line, "NEW HEALTH WAS ADDED; SPELL POINTS ARE RESTORED.", 6);
     } else {
         town_message(g, p, "YOU REST FOR THE NIGHT.",
-                     "YOUR HEALTH AND SPELL POINTS ARE RESTORED.",
+                     "YOUR SPELL POINTS ARE RESTORED.",
                      "NO NEW LEVEL HAS BEEN EARNED YET.", 6);
     }
 }
@@ -4310,9 +4415,9 @@ static int award_spell_item(Game *g, Character *p, int depth, int source,
     int spell;
     int deep_count = 0;
     if (mw_experience_mode(p) == MW_EXPERIENCE_ENHANCED && depth >= 100) {
-        deep_count = depth / 100;
-        if (deep_count > MW_DEEP_SPELL_COUNT)
-            deep_count = MW_DEEP_SPELL_COUNT;
+        while (deep_count < MW_DEEP_SPELL_COUNT &&
+               depth >= deep_spell_unlock_floor[deep_count])
+            deep_count++;
     }
     if (deep_count && game_rand(g) % 2 == 0) {
         spell = MW_DEEP_SPELL_FIRST +
@@ -4799,13 +4904,51 @@ int game_economy_self_test(void) {
         stone_taker.platinum_stones || stone_taker.jewel_stones)
         failures++;
 
+    {
+        Character contract = {0};
+        game_srand(&g, 0xA11CEu);
+        contract.level = 1;
+        u32 price = temple_contract_price(&g, &contract);
+        if (price < 500u || price > 519u) failures++;
+        contract.level = 60;
+        price = temple_contract_price(&g, &contract);
+        if (price < 30000u || price > 30019u) failures++;
+        contract.level = 61;
+        if (temple_contract_price(&g, &contract) != 500000u) failures++;
+    }
+
+    {
+        Character growth_player = {0};
+        const LevelGrowth expected[MW_CLASSIC_CLASS_COUNT] = {
+            {35, 59, 0}, {15, 29, 22}, {14, 21, 3}, {13, 13, 13},
+            {14, 20, 13}, {55, 95, 3}, {14, 23, 8}
+        };
+        growth_player.stat_con = 20;
+        growth_player.stat_luck = 18;
+        growth_player.stat_int = 24;
+        growth_player.stat_wis = 21;
+        for (int class_id = 0; class_id < MW_CLASSIC_CLASS_COUNT; class_id++) {
+            growth_player.class_id = (u8)class_id;
+            LevelGrowth actual = original_level_growth(&growth_player);
+            if (actual.hp_base != expected[class_id].hp_base ||
+                actual.hp_range != expected[class_id].hp_range ||
+                actual.sp_gain != expected[class_id].sp_gain)
+                failures++;
+        }
+    }
+
     Character leveler = {0};
     leveler.level = 1;
     leveler.experience = 32.0;
+    leveler.hp_cur = 4;
     leveler.hp_max = 10;
+    leveler.class_id = CLASS_FIGHTER;
+    leveler.stat_luck = 10;
     leveler.stat_con = leveler.stat_int = leveler.stat_wis = 10;
     if (inn_apply_levels(&g, &leveler) != 1 || leveler.level != 2 ||
-        experience_for_level(3) != 243.0) failures++;
+        mw_hp_max(&leveler) - mw_hp_cur(&leveler) != 6 ||
+        leveler.sp_max != 0.0f || experience_for_level(3) != 243.0)
+        failures++;
 
     for (int race = 0; race < RACE_COUNT; race++) {
         u16 stats[6];
@@ -5285,11 +5428,28 @@ static int game_door_encounter_self_test(Game *g) {
             failures++;
         Character walker;
         memset(&walker, 0, sizeof(walker));
-        mw_set_hp_max(&walker, 10);
-        mw_set_hp_cur(&walker, 10);
+        mw_set_hp_max(&walker, 100000);
+        mw_set_hp_cur(&walker, 100000);
         if (game_try_step(g, &walker, open_d) != 0 ||
             g->cur_x != open_x || g->cur_y != open_y ||
             game_monster_hp(g, 0) != 1)
+            failures++;
+
+        /* Noclip has no actor or outer-edge blockers.  Crossing a finite map
+           edge wraps rather than producing invalid saved coordinates. */
+        g->cheat_noclip = 1;
+        g->cur_x = open_x; g->cur_y = open_y;
+        m->x = (u8)(open_x + dx[open_d]);
+        m->y = (u8)(open_y + dy[open_d]);
+        int noclip_target_x = m->x, noclip_target_y = m->y;
+        monster_record_set_hp(m, 1);
+        if (game_try_step(g, &walker, open_d) <= 0 ||
+            g->cur_x != noclip_target_x || g->cur_y != noclip_target_y)
+            failures++;
+        clear_monster_record(m);
+        g->cur_x = 0; g->cur_y = 1;
+        if (game_try_step(g, &walker, 2) <= 0 ||
+            g->cur_x != MAP_W - 1 || g->cur_y != 1)
             failures++;
     }
 
@@ -5495,7 +5655,8 @@ int game_ui_self_test(Game *g) {
         {'a','l'}, {'f','p'}, {'t','e'}, {'o','o'},
         {'j','g'}, {'1','1'}, {'2','2'}, {'3','3'}, {'q','h'}
     };
-    int failures = 0;
+    int failures = battle_simulator_self_test() + arena_self_test() +
+                   input_self_test();
     int catalog_count = 0;
     while (bestiary_type_at_catalog_index(catalog_count) >= 0)
         catalog_count++;
@@ -5638,6 +5799,10 @@ int game_ui_self_test(Game *g) {
     if (input_sdl_to_dos(SDLK_9, KMOD_SHIFT) != '(') failures++;
     if (input_sdl_to_dos(SDLK_0, KMOD_SHIFT) != ')') failures++;
     if (input_sdl_to_dos(SDLK_F1, KMOD_NONE) != -0x3B) failures++;
+    if (input_sdl_to_dos(SDLK_F2, KMOD_CTRL) != INPUT_BATTLE_SIMULATOR ||
+        input_sdl_to_dos(SDLK_F3, KMOD_CTRL) != INPUT_RANDOMIZE_FLOOR ||
+        input_sdl_to_dos(SDLK_F4, KMOD_CTRL) != INPUT_QUEST_BOSS_WARP)
+        failures++;
     if (input_sdl_to_dos(SDLK_F5, KMOD_CTRL) != INPUT_MODEL_VIEWER)
         failures++;
     if (input_sdl_to_dos(SDLK_F6, KMOD_CTRL) != INPUT_DUNGEON_REROLL)
@@ -5782,7 +5947,8 @@ int game_ui_self_test(Game *g) {
             maxed.eff_super_agi != 60 ||
             maxed.eff_battle_str != UINT16_MAX ||
             maxed.eff_battle_spd != UINT16_MAX ||
-            maxed.eff_protect_lv != 8 ||
+            maxed.eff_pwr_weapon != 6 ||
+            maxed.eff_protect_lv != 10 ||
             maxed.poisoned_turns != 0 || maxed.diseased_turns != 0)
             failures++;
 
@@ -5821,6 +5987,7 @@ int game_ui_self_test(Game *g) {
             classic.eff_super_agi != 60 ||
             classic.eff_battle_str != INT16_MAX ||
             classic.eff_battle_spd != INT16_MAX ||
+            classic.eff_pwr_weapon != 3 ||
             (mw_quest_flags(&classic) & MW_FINAL_GEAR_QUEST_FLAG))
             failures++;
     }
@@ -5917,7 +6084,7 @@ static const HelpTopic help_topics[] = {
     {'E', "EXPERIENCE TO NEXT LEVEL",
      "Shows current experience and the exact amount required for the next level. Level gains are awarded when you use the inn."},
     {'F', "ATTACK MONSTER",
-     "Attacks an adjacent visible monster. Walking toward a monster through an open passage also engages it. A monster behind a visible or secret door remains hidden and jams that door until it moves away."},
+     "Attacks an adjacent visible monster. Moving toward one stops you without attacking; press or hold F to fight. A monster behind a visible or secret door remains hidden and jams that door until it moves away."},
     {'G', "GAME STATS",
      "Summarizes the current dungeon seed and position, age, total recorded kills, Beastiary progress, quest bosses, keys, known pitfalls, explored cells, living floor monsters, magic inventory, equipment, weight pressure, and active runtime test modes."},
     {'H', "THIS HELP SCREEN",
@@ -6527,62 +6694,130 @@ int game_dialog_ui_self_test(Game *g, Character *p) {
 /* MW_PORT: WORLD select_player (0x0889F) and character_menu (0x092B4). */
 /* ── Player selection screen ── */
 
-static int player_select_screen(Game *g) {
+static int player_select_screen(Game *g, int *colosseum_page) {
     Video *v = &g->video;
-
-    video_clear(v, 0);
-    video_draw_text(v, SX(0), SY(0), "PLEASE SELECT A PLAYER:", 4);
-    video_draw_text(v, SX(0), SY(100),
-                    "NUMBER     NAME    SEX   RACE       CLASS", 5);
-
-    char line[96];
-    for (int i = 0; i < MAX_PLAYERS; i++) {
-        if (g->char_exists[i]) {
-            Character *ch = &g->chars[i];
-            const char *race_str = (ch->race < RACE_COUNT) ? race_names[ch->race] : "???";
-            const char *class_str = (ch->class_id < CLASS_COUNT) ? class_names[ch->class_id] : "???";
-            /* WORLD right-aligns the name, race and class by copying them
-               over fixed runs of 13, 7 and 10 spaces. */
-            memset(line, ' ', 41);
-            line[41] = 0;
-            line[0] = (char)('0' + i);
-            line[1] = ')';
-            size_t full_name = 0;
-            while (full_name < sizeof(ch->name) && ch->name[full_name]) full_name++;
-            size_t n = full_name;
-            if (n > 13) n = 13; /* Avoid reproducing the DOS buffer underflow. */
-            memcpy(line + 15 - n, ch->name + full_name - n, n);
-            if (ch->sex) memcpy(line + 15, " FEMALE", 7);
-            else memcpy(line + 15, "  MALE ", 7);
-            n = strlen(race_str); if (n > 7) n = 7;
-            memcpy(line + 29 - n, race_str, n);
-            n = strlen(class_str); if (n > 10) n = 10;
-            memcpy(line + 41 - n, class_str, n);
-            video_draw_text(v, SX(0), SY(155 + 55 * i), line, 6);
-        } else {
-            snprintf(line, sizeof(line), "%d) SELECT TO CREATE A NEW CHARACTER", i);
-            video_draw_text(v, SX(0), SY(165 + 55 * i), line, 14);
-        }
-    }
-
-    video_draw_text(v, SX(0), SY(1100), "HIT ESCAPE OR Q TO QUIT", 5);
-    video_present(v);
-
+    int page = colosseum_page && *colosseum_page ? 1 : 0;
+    enum {
+        MODE_DESCRIPTION_Y = 55,
+        MODE_SWITCH_Y = 105,
+        SLOT_HEADER_Y = 165,
+        SLOT_FIRST_Y = 220,
+        SLOT_ROW_H = 55
+    };
     while (1) {
-        int key = input_getch(&g->input);
+        video_clear(v, 0);
+        video_draw_text(v, SX(0), SY(0),
+                        page ? "COLOSSEUM - ROGUELIKE BATTLE MODE"
+                             : "MAIN GAME - MORAFF'S WORLD ADVENTURE",
+                        page ? 14 : 4);
+        video_draw_text(v, SX(0), SY(MODE_DESCRIPTION_Y),
+                        page ?
+                        "RANDOM FOES AND REWARDS; EVERY RUN BUILDS DIFFERENTLY." :
+                        "THE ORIGINAL DUNGEON GAME (CLASSIC OR ENHANCED).",
+                        page ? 8 : 3);
+        video_draw_text(v, SX(0), SY(MODE_SWITCH_Y),
+                        page ?
+                        "HIT TAB: RETURN TO THE ORIGINAL DUNGEON ADVENTURE." :
+                        "HIT TAB: SWITCH TO THE SEPARATE ROGUELIKE COLOSSEUM.",
+                        15);
+        video_hline(v, SX(0), SY(150), LOGICAL_W, page ? 14 : 4);
+        video_draw_text(v, SX(0), SY(SLOT_HEADER_Y),
+                        page ? "NUMBER     NAME        RUN  ROUND  BEST"
+                             : "NUMBER     NAME    SEX   RACE       CLASS",
+                        5);
+
+        char line[112];
+        for (int i = 0; i < MAX_PLAYERS; i++) {
+            if (page) {
+                ArenaSave arena;
+                if (arena_load_save(g, i, &arena) == 0) {
+                    const Character *ch = &arena.base_character;
+                    snprintf(line, sizeof(line),
+                             "%d) %-13.13s  %3u  %5u  %4u%s",
+                             i, ch->name, arena.run_number, arena.round,
+                             arena.best_streak,
+                             arena.in_run ? "" : "  (RUN ENDED)");
+                    video_draw_text(v, SX(0),
+                                    SY(SLOT_FIRST_Y + SLOT_ROW_H * i),
+                                    line, 6);
+                } else {
+                    snprintf(line, sizeof(line),
+                             "%d) CREATE A NEW COLOSSEUM COMBATANT", i);
+                    video_draw_text(v, SX(0),
+                                    SY(SLOT_FIRST_Y + SLOT_ROW_H * i),
+                                    line, 14);
+                }
+            } else if (g->char_exists[i]) {
+                Character *ch = &g->chars[i];
+                const char *race_str = (ch->race < RACE_COUNT) ? race_names[ch->race] : "???";
+                const char *class_str = (ch->class_id < CLASS_COUNT) ? class_names[ch->class_id] : "???";
+                /* WORLD right-aligns the name, race and class by copying them
+                   over fixed runs of 13, 7 and 10 spaces. */
+                memset(line, ' ', 41);
+                line[41] = 0;
+                line[0] = (char)('0' + i);
+                line[1] = ')';
+                size_t full_name = 0;
+                while (full_name < sizeof(ch->name) && ch->name[full_name]) full_name++;
+                size_t n = full_name;
+                if (n > 13) n = 13; /* Avoid reproducing the DOS buffer underflow. */
+                memcpy(line + 15 - n, ch->name + full_name - n, n);
+                if (ch->sex) memcpy(line + 15, " FEMALE", 7);
+                else memcpy(line + 15, "  MALE ", 7);
+                n = strlen(race_str); if (n > 7) n = 7;
+                memcpy(line + 29 - n, race_str, n);
+                n = strlen(class_str); if (n > 10) n = 10;
+                memcpy(line + 41 - n, class_str, n);
+                video_draw_text(v, SX(0),
+                                SY(SLOT_FIRST_Y + SLOT_ROW_H * i),
+                                line, 6);
+            } else {
+                snprintf(line, sizeof(line), "%d) SELECT TO CREATE A NEW CHARACTER", i);
+                video_draw_text(v, SX(0),
+                                SY(SLOT_FIRST_Y + SLOT_ROW_H * i),
+                                line, 14);
+            }
+        }
+
+        video_draw_text(v, SX(0), SY(1100),
+                        "0-9 SELECTS A SAVE   ESCAPE OR Q QUITS", 5);
+        video_draw_text(v, SX(0), SY(1150),
+                        "MAIN GAME AND COLOSSEUM SAVES ARE COMPLETELY SEPARATE.",
+                        8);
+        video_present(v);
+
+        /* Consume a complete DOS key.  Previously Page Down left its 0x51
+           scan byte queued, where the next pass read it as ASCII 'Q' and
+           unexpectedly quit the program. */
+        int key = input_wait_any_key(&g->input);
         if (input_poll_quit(&g->input)) return -1;
+        if (key == '\t') {
+            page = !page;
+            if (colosseum_page) *colosseum_page = page;
+            continue;
+        }
         if (key == INPUT_MOUSE_CLICK) {
             int x, y;
             if (game_mouse_click_logical(g, &x, &y)) {
+                if (y >= SY(MODE_DESCRIPTION_Y - 10) &&
+                    y < SY(SLOT_HEADER_Y - 5)) {
+                    page = !page;
+                    if (colosseum_page) *colosseum_page = page;
+                    continue;
+                }
                 for (int i = 0; i < MAX_PLAYERS; i++) {
-                    int top = SY(140 + 55 * i);
-                    int bottom = top + SY(55);
-                    if (y >= top && y < bottom) return i;
+                    int top = SY(SLOT_FIRST_Y - 15 + SLOT_ROW_H * i);
+                    int bottom = top + SY(SLOT_ROW_H);
+                    if (y >= top && y < bottom) {
+                        if (colosseum_page) *colosseum_page = page;
+                        return i;
+                    }
                 }
             }
             continue;
         }
         if (key >= '0' && key <= '9') {
+            if (colosseum_page) *colosseum_page = page;
             return key - '0';
         }
         if (key == 0x1B || key == 'q' || key == 'Q') return -1;
@@ -6615,18 +6850,22 @@ static const u8 race_stat_base[RACE_COUNT][6] = {
     {17, 5, 6,15, 7,10}, /* Ogre */
     { 4,15, 9, 6,15,18}, /* Sprite */
     { 4,18,16,10, 7,11}, /* Imp */
+    /* MW_EXTENSION: Enhanced-only races keep the original 60-point roller,
+       but begin from profiles suited to the late dungeon. */
+    {18,10,10,17, 8, 9}, /* Dragonkin */
+    { 7,17,18, 9,14,16}, /* Celestial */
 };
 
 /* Height, weight and lifespan are the final six bytes of each fourteen-byte
  * race record at DS:0150 in WORLD.EXE. */
 static const RaceBodyBase race_body_base[RACE_COUNT] = {
     { 70, 130,  65}, { 54,  80, 190}, { 48, 100, 130}, { 42,  60,  70},
-    { 38,  60, 130}, {100, 400,  54}, { 24,  20, 150}, { 78, 100, 230}
+    { 38,  60, 130}, {100, 400,  54}, { 24,  20, 150}, { 78, 100, 230},
+    { 84, 260, 320}, { 66, 105, 480}
 };
 
 static int creation_rand_scaled(Game *g, int range) {
-    if (range <= 0) return 0;
-    return (int)(((u32)game_rand(g) * (u32)range) / 0x8000u);
+    return original_rand_scaled(g, range);
 }
 
 static void roll_character_stats(Game *g, int race, u16 stats[6]) {
@@ -6751,21 +6990,78 @@ static int select_experience_mode(Game *g) {
     }
 }
 
-static int select_character_race(Game *g, const CreationText *text) {
+static int select_character_race(Game *g, const CreationText *text,
+                                 int experience_mode) {
     static const int y[12] = {0,100,150,220,320,420,520,620,720,820,920,1020};
     static const u8 color[12] = {3,4,4,5,8,8,8,8,8,8,8,8};
+    static const char *const enhanced_race_name[2] = {
+        "9) DRAGONKIN", "0) CELESTIAL"
+    };
+    static const int enhanced_race_stats[2][6] = {
+        {28, 20, 20, 27, 18, 19},
+        {17, 27, 28, 19, 24, 26}
+    };
+    static const int enhanced_stat_x[6] = {
+        225, 433, 620, 809, 1014, 1126
+    };
     video_clear(&g->video, 0);
-    for (int i = 0; i < 12; i++) creation_draw(g, 0, y[i], text->line[12 + i], color[i]);
+    if (experience_mode == MW_EXPERIENCE_ENHANCED) {
+        /* MW_EXTENSION: retain the original average-stat table and continue
+           it through rows 9 and 0.  Compacting only the vertical spacing
+           keeps the two native races in the same readable flow instead of
+           presenting them as detached labels in the header. */
+        creation_draw(g, 0, 0, text->line[12], color[0]);
+        creation_draw(g, 0, 80,
+                      "     PLEASE SELECT A RACE BY HITTING 1-9 OR 0. LISTED BELOW",
+                      color[1]);
+        creation_draw(g, 0, 135, text->line[14], color[2]);
+        creation_draw(g, 0, 205, text->line[15], color[3]);
+        for (int i = 0; i < 10; i++) {
+            int row_y = 285 + i * 82;
+            if (i < 8) {
+                creation_draw(g, 0, row_y, text->line[16 + i], 8);
+            } else {
+                int extra = i - 8;
+                char value[8];
+                /* The original name column was sized for SPRITE.  Tighten
+                   only the glyph spacing of the longer native names so the
+                   first statistic still begins at WORLD's original tab. */
+                creation_draw_fitted(g, 0, 205, row_y,
+                                     enhanced_race_name[extra], 8, 1, 1);
+                for (int stat = 0; stat < 6; stat++) {
+                    snprintf(value, sizeof(value), "%d",
+                             enhanced_race_stats[extra][stat]);
+                    creation_draw(g, enhanced_stat_x[stat], row_y,
+                                  value, 8);
+                }
+            }
+        }
+    } else {
+        for (int i = 0; i < 12; i++)
+            creation_draw(g, 0, y[i], text->line[12 + i], color[i]);
+    }
     video_present(&g->video);
     for (;;) {
         int key = creation_key(g);
         if (input_poll_quit(&g->input) || key == 0x1B) return -1;
         if (key == INPUT_MOUSE_CLICK) {
-            int row = game_mouse_row(g, 0, LOGICAL_W, SY(270), SY(100), 8);
+            int x, click_y;
+            if (!game_mouse_click_logical(g, &x, &click_y)) continue;
+            (void)x;
+            int row;
+            if (experience_mode == MW_EXPERIENCE_ENHANCED)
+                row = (click_y >= SY(260) && click_y < SY(1105)) ?
+                      (click_y - SY(260)) * 10 / (SY(1105) - SY(260)) : -1;
+            else
+                row = game_mouse_row(g, 0, LOGICAL_W, SY(270), SY(100), 8);
             if (row >= 0) return row;
             continue;
         }
         if (key >= '1' && key <= '8') return key - '1';
+        if (experience_mode == MW_EXPERIENCE_ENHANCED && key == '9')
+            return RACE_DRAGONKIN;
+        if (experience_mode == MW_EXPERIENCE_ENHANCED && key == '0')
+            return RACE_CELESTIAL;
     }
 }
 
@@ -6787,21 +7083,40 @@ static void draw_character_card(Game *g, int race, int sex,
         snprintf(line, sizeof(line), "%u", stats[i]);
         creation_draw(g, 530, 100 + i * 60, line, 6);
     }
-    creation_draw(g, 750, 100, "HEIGHT:      INCHES", 8);
-    snprintf(line, sizeof(line), "%u", height);
-    creation_draw(g, 1080, 100, line, 8);
-    creation_draw(g, 750, 170, "WEIGHT:      POUNDS", 8);
-    snprintf(line, sizeof(line), "%u", weight);
-    creation_draw(g, 1080, 170, line, 8);
-    creation_draw(g, 750, 240, "AGE:         YEARS", 8);
-    snprintf(line, sizeof(line), "%u", (unsigned)(age / MW_AGE_YEAR_UNITS));
-    creation_draw(g, 1080, 240, line, 8);
+    /* WORLD drew padded label/unit strings before painting the numeric values
+       into their gaps.  That depended on the exact 1024X768.FNT advance and
+       causes the port's fallback font to overwrite INCHES/POUNDS/YEARS.
+       Preserve the original three-column presentation with explicit stops. */
+    static const char *const measure_label[3] = {
+        "HEIGHT:", "WEIGHT:", "AGE:"
+    };
+    static const char *const measure_unit[3] = {
+        "INCHES", "POUNDS", "YEARS"
+    };
+    const unsigned measure_value[3] = {
+        height, weight, (unsigned)(age / MW_AGE_YEAR_UNITS)
+    };
+    static const int measure_y[3] = {100, 170, 240};
+    for (int i = 0; i < 3; i++) {
+        creation_draw(g, 750, measure_y[i], measure_label[i], 8);
+        snprintf(line, sizeof(line), "%u", measure_value[i]);
+        creation_draw(g, 990, measure_y[i], line, 8);
+        creation_draw(g, 1160, measure_y[i], measure_unit[i], 8);
+    }
     if (show_choices) {
         creation_draw(g, 190, 700, "Y) KEEP THIS CHARACTER", 4);
         creation_draw(g, 190, 770, "N) ROLL A NEW CHARACTER", 4);
         creation_draw(g, 190, 840, "D) DESIGN YOUR OWN CHARACTER", 4);
         creation_draw(g, 190, 1100, "PLEASE SELECT ONE OF THE ABOVE", 4);
     }
+}
+
+void game_draw_character_card_test(Game *g) {
+    static const u16 stats[6] = {28, 20, 20, 27, 18, 19};
+    if (!g) return;
+    draw_character_card(g, RACE_DRAGONKIN, 0, stats,
+                        82, 198, 148u * MW_AGE_YEAR_UNITS, 1);
+    video_present(&g->video);
 }
 
 static int design_character_stats(Game *g, int race, int sex, u16 stats[6],
@@ -6912,25 +7227,73 @@ static int read_character_name(Game *g, int race, int sex, const u16 stats[6],
     }
 }
 
-static int select_character_class(Game *g, const CreationText *text, const char *name) {
-    static const int x0[16] = {
+static int select_character_class(Game *g, const CreationText *text,
+                                  const char *name, int experience_mode) {
+    static const int classic_x0[16] = {
         0,0,90,0,90,0,90,0,90,0,90,0,90,90,0,90
     };
-    static const int y[16] = {
+    static const int classic_y[16] = {
         480,550,590,640,680,730,770,820,860,910,950,1000,1040,1080,1125,1165
     };
-    static const u8 color[16] = {2,3,3,4,4,5,5,6,6,8,8,7,7,7,2,2};
-    video_fill_rect(&g->video, 0, SY(670), LOGICAL_W, LOGICAL_H - SY(670), 0);
+    static const u8 classic_color[16] = {
+        2,3,3,4,4,5,5,6,6,8,8,7,7,7,2,2
+    };
+    static const int enhanced_indent[20] = {
+        0, 0,90, 0,90, 0,90, 0,90, 0,90,
+        0,90,90, 0,90, 0,90, 0,90
+    };
+    static const u8 enhanced_color[20] = {
+        2, 3,3, 4,4, 5,5, 6,6, 8,8,
+        7,7,7, 2,2, 10,10, 11,11
+    };
+    static const int enhanced_class_for_line[20] = {
+        -1, 0,0, 1,1, 2,2, 3,3, 4,4,
+         5,5,5, 6,6, 7,7, 8,8
+    };
+    static const char *const enhanced_extra[4] = {
+        "8) SPELLBLADE: MARTIAL WIZARD WHO MIXES STRONG WEAPONS WITH OFFENSIVE",
+        "SPELLS. HARD TO START; NEEDS HIGH STRENGTH, INTELLIGENCE AND AGILITY.",
+        "9) PALADIN: ARMORED PRIEST WHO COMBINES WEAPONS WITH DEFENSIVE MAGIC.",
+        "POWERFUL BUT SLOW TO LEARN; NEEDS HIGH WISDOM AND CONSTITUTION."
+    };
+
+    video_fill_rect(&g->video, 0,
+                    SY(experience_mode == MW_EXPERIENCE_ENHANCED ? 450 : 670),
+                    LOGICAL_W,
+                    LOGICAL_H - SY(experience_mode == MW_EXPERIENCE_ENHANCED ?
+                                   450 : 670), 0);
     creation_draw_fitted(g, 700, 880, 310, "NAME:", 8, 1, 1);
     creation_draw_fitted(g, 910, 910 + (int)strlen(name) * 36, 310,
                          name, 8, 1, 1);
-    for (int i = 0; i < 16; i++) {
-        /* The heading uses font 1; the explanatory rows use the smaller
-           font 0 in the DOS executable. */
-        int sn = i == 0 ? 1 : 3;
-        int sd = i == 0 ? 1 : 4;
-        creation_draw_fitted(g, x0[i], i == 0 ? 1500 : 1600, y[i],
-                             text->line[24 + i], color[i], sn, sd);
+    if (experience_mode == MW_EXPERIENCE_ENHANCED) {
+        /* MW_EXTENSION: fit all nine choices into the same continuous flow
+           used by ROLL.TXT.  The two new classes are full description pairs,
+           not labels floating above Steve Moraff's original seven entries. */
+        for (int i = 0; i < 20; i++) {
+            const char *line;
+            int source_y = i == 0 ? 460 : 520 + (i - 1) * 34;
+            if (i == 0)
+                line = "PLEASE SELECT A CLASS BY HITTING A NUMBER 1-9:";
+            else if (i <= 15)
+                line = text->line[24 + i];
+            else
+                line = enhanced_extra[i - 16];
+            creation_draw_fitted(g, enhanced_indent[i],
+                                 i == 0 ? 1500 : 1600,
+                                 source_y, line, enhanced_color[i],
+                                 i == 0 ? 1 : 3,
+                                 i == 0 ? 1 : 5);
+        }
+    } else {
+        for (int i = 0; i < 16; i++) {
+            /* The heading uses font 1; the explanatory rows use the smaller
+               font 0 in the DOS executable. */
+            int sn = i == 0 ? 1 : 3;
+            int sd = i == 0 ? 1 : 4;
+            creation_draw_fitted(g, classic_x0[i],
+                                 i == 0 ? 1500 : 1600, classic_y[i],
+                                 text->line[24 + i], classic_color[i], sn, sd);
+        }
     }
     video_present(&g->video);
     for (;;) {
@@ -6940,14 +7303,55 @@ static int select_character_class(Game *g, const CreationText *text, const char 
             static const int top[7] = {530,620,710,800,890,980,1100};
             static const int bottom[7] = {620,710,800,890,980,1100,1200};
             int x, click_y;
-            if (game_mouse_click_logical(g, &x, &click_y))
+            if (!game_mouse_click_logical(g, &x, &click_y)) continue;
+            if (experience_mode == MW_EXPERIENCE_ENHANCED) {
+                for (int i = 1; i < 20; i++) {
+                    int source_y = 520 + (i - 1) * 34;
+                    int next_y = i == 19 ? 1200 : source_y + 34;
+                    if (click_y >= SY(source_y - 8) &&
+                        click_y < SY(next_y))
+                        return enhanced_class_for_line[i];
+                }
+            } else {
                 for (int i = 0; i < 7; i++)
                     if (click_y >= SY(top[i]) && click_y < SY(bottom[i]))
                         return i;
+            }
             continue;
         }
         if (key >= '1' && key <= '7') return key - '1';
+        if (experience_mode == MW_EXPERIENCE_ENHANCED && key == '8')
+            return CLASS_SPELLBLADE;
+        if (experience_mode == MW_EXPERIENCE_ENHANCED && key == '9')
+            return CLASS_PALADIN;
     }
+}
+
+void game_draw_character_races_test(Game *g) {
+    CreationText text;
+    if (!g || !load_creation_text(g, &text)) return;
+    Input saved_input = g->input;
+    g->input.head = 0;
+    g->input.tail = 1;
+    g->input.quit_requested = 0;
+    g->input.keys[0] = 0x1B;
+    video_clear(&g->video, 0);
+    (void)select_character_race(g, &text, MW_EXPERIENCE_ENHANCED);
+    g->input = saved_input;
+}
+
+void game_draw_character_classes_test(Game *g) {
+    CreationText text;
+    if (!g || !load_creation_text(g, &text)) return;
+    Input saved_input = g->input;
+    g->input.head = 0;
+    g->input.tail = 1;
+    g->input.quit_requested = 0;
+    g->input.keys[0] = 0x1B;
+    video_clear(&g->video, 0);
+    (void)select_character_class(g, &text, "ENHANCED TEST",
+                                 MW_EXPERIENCE_ENHANCED);
+    g->input = saved_input;
 }
 
 static float starting_spell_points(const Character *p) {
@@ -6959,6 +7363,8 @@ static float starting_spell_points(const Character *p) {
     case CLASS_WIZARD: return (float)((intelligence * 2 + wisdom) / 7);
     case CLASS_PRIEST: return (float)((wisdom * 2 + intelligence) / 8);
     case CLASS_SAGE: return (float)((wisdom + intelligence) / 18);
+    case CLASS_SPELLBLADE: return (float)((intelligence * 2 + wisdom) / 10);
+    case CLASS_PALADIN: return (float)((wisdom * 2 + intelligence) / 10);
     default: return (float)((intelligence * 2 + wisdom) / 12);
     }
 }
@@ -6974,10 +7380,10 @@ static void grant_starting_spells(Character *p) {
     if (p->class_id == CLASS_FIGHTER) return;
     p->spells[SPELL_CAT_PREPARATION][2] = 1; /* Little Cure */
     if (p->class_id == CLASS_WIZARD || p->class_id == CLASS_SAGE ||
-        p->class_id == CLASS_MAGE)
+        p->class_id == CLASS_MAGE || p->class_id == CLASS_SPELLBLADE)
         p->spells[SPELL_CAT_WIZARD][1] = 1; /* Magic Zap */
     if (p->class_id == CLASS_WORSHIPPER || p->class_id == CLASS_PRIEST ||
-        p->class_id == CLASS_SAGE)
+        p->class_id == CLASS_SAGE || p->class_id == CLASS_PALADIN)
         p->spells[SPELL_CAT_PRIEST][2] = 1; /* Strength */
 }
 
@@ -7015,7 +7421,7 @@ static int character_creation_self_test(void) {
         }
     }
 
-    static const int expected_spells[CLASS_COUNT] = {0, 2, 120, 2, 2, 3, 2};
+    static const int expected_spells[CLASS_COUNT] = {0, 2, 120, 2, 2, 3, 2, 2, 2};
     for (int class_id = 0; class_id < CLASS_COUNT; class_id++) {
         Character p = {0};
         p.class_id = (u8)class_id;
@@ -7041,7 +7447,8 @@ static int character_creation_self_test(void) {
     return failures;
 }
 
-static int create_character(Game *g, Character *p) {
+static int create_character(Game *g, Character *p,
+                            int forced_experience_mode) {
     CreationText text;
     if (!load_creation_text(g, &text)) {
         video_clear(&g->video, 0);
@@ -7052,9 +7459,10 @@ static int create_character(Game *g, Character *p) {
         return 0;
     }
     if (!show_creation_intro(g, &text)) return 0;
-    int experience_mode = select_experience_mode(g);
+    int experience_mode = forced_experience_mode >= 0 ?
+                          forced_experience_mode : select_experience_mode(g);
     if (experience_mode < 0) return 0;
-    int race = select_character_race(g, &text);
+    int race = select_character_race(g, &text, experience_mode);
     if (race < 0) return 0;
     int sex;
     u16 height, weight;
@@ -7082,7 +7490,7 @@ static int create_character(Game *g, Character *p) {
 
     char name[20];
     if (!read_character_name(g, race, sex, stats, height, weight, age, name)) return 0;
-    int class_id = select_character_class(g, &text, name);
+    int class_id = select_character_class(g, &text, name, experience_mode);
     if (class_id < 0) return 0;
 
     memset(p, 0, sizeof(*p));
@@ -7560,9 +7968,9 @@ void game_max_character(Game *g, Character *player) {
     player->eff_battle_str = turn_cap;
     player->eff_battle_spd = turn_cap;
     player->eff_slow_mon = turn_cap;
-    player->eff_pwr_weapon = 3;
+    player->eff_pwr_weapon = enhanced ? 6 : 3;
     player->eff_pwr_wpn_turns = turn_cap;
-    player->eff_protect_lv = enhanced ? 8 : 5;
+    player->eff_protect_lv = enhanced ? 10 : 5;
     player->eff_protect_turns = turn_cap;
     player->eff_resist_poison = turn_cap;
     player->eff_resist_disease = turn_cap;
@@ -7643,6 +8051,112 @@ static void debug_teleport_to_town(Game *g, Character *player) {
                            "YOU ARE NOW ON FLOOR ZERO.", 4);
 }
 
+static int confirm_quest_boss_warp(Game *g, Character *player,
+                                   const char *boss_name) {
+    const int pane_w = SX(0x2D3), pane_h = SY(0x1AE);
+    char line[96];
+    game_draw_exploration_base(g, player);
+    video_fill_rect(&g->video, 0, 0, pane_w, pane_h, 0);
+    int y = draw_combat_message(&g->video, 0, pane_h,
+                                "WARP TO THIS FLOOR'S QUEST BOSS?", 12);
+    snprintf(line, sizeof(line), "TARGET: %s.", boss_name);
+    y = draw_combat_message(&g->video, y, pane_h, line, 15);
+    draw_combat_message(&g->video, y, pane_h,
+                        "PRESS Y TO WARP OR N TO CANCEL.", 4);
+    video_present(&g->video);
+    for (;;) {
+        int key = input_getch(&g->input);
+        if (input_poll_quit(&g->input) || key == 0x1B ||
+            key == 'n' || key == 'N')
+            return 0;
+        if (key == 'y' || key == 'Y') return 1;
+        if (key == 0) (void)input_getch(&g->input);
+    }
+}
+
+static void debug_warp_to_quest_boss(Game *g, Character *player) {
+    int type = quest_boss_type(g, g->cur_floor);
+    if (type < 0) {
+        show_runtime_indicator(g, player, "NO ACTIVE QUEST BOSS HERE.",
+            "THIS FLOOR HAS NO UNDEFEATED QUEST BOSS.", 8);
+        return;
+    }
+    if (g->monster_layer < 0)
+        select_monster_floor(g, g->cur_floor);
+    if (g->monster_layer < 0) {
+        show_runtime_indicator(g, player, "QUEST BOSS NOT AVAILABLE.",
+            "THIS FLOOR'S MONSTER LAYER COULD NOT BE LOADED.", 8);
+        return;
+    }
+    int boss = -1;
+    for (int i = 0; i < MONSTERS_PER_FLOOR; i++) {
+        MonsterRecord *m = &g->monster_map[g->monster_layer][i];
+        if (monster_record_alive(g, m) && m->type == type) {
+            boss = i;
+            break;
+        }
+    }
+    if (boss < 0) {
+        show_runtime_indicator(g, player, "QUEST BOSS NOT FOUND.",
+            "REENTER THIS FLOOR TO REBUILD ITS MONSTER RECORDS.", 8);
+        return;
+    }
+    if (!confirm_quest_boss_warp(g, player, monster_types[type].name)) {
+        show_runtime_indicator(g, player, "QUEST-BOSS WARP CANCELLED.",
+                               "YOUR LOCATION IS UNCHANGED.", 8);
+        return;
+    }
+
+    MonsterRecord *m = &g->monster_map[g->monster_layer][boss];
+    static const int ox[4] = {0, 0, -1, 1};
+    static const int oy[4] = {-1, 1, 0, 0};
+    static const int face[4] = {1, 0, 3, 2};
+    int found = -1;
+    for (int i = 0; i < 4; i++) {
+        int x = (int)m->x + ox[i], y = (int)m->y + oy[i];
+        if (x < 0 || x >= MAP_W || y < 0 || y >= MAP_H ||
+            rock_cell_at(g, x, y, g->cur_floor) ||
+            game_find_monster(g, x, y) >= 0 ||
+            edge_between_cells(g, x, y, m->x, m->y) != 3)
+            continue;
+        g->cur_x = x;
+        g->cur_y = y;
+        g->last_move_dir = face[i];
+        found = i;
+        break;
+    }
+    if (found < 0) {
+        show_runtime_indicator(g, player, "QUEST-BOSS WARP FAILED.",
+            "THE BOSS HAS NO SAFE OPEN APPROACH CELL.", 8);
+        return;
+    }
+    player->x_pos = (u16)g->cur_x;
+    player->y_pos = (u16)g->cur_y;
+    player->facing_dir = (u16)g->last_move_dir;
+    reveal_around_player(g);
+    g->monster_adjacent = 1;
+    show_runtime_indicator(g, player, "QUEST-BOSS WARP COMPLETE.",
+                           "THE BOSS IS NOW DIRECTLY IN FRONT OF YOU.", 4);
+}
+
+static void debug_randomize_floor_look(Game *g, Character *player) {
+    char line[96];
+    /* The two original WALL.PIC records are semantic stone/door surfaces,
+       so doors must not be exchanged for stone.  Randomize the complete
+       77-floor DAC cycle and the stone surface's sampling phase instead. */
+    g->palette_floor_override = game_rand(g) % 77;
+    g->wall_texture_offset = (game_rand(g) % 8) * 32;
+    g->wall_color_r = (u8)((game_rand(g) % 4) * 0x10);
+    g->wall_color_g = (u8)((game_rand(g) % 4) * 0x10);
+    g->wall_color_b = (u8)((game_rand(g) % 4) * 0x10);
+    game_refresh_world_palette(g);
+    snprintf(line, sizeof(line), "PALETTE %d OF 77 - TEXTURE PHASE %d OF 8.",
+             g->palette_floor_override + 1,
+             g->wall_texture_offset / 32 + 1);
+    show_runtime_indicator(g, player, "FLOOR APPEARANCE RANDOMIZED.",
+                           line, 4);
+}
+
 static void reroll_dungeon(Game *g, Character *player) {
     if (!confirm_dungeon_reroll(g, player)) {
         show_runtime_indicator(g, player, "DUNGEON REROLL CANCELLED.",
@@ -7668,9 +8182,18 @@ static int game_try_step(Game *g, Character *player, int direction) {
     int ny = g->cur_y + dy[direction];
     g->last_move_dir = direction;
     if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) {
-        mw_audio_play(&g->audio, MW_SFX_BLOCKED);
-        show_movement_block(g, player, "THE EDGE OF THE MAP BLOCKS YOU");
-        return 0;
+        if (g->cheat_noclip) {
+            /* The finite DUNG.BIN grid cannot represent an infinite void.
+               Noclip therefore crosses an outer edge without blocking and
+               re-enters at the opposite edge, preserving valid save/map
+               coordinates while providing genuinely unbounded movement. */
+            nx = (nx % MAP_W + MAP_W) % MAP_W;
+            ny = (ny % MAP_H + MAP_H) % MAP_H;
+        } else {
+            mw_audio_play(&g->audio, MW_SFX_BLOCKED);
+            show_movement_block(g, player, "THE EDGE OF THE MAP BLOCKS YOU");
+            return 0;
+        }
     }
     if (!g->cheat_noclip &&
         !game_can_move(g, g->cur_x, g->cur_y, nx, ny)) {
@@ -7682,7 +8205,7 @@ static int game_try_step(Game *g, Character *player, int direction) {
     int edge = g->cheat_noclip ? 3 :
                edge_between_cells(g, g->cur_x, g->cur_y, nx, ny);
     int monster = game_find_monster(g, nx, ny);
-    if (monster >= 0 && edge != 3) {
+    if (!g->cheat_noclip && monster >= 0 && edge != 3) {
         /* Both visible and secret doors auto-open only when their destination
          * can be occupied.  WORLD has a distinct message for edge type 2. */
         mw_audio_play(&g->audio, MW_SFX_BLOCKED);
@@ -7691,7 +8214,7 @@ static int game_try_step(Game *g, Character *player, int direction) {
                                       : "THE DOOR IS JAMMED");
         return 0;
     }
-    if (monster >= 0) {
+    if (!g->cheat_noclip && monster >= 0) {
         /* WORLD cancels the movement delta when the destination is occupied.
          * Walking into a visible monster never invokes combat; F is the
          * keyboard fight command (and clicking that monster's viewport is
@@ -7753,6 +8276,111 @@ void game_draw_exploration(Game *g, Character *player) {
     game_draw_exploration_base(g, player);
 }
 
+static void draw_arena_centered(Game *g, int y, const char *text, u8 color,
+                                int scale_num, int scale_den) {
+    int advance = g->video.font_advance > 0 ? g->video.font_advance : 12;
+    int width = (int)strlen(text) * advance * scale_num / scale_den;
+    video_draw_text_scaled(&g->video, (LOGICAL_W - width) / 2, y, text,
+                           color, scale_num, scale_den);
+}
+
+/* MW_EXTENSION: the Colosseum is intentionally a distinct presentation from
+   WORLD's four dungeon panes.  It still uses the real monster PIC art and the
+   shared combat engine, but stages the current challenger on a sand floor. */
+static void game_draw_arena_combat(Game *g, Character *player,
+                                   int monster_type, int monster_level,
+                                   int monster_hp, const char *msg1,
+                                   const char *msg2, const char *msg3) {
+    Video *v = &g->video;
+    video_load_vga_default_palette(v);
+    video_set_palette(v, 1, 35, 25, 65);
+    video_set_palette(v, 5, 180, 66, 30);
+    video_set_palette(v, 6, 205, 138, 45);
+    video_set_palette(v, 7, 185, 175, 155);
+    video_set_palette(v, 8, 35, 235, 65);
+    video_set_palette(v, 13, 55, 42, 35);
+    video_set_palette(v, 14, 255, 205, 45);
+    video_clear(v, 0);
+
+    /* Stadium tiers and a deterministic VGA crowd. */
+    video_fill_rect(v, 0, 76, LOGICAL_W, 258, 1);
+    for (int y = 100; y < 320; y += 22) {
+        video_hline(v, 0, y, LOGICAL_W, (y / 22) & 1 ? 5 : 13);
+        for (int x = 12 + (y & 15); x < LOGICAL_W; x += 31) {
+            int color = 2 + ((x * 5 + y * 3) % 13);
+            video_fill_rect(v, x, y - 9, 5, 5, (u8)color);
+        }
+    }
+    video_fill_rect(v, 0, 328, LOGICAL_W, 10, 7);
+
+    /* Elliptical sand and its bright inner boundary. */
+    const int cx = LOGICAL_W / 2, cy = 540, rx = 485, ry = 225;
+    for (int y = cy - ry; y <= cy + ry; y++) {
+        double dy = (double)(y - cy) / (double)ry;
+        int half = (int)(rx * sqrt(fmax(0.0, 1.0 - dy * dy)));
+        video_hline(v, cx - half, y, half * 2 + 1, 6);
+        if (half > 4 && (y == cy - ry || y == cy + ry ||
+                         ((y - (cy - ry)) % 28) == 0))
+            video_hline(v, cx - half, y, half * 2 + 1, 14);
+    }
+
+    char line[160];
+    snprintf(line, sizeof(line), "COLOSSEUM  ROUND %u%s",
+             g->arena_round, g->arena_champion ? "  -  CHAMPION" : "");
+    draw_arena_centered(g, 14, line, g->arena_champion ? 14 : 8, 1, 1);
+    snprintf(line, sizeof(line), "STREAK %u   CAREER BEST %u",
+             g->arena_streak, g->arena_best);
+    draw_arena_centered(g, 50, line, 15, 3, 4);
+
+    if (monster_hp > 0) {
+        int pic = get_monster_pic_index_ext(monster_type);
+        if (pic < 2) pic = 2;
+        draw_pic_billboard(g, pic, cx, 172, 410, 0.12f,
+                           120, 82, LOGICAL_W - 240, 570, NULL,
+                           get_monster_color_ext(monster_type),
+                           get_monster_tint_ext(monster_type));
+    }
+
+    const char *monster_name = monster_type >= 0 &&
+                               monster_type < MONSTER_TYPE_COUNT ?
+                               monster_types[monster_type].name : "UNKNOWN";
+    snprintf(line, sizeof(line), "%s  LEVEL %d  HP %d",
+             monster_name, monster_level, monster_hp > 0 ? monster_hp : 0);
+    draw_arena_centered(g, 100, line, 14, 3, 4);
+
+    video_fill_rect(v, 12, 590, 420, 122, 0);
+    snprintf(line, sizeof(line), "%s  LEVEL %u", player->name,
+             player->level);
+    video_draw_text_scaled(v, 24, 600, line, 8, 3, 4);
+    snprintf(line, sizeof(line), "HP %u/%u   SP %.0f/%.0f",
+             mw_hp_cur(player), mw_hp_max(player),
+             player->sp_cur, player->sp_max);
+    video_draw_text_scaled(v, 24, 638, line, 15, 3, 4);
+    snprintf(line, sizeof(line), "%s / %s",
+             player->equipped_weapon < WEAPON_STAT_COUNT ?
+                 weapon_stats[player->equipped_weapon].name : "UNKNOWN",
+             combat_armor_name(player->equipped_armor));
+    video_draw_text_scaled(v, 24, 676, line, 7, 3, 4);
+
+    video_fill_rect(v, 444, 590, 568, 122, 0);
+    int message_y = 598;
+    if (msg1 && msg1[0]) {
+        video_draw_text_scaled(v, 458, message_y, msg1, 15, 3, 4);
+        message_y += 36;
+    }
+    if (msg2 && msg2[0]) {
+        video_draw_text_scaled(v, 458, message_y, msg2, 15, 3, 4);
+        message_y += 36;
+    }
+    if (msg3 && msg3[0])
+        video_draw_text_scaled(v, 458, message_y, msg3, 15, 3, 4);
+
+    video_fill_rect(v, 0, 720, LOGICAL_W, 48, 0);
+    draw_arena_centered(g, 729,
+        "F FIGHT  C CAST  I ITEM  W WEAPON  A ARMOR  V STATS  H HELP",
+        8, 3, 4);
+}
+
 /* Original combat never changes to a separate full-screen scene.  The normal
  * four-view exploration frame stays in place, the engaged monster grows in
  * its compass pane, and messages occupy the otherwise-black upper-left pane. */
@@ -7761,6 +8389,11 @@ void game_draw_combat_overlay(Game *g, Character *player,
                               int monster_level, int monster_hp,
                               const char *msg1, const char *msg2,
                               const char *msg3) {
+    if (g->arena_active) {
+        game_draw_arena_combat(g, player, monster_type, monster_level,
+                               monster_hp, msg1, msg2, msg3);
+        return;
+    }
     static const char *dir_name[4] = {"NORTH", "SOUTH", "WEST", "EAST"};
     const ViewLayout *layout = &view_layouts[g->view_mode % 3];
     const ViewRect *pane[4] = {
@@ -8126,12 +8759,38 @@ title_screen:
      * to the slot list without creating or overwriting a save. */
     int slot;
     Character *player;
+    int colosseum_page = 0;
     for (;;) {
-        slot = player_select_screen(g);
+        slot = player_select_screen(g, &colosseum_page);
         if (slot < 0) return;
+        if (colosseum_page) {
+            ArenaSave arena;
+            if (arena_load_save(g, slot, &arena) != 0) {
+                Character created;
+                if (!create_character(g, &created,
+                                      MW_EXPERIENCE_ENHANCED)) {
+                    if (input_poll_quit(&g->input)) return;
+                    continue;
+                }
+                arena_initialize_save(&arena, &created);
+                if (arena_save_save(g, slot, &arena) != 0) {
+                    video_clear(v, 0);
+                    video_draw_text(v, SX(0), SY(0),
+                        "COULD NOT CREATE THE COLOSSEUM SAVE.", 12);
+                    video_draw_text(v, SX(0), SY(70),
+                        "CHECK THAT THIS DIRECTORY IS WRITABLE.", 15);
+                    video_present(v);
+                    input_wait_any_key(&g->input);
+                    continue;
+                }
+            }
+            arena_run(g, slot, &arena);
+            if (input_poll_quit(&g->input)) return;
+            continue;
+        }
         player = &g->chars[slot];
         if (g->char_exists[slot]) break;
-        if (create_character(g, player)) {
+        if (create_character(g, player, -1)) {
             g->char_exists[slot] = 1;
             game_save_character(g, slot);
             /* Reusing an empty slot starts a genuinely new monster record,
@@ -8240,6 +8899,12 @@ title_screen:
 
         if (key == INPUT_MAX_CHARACTER) {
             game_debug_max_character(g, player);
+        } else if (key == INPUT_BATTLE_SIMULATOR) {
+            battle_simulator_run(g, player);
+        } else if (key == INPUT_RANDOMIZE_FLOOR) {
+            debug_randomize_floor_look(g, player);
+        } else if (key == INPUT_QUEST_BOSS_WARP) {
+            debug_warp_to_quest_boss(g, player);
         } else if (key == INPUT_MODEL_VIEWER) {
             model_viewer_run(g);
         } else if (key == INPUT_DUNGEON_REROLL) {
@@ -8265,7 +8930,7 @@ title_screen:
             g->cheat_noclip = !g->cheat_noclip;
             show_runtime_indicator(g, player,
                 g->cheat_noclip ? "NOCLIP: ON" : "NOCLIP: OFF",
-                g->cheat_noclip ? "WALL AND ROCK COLLISION IS DISABLED."
+                g->cheat_noclip ? "ALL COLLISION IS OFF; MAP EDGES WRAP."
                                 : "NORMAL DUNGEON COLLISION RESTORED.",
                 g->cheat_noclip ? 4 : 8);
         } else if (key == INPUT_WILDERNESS_TEST) {

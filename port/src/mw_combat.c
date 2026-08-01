@@ -341,9 +341,13 @@ int combat_weapon_allowed(const Character *player, int weapon) {
     if (weapon >= 13)
         return player->class_id == CLASS_FIGHTER ||
                player->class_id == CLASS_PRIEST ||
-               player->class_id == CLASS_MAGE;
+               player->class_id == CLASS_MAGE ||
+               player->class_id == CLASS_SPELLBLADE ||
+               player->class_id == CLASS_PALADIN;
     switch (player->class_id) {
     case CLASS_FIGHTER:
+    case CLASS_SPELLBLADE:
+    case CLASS_PALADIN:
         return 1;
     case CLASS_WORSHIPPER:
     case CLASS_MONK:
@@ -368,11 +372,15 @@ int combat_armor_allowed(const Character *player, int armor) {
                player->class_id == CLASS_MONK ||
                player->class_id == CLASS_PRIEST ||
                player->class_id == CLASS_SAGE ||
-               player->class_id == CLASS_MAGE;
+               player->class_id == CLASS_MAGE ||
+               player->class_id == CLASS_SPELLBLADE ||
+               player->class_id == CLASS_PALADIN;
     if (armor >= 9)
         return player->class_id == CLASS_FIGHTER ||
                player->class_id == CLASS_PRIEST ||
-               player->class_id == CLASS_MAGE;
+               player->class_id == CLASS_MAGE ||
+               player->class_id == CLASS_SPELLBLADE ||
+               player->class_id == CLASS_PALADIN;
     if (player->class_id == CLASS_WORSHIPPER ||
         player->class_id == CLASS_WIZARD)
         return 0;
@@ -406,7 +414,7 @@ typedef struct {
     int param2;
 } BattleSpellDef;
 
-/* Wizard battle spells: the original 30 followed by ten Enhanced entries. */
+/* Wizard battle spells: the original 30 followed by fifteen Enhanced entries. */
 static const BattleSpellDef wiz_spells[MW_ENHANCED_SPELL_COUNT] = {
     /* L1 */ {BS_SLEEP,0,0},        {BS_DAMAGE_SCALE,2,2},   {BS_BUFF_PROTECT,1,0},
     /* L2 */ {BS_BUFF_SLOW,0,0},    {BS_BUFF_STR,0,0},       {BS_DAMAGE_FIXED,25,0},
@@ -423,10 +431,13 @@ static const BattleSpellDef wiz_spells[MW_ENHANCED_SPELL_COUNT] = {
               {BS_DAMAGE_RANGE,15000,30000},
     /* L13*/ {BS_STOP,120,0},       {BS_DAMAGE_PERCENT,40,25000},
               {BS_DAMAGE_SCALE,50,2000},
-    /* L14*/ {BS_DAMAGE_RANGE,60000,120000},
+    /* L14*/ {BS_DAMAGE_RANGE,60000,120000},{BS_POWER_WEAPON,4,0},
+              {BS_DAMAGE_PERCENT,60,50000},
+    /* L15*/ {BS_POWER_WEAPON,5,0},{BS_DAMAGE_RANGE,200000,400000},
+              {BS_POWER_WEAPON,6,0},
 };
 
-/* Priest battle spells: the original 30 followed by ten Enhanced entries. */
+/* Priest battle spells: the original 30 followed by fifteen Enhanced entries. */
 static const BattleSpellDef priest_spells[MW_ENHANCED_SPELL_COUNT] = {
     /* L1 */ {BS_SLEEP,0,0},        {BS_BUFF_PROTECT,1,0},   {BS_BUFF_STR,0,0},
     /* L2 */ {BS_RESIST_POISON,0,0},{BS_BUFF_SPD,0,0},       {BS_HEAL_FIXED,20,0},
@@ -443,7 +454,10 @@ static const BattleSpellDef priest_spells[MW_ENHANCED_SPELL_COUNT] = {
               {BS_LIFE_CONVERGENCE,10,2000},
     /* L13*/ {BS_AEGIS,8,1200},     {BS_DAMAGE_RANGE,12000,26000},
               {BS_PHOENIX_PRAYER,7,300},
-    /* L14*/ {BS_DAMAGE_PERCENT,50,30000},
+    /* L14*/ {BS_DAMAGE_PERCENT,50,30000},{BS_POWER_WEAPON,4,0},
+              {BS_PHOENIX_PRAYER,8,1200},
+    /* L15*/ {BS_POWER_WEAPON,5,0},{BS_DAMAGE_PERCENT,75,100000},
+              {BS_POWER_WEAPON,6,0},
 };
 
 /* Spell names (same arrays as in mw_game.c, duplicated here for self-containment) */
@@ -462,6 +476,8 @@ static const char *wiz_spell_names[MW_ENHANCED_SPELL_COUNT] = {
     "SOUL REND","OBLIVION",
     "STARFIRE","CHRONO LOCK","REALITY RUPTURE",
     "MANA TEMPEST","ANNIHILATION",
+    "POWER WEAPON IV","COSMIC IMPLOSION","POWER WEAPON V",
+    "END OF AGES","POWER WEAPON VI",
 };
 
 static const char *priest_spell_names[MW_ENHANCED_SPELL_COUNT] = {
@@ -479,6 +495,8 @@ static const char *priest_spell_names[MW_ENHANCED_SPELL_COUNT] = {
     "CELESTIAL STASIS","FINAL JUDGMENT",
     "LIFE CONVERGENCE","ETERNAL WARD","WRATH OF HEAVEN",
     "PHOENIX PRAYER","DIVINE VERDICT",
+    "POWER WEAPON IV","SERAPHIC REPRIEVE","POWER WEAPON V",
+    "CREATION'S WRATH","POWER WEAPON VI",
 };
 
 static const char *permanent_spell_names[MW_ENHANCED_SPELL_COUNT] = {
@@ -496,7 +514,10 @@ static const char *permanent_spell_names[MW_ENHANCED_SPELL_COUNT] = {
     "BODY ARMOR LEVEL 100","WRITE DEEP SCROLL","CHARGE DEEP WAND",
     "ENCHANT WEAPON LEVEL 500","ENCHANT ARMOR LEVEL 350",
     "BODY ARMOR LEVEL 300","WRITE ASCENDANT SCROLL",
-    "CHARGE ASCENDANT WAND"
+    "CHARGE ASCENDANT WAND",
+    "ENCHANT WEAPON LEVEL 1000","ENCHANT ARMOR LEVEL 750",
+    "BODY ARMOR LEVEL 650","WRITE MYTHIC SCROLL",
+    "CHARGE MYTHIC WAND"
 };
 
 static const char *preparation_spell_names[MW_ENHANCED_SPELL_COUNT] = {
@@ -513,7 +534,9 @@ static const char *preparation_spell_names[MW_ENHANCED_SPELL_COUNT] = {
     "ABYSS DESCEND","ABYSS ASCEND","DEEP SANCTUARY",
     "CARTOGRAPHER'S EYE","TOWN PORTAL",
     "RIFT DESCEND","RIFT ASCEND","ETERNAL SANCTUARY",
-    "WORLD REVEAL","SOUL ANCHOR"
+    "WORLD REVEAL","SOUL ANCHOR",
+    "TITAN DESCEND","TITAN ASCEND","MYTHIC SANCTUARY",
+    "ASTRAL FORM","PERFECT VITALITY"
 };
 
 static const char *const *spell_names_for_category(int category) {
@@ -542,7 +565,7 @@ enum {
 };
 
 /* MW_EXTENSION: the Enhanced roster previously had only melee/breath
- * specials.  Its magical creatures now use the same named level 11-14
+ * specials.  Its magical creatures now use the same named level 11-15
  * battle catalog earned by the player.  Brute silhouettes deliberately
  * retain physical-only identities, while spellcasters become more frequent
  * and more dangerous toward floor 1000. */
@@ -603,10 +626,10 @@ late_monster_spell_profiles[LATE_CASTER_COUNT] = {
     [172 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 39, 3},
     [173 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 39, 3},
 
-    [174 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 37, 2},
-    [175 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 39, 2},
-    [176 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 39, 2},
-    [177 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 39, 2},
+    [174 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 41, 2},
+    [175 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 43, 2},
+    [176 - LATE_CASTER_FIRST] = {SPELL_CAT_PRIEST, 43, 2},
+    [177 - LATE_CASTER_FIRST] = {SPELL_CAT_WIZARD, 43, 2},
 };
 
 static const MonsterSpellProfile *monster_spell_profile(int type) {
@@ -1042,16 +1065,31 @@ void combat_init_entity(Game *g, CombatState *cs, int entity_index) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   Get effective weapon index (handles Power Weapon spell override)
+   Get effective weapon die (handles Power Weapon spell override)
    MW_PORT: select_weapon and weapon_effect/func_11B18.
    ══════════════════════════════════════════════════════════════════════ */
 
-static int get_effective_weapon(const Character *p) {
-    if (p->eff_pwr_weapon > 0 && p->eff_pwr_weapon <= 3)
-        return 8 + p->eff_pwr_weapon;
-    int wpn = p->equipped_weapon;
-    if (wpn >= WEAPON_STAT_COUNT) wpn = 0;
-    return wpn;
+int combat_power_weapon_max_damage(int power_weapon_level) {
+    static const int max_damage[] = {0, 129, 199, 399, 800, 1300, 2000};
+    if (power_weapon_level < 1 ||
+        power_weapon_level >= (int)(sizeof(max_damage) / sizeof(max_damage[0])))
+        return 0;
+    return max_damage[power_weapon_level];
+}
+
+int combat_effective_damage_max(int equipped_weapon, int power_weapon_level,
+                                int enhanced) {
+    if (equipped_weapon < 0 || equipped_weapon >= WEAPON_STAT_COUNT ||
+        (equipped_weapon >= 8 && equipped_weapon <= 11))
+        equipped_weapon = 0;
+    int base = weapon_stats[equipped_weapon].maxDmg;
+    int power = combat_power_weapon_max_damage(power_weapon_level);
+    if (!power || (!enhanced && power_weapon_level > 3)) return base;
+
+    /* WORLD replaces the die outright.  Enhanced makes the spell a floor so
+       Power Weapon IV cannot weaken Moraff's Legacy, while V and VI improve it. */
+    if (!enhanced) return power;
+    return power > base ? power : base;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -1074,7 +1112,9 @@ int combat_player_attack(Game *g, CombatState *cs, Character *player) {
         (base_wpn >= 8 && base_wpn <= 11))
         base_wpn = 0;
     const WeaponStats *equipped = &weapon_stats[base_wpn];
-    const WeaponStats *damage_weapon = &weapon_stats[get_effective_weapon(player)];
+    int damage_max = combat_effective_damage_max(
+        base_wpn, player->eff_pwr_weapon,
+        mw_experience_mode(player) == MW_EXPERIENCE_ENHANCED);
 
     /* Phase 1: Compute hit score */
     int hit_score = game_rand(g) % 80;  /* rand(0-79) */
@@ -1085,8 +1125,9 @@ int combat_player_attack(Game *g, CombatState *cs, Character *player) {
     hit_score += player->combat_bonus;
     /* Preparation and battle stat spells modify the saved stats themselves;
        their flag/counter fields only track how and when to reverse them. */
-    /* Power Weapon replaces only the damage die.  Accuracy, enchantment,
-       speed and weight continue to come from the equipped physical weapon. */
+    /* Power Weapon affects only the damage die. Accuracy, enchantment, speed
+       and weight continue to come from the equipped physical weapon. Classic
+       uses WORLD's replacement; Enhanced retains a stronger late-game die. */
     hit_score += equipped->hit;
     hit_score += mw_gauntlet(player);
 
@@ -1114,7 +1155,7 @@ int combat_player_attack(Game *g, CombatState *cs, Character *player) {
     int swings = 0;
     int si = hit_score;
     while (si > 40) {
-        int max_dmg = damage_weapon->maxDmg;
+        int max_dmg = damage_max;
         if (max_dmg < 1) max_dmg = 1;
         total_damage += game_rand(g) % max_dmg;
         si -= 40;
@@ -1357,6 +1398,12 @@ static int combat_monster_spell_effect(Game *g, CombatState *cs,
             damage = maximum_hp / 6u + (unsigned)level +
                      (unsigned)mt->dmg / 2u;
             break;
+        case 41: /* Cosmic Implosion */
+            damage = maximum_hp / 5u + (unsigned)level / 2u;
+            break;
+        case 43: /* End of Ages */
+            damage = maximum_hp / 4u + (unsigned)level / 2u;
+            break;
         default:
             damage = (unsigned)level / 2u + (unsigned)mt->dmg / 2u;
             break;
@@ -1374,6 +1421,9 @@ static int combat_monster_spell_effect(Game *g, CombatState *cs,
             break;
         case 39: /* Divine Verdict */
             damage = maximum_hp / 7u + (unsigned)level / 2u;
+            break;
+        case 43: /* Creation's Wrath */
+            damage = maximum_hp / 4u + (unsigned)level / 2u;
             break;
         default:
             damage = (unsigned)level / 2u + (unsigned)mt->dmg / 2u;
@@ -1854,7 +1904,11 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
     }
 
     case BS_POWER_WEAPON:
-        if (player->eff_pwr_weapon == (u8)sd->param1 &&
+        if (mw_experience_mode(player) == MW_EXPERIENCE_ENHANCED &&
+            player->eff_pwr_weapon > (u8)sd->param1) {
+            if (player->eff_pwr_wpn_turns <= UINT16_MAX - 60)
+                player->eff_pwr_wpn_turns += 60;
+        } else if (player->eff_pwr_weapon == (u8)sd->param1 &&
             player->eff_pwr_wpn_turns <= 0xFFFF - 60)
             player->eff_pwr_wpn_turns += 60;
         else {
@@ -2180,7 +2234,12 @@ int combat_take_turn(Game *g, CombatState *cs, Character *player, int action) {
 
     if (result) character_tick_effects(g, player);
     draw_combat_screen(g, cs, player, msg1, msg2, msg3);
-    SDL_Delay(mw_hp_cur(player) && cs->monster_hp > 0 ? 450 : 700);
+    /* A tapped attack keeps the native port's readable result pause.  Once
+       the BIOS-style held-F stream begins, do not let that pause throttle
+       WORLD's verified 92 ms typematic cadence. */
+    SDL_Delay(mw_hp_cur(player) && cs->monster_hp > 0 ?
+              (action == COMBAT_ACTION_FIGHT &&
+               g->input.fight_repeating ? 92 : 450) : 700);
     return result;
 }
 
@@ -2211,7 +2270,7 @@ static int equipment_y(int dos_y) {
  * outlined badge names the key and page, while the filled arrow makes the
  * direction visible at a glance even at the native 1024x768 resolution. */
 static void draw_page_badge(Video *v, int x, int y, int w, int page,
-                            int compact) {
+                            int page_count, int compact) {
     char label[24];
     const int arrow_w = 19;
     const int arrow_x = x + w - arrow_w - 4;
@@ -2222,9 +2281,13 @@ static void draw_page_badge(Video *v, int x, int y, int w, int page,
     if (compact)
         snprintf(label, sizeof(label), "%s P%d",
                  page ? "PGUP" : "PGDN", page + 1);
+    else if (page_count > 2 && page > 0 && page + 1 < page_count)
+        snprintf(label, sizeof(label), "PGUP-DN P%d OF %d",
+                 page + 1, page_count);
     else
-        snprintf(label, sizeof(label), "%s PAGE %d OF 2",
-                 page ? "PGUP" : "PGDN", page + 1);
+        snprintf(label, sizeof(label), "%s P%d OF %d",
+                 page + 1 == page_count ? "PGUP" : "PGDN",
+                 page + 1, page_count);
     video_fill_rect(v, x, y, w, PAGE_BADGE_H, 1);
     video_hline(v, x, y, w, 14);
     video_hline(v, x, y + PAGE_BADGE_H - 1, w, 14);
@@ -2233,7 +2296,7 @@ static void draw_page_badge(Video *v, int x, int y, int w, int page,
     video_draw_text_scaled_xy(v, x + 4, y + 3, label, 15,
                               label_xsn, label_xsd, 12, 17);
 
-    if (page) {
+    if (page + 1 == page_count) {
         video_fill_rect(v, cx - 2, y + 9, 5, 11, 14);
         for (int row = 0; row < 7; row++)
             video_hline(v, cx - row, y + 8 - row, row * 2 + 1, 14);
@@ -2327,7 +2390,7 @@ static void draw_equipment_page(Game *g, Character *player,
     /* WORLD's original page is untouched in Classic. */
     if (mw_experience_mode(player) == MW_EXPERIENCE_ENHANCED)
         draw_page_badge(v, equipment_page_badge_x(), 0,
-                        EQUIPMENT_PAGE_BADGE_W, page, 1);
+                        EQUIPMENT_PAGE_BADGE_W, page, 2, 1);
     video_present(v);
 }
 
@@ -2744,6 +2807,7 @@ void cmd_cast_prep_spell(Game *g, Character *player) {
 #define SPELL_SELECTOR_ROW_H 25
 #define SPELL_SELECTOR_COL_2 (0x20C * LOGICAL_W / 1600)
 #define SPELL_SELECTOR_COL_3 (0x430 * LOGICAL_W / 1600)
+#define SPELL_DEEP_COL_2 (LOGICAL_W / 2)
 #define SPELL_PAGE_BADGE_W 210
 #define SPELL_PAGE_BADGE_X (LOGICAL_W - 120 - SPELL_PAGE_BADGE_W - 6)
 #define SPELL_NOTICE_WRAP_CHARS 29
@@ -2849,9 +2913,10 @@ static int class_can_read_spellbook(const Character *p, int category) {
     if (category <= SPELL_CAT_PREPARATION) return 1;
     if (category == SPELL_CAT_WIZARD)
         return p->class_id == CLASS_WIZARD || p->class_id == CLASS_SAGE ||
-               p->class_id == CLASS_MAGE;
+               p->class_id == CLASS_MAGE ||
+               p->class_id == CLASS_SPELLBLADE;
     return p->class_id == CLASS_WORSHIPPER || p->class_id == CLASS_PRIEST ||
-           p->class_id == CLASS_SAGE;
+           p->class_id == CLASS_SAGE || p->class_id == CLASS_PALADIN;
 }
 
 static int spell_is_available(Character *p, int category, int index,
@@ -2887,6 +2952,15 @@ static int spell_index_from_hotkey(int key) {
     return -1;
 }
 
+static int spell_deep_grid_index(int column, int row) {
+    int rows = (MW_DEEP_SPELL_COUNT + 1) / 2;
+    int deep = column * rows + row;
+    if (column < 0 || column > 1 || row < 0 || row >= rows ||
+        deep >= MW_DEEP_SPELL_COUNT)
+        return -1;
+    return MW_DEEP_SPELL_FIRST + deep;
+}
+
 static int select_spell_index(Game *g, Character *p, CombatState *cs,
                               int category, int source, int help,
                               int maximum_level) {
@@ -2895,17 +2969,19 @@ static int select_spell_index(Game *g, Character *p, CombatState *cs,
     int page = 0;
     int deep_enabled = mw_experience_mode(p) == MW_EXPERIENCE_ENHANCED &&
                        maximum_level > 10;
+    int page_count = deep_enabled ? 2 : 1;
     for (;;) {
+        int deep_rows = (MW_DEEP_SPELL_COUNT + 1) / 2;
         spell_draw_selector_backdrop(g, p, cs);
         spell_selector_text(g, 0, 0,
-            page ? "DEEP SPELLS - LEVELS 11 THROUGH 14:" :
+            page == 1 ? "DEEP SPELLS - LEVELS 11 THROUGH 15:" :
             (help ? "PRESS A LETTER OR A NUMBER TO GET A DESCRIPTION:" :
             (source == 0 ?
              "SELECT A SPELL-SPELLS USE ONE SPELL POINT PER LEVEL:" :
              "SELECT A SPELL FROM THE FOLLOWING:")), 4);
         if (deep_enabled)
             draw_page_badge(&g->video, SPELL_PAGE_BADGE_X, 0,
-                            SPELL_PAGE_BADGE_W, page, 0);
+                            SPELL_PAGE_BADGE_W, page, page_count, 0);
         spell_selector_text(g, LOGICAL_W - 90, 0, "ESCAPE", 3);
 
         if (!page) {
@@ -2928,14 +3004,17 @@ static int select_spell_index(Game *g, Character *p, CombatState *cs,
                 }
             }
         } else {
-            for (int row = 0; row < MW_DEEP_SPELL_COUNT; row++) {
-                int index = MW_DEEP_SPELL_FIRST + row;
+            for (int deep = 0; deep < MW_DEEP_SPELL_COUNT; deep++) {
+                int column = deep / deep_rows;
+                int row = deep % deep_rows;
+                int index = MW_DEEP_SPELL_FIRST + deep;
                 int available = index / 3 < maximum_level &&
                     spell_is_available(p, category, index, source, help);
                 snprintf(line, sizeof(line), "%d- %c)%s",
-                         index / 3 + 1, 'A' + row,
+                         index / 3 + 1, 'A' + deep,
                          available ? names[index] : "NOT YET FOUND");
-                spell_selector_text(g, 0, row + 1, line, 8);
+                spell_selector_text(g,
+                    column ? SPELL_DEEP_COL_2 : 0, row + 1, line, 8);
             }
         }
         video_present(&g->video);
@@ -2943,8 +3022,12 @@ static int select_spell_index(Game *g, Character *p, CombatState *cs,
         if (key == 0x1B || input_poll_quit(&g->input)) return -1;
         if (key == 0) {
             int scan = input_getch(&g->input);
-            if (deep_enabled && (scan == 0x49 || scan == 0x51)) {
-                page = scan == 0x51;
+            if (deep_enabled && scan == 0x49) {
+                if (page > 0) --page;
+                continue;
+            }
+            if (deep_enabled && scan == 0x51) {
+                if (page + 1 < page_count) ++page;
                 continue;
             }
             continue;
@@ -2958,7 +3041,7 @@ static int select_spell_index(Game *g, Character *p, CombatState *cs,
             if (deep_enabled && y < PAGE_BADGE_H &&
                 x >= SPELL_PAGE_BADGE_X &&
                 x < SPELL_PAGE_BADGE_X + SPELL_PAGE_BADGE_W) {
-                page = !page;
+                page = (page + 1) % page_count;
                 continue;
             }
             int row = y / SPELL_SELECTOR_ROW_H - 1;
@@ -2966,15 +3049,17 @@ static int select_spell_index(Game *g, Character *p, CombatState *cs,
                 int slot = x < SPELL_SELECTOR_COL_2 ? 0 :
                            (x < SPELL_SELECTOR_COL_3 ? 1 : 2);
                 if (row >= 0 && row < 10) index = row * 3 + slot;
-            } else if (row >= 0 && row < MW_DEEP_SPELL_COUNT) {
-                index = MW_DEEP_SPELL_FIRST + row;
+            } else if (row >= 0 && row < deep_rows) {
+                int column = x < SPELL_DEEP_COL_2 ? 0 : 1;
+                index = spell_deep_grid_index(column, row);
             }
         } else {
             if (page) {
-                if (key >= 'a' &&
-                    key < 'a' + MW_DEEP_SPELL_COUNT)
+                int first_key = 'A';
+                int last_key = first_key + MW_DEEP_SPELL_COUNT;
+                if (key >= 'a' && key < 'a' + MW_DEEP_SPELL_COUNT)
                     key -= 'a' - 'A';
-                if (key >= 'A' && key < 'A' + MW_DEEP_SPELL_COUNT)
+                if (key >= first_key && key < last_key)
                     index = MW_DEEP_SPELL_FIRST + key - 'A';
             } else {
                 index = spell_index_from_hotkey(key);
@@ -3012,6 +3097,16 @@ static void spell_help_text(Game *g, int category, int index,
             append_text(out, size, "CREATES A ONE-USE SCROLL CONTAINING ANY LEVEL 1-14 SPELL. ");
         else if (index == 39)
             append_text(out, size, "ADDS TWENTY CHARGES OF ANY LEVEL 1-14 SPELL TO A WAND. ");
+        else if (index == 40)
+            append_text(out, size, "RAISES THE EQUIPPED PHYSICAL WEAPON TO AT LEAST +1000. ");
+        else if (index == 41)
+            append_text(out, size, "RAISES THE EQUIPPED ARMOR TO AT LEAST +750. ");
+        else if (index == 42)
+            append_text(out, size, "RAISES INNATE BODY ARMOR TO AT LEAST +650. ");
+        else if (index == 43)
+            append_text(out, size, "CREATES A ONE-USE SCROLL CONTAINING ANY LEVEL 1-15 SPELL. ");
+        else if (index == 44)
+            append_text(out, size, "ADDS FORTY CHARGES OF ANY LEVEL 1-15 SPELL TO A WAND. ");
         else if (index == 30)
             append_text(out, size, "RAISES THE EQUIPPED PHYSICAL WEAPON TO AT LEAST +150. ");
         else if (index == 31)
@@ -3029,7 +3124,7 @@ static void spell_help_text(Game *g, int category, int index,
         else if (index == 27)
             append_text(out, size, "SETS PERMANENT INVISIBILITY (VALUE 100), REDUCING ENCOUNTERS. ");
         else if (index == 28)
-            append_text(out, size, "REMOVES TEN YEARS OF AGE BUT DOES NOT RESTORE STATS ALREADY LOST TO AGE. ");
+            append_text(out, size, "REMOVES TEN YEARS OF AGE. AGE IS TRACKED FOR RECORDS AND DOES NOT DIRECTLY REDUCE ATTRIBUTES. ");
         else if (index == 14 || index == 20 || index == 29)
             append_text(out, size, "ADDS PERMANENT INNATE BODY DEFENSE THAT STACKS WITH PHYSICAL ARMOR. ");
         else if (index == 8 || index == 13 || index == 18)
@@ -3050,6 +3145,11 @@ static void spell_help_text(Game *g, int category, int index,
         else if (index == 37) append_text(out, size, "GRANTS PROTECTION TIER 8 AND EVERY RESISTANCE FOR AT LEAST 1200 TURNS. ");
         else if (index == 38) append_text(out, size, "REVEALS EVERY MAP CELL ON THE CURRENT FLOOR. ");
         else if (index == 39) append_text(out, size, "BINDS A ONE-USE RAISE-DEAD RETURN POINT TO THE CASTER'S CURRENT FLOOR AND POSITION; DEATH CONSUMES IT AND COSTS ONE CONSTITUTION. ");
+        else if (index == 40) append_text(out, size, "MOVES DOWN TWO HUNDRED FLOORS, CLAMPING AT THE EXPERIENCE'S FINAL FLOOR. ");
+        else if (index == 41) append_text(out, size, "MOVES UP TWO HUNDRED FLOORS, CLAMPING AT TOWN. ");
+        else if (index == 42) append_text(out, size, "GRANTS PROTECTION TIER 10 AND EVERY RESISTANCE FOR AT LEAST 3000 TURNS. ");
+        else if (index == 43) append_text(out, size, "GRANTS FEATHER, INVISIBILITY, AND FAST MOVE UNTIL THE NEXT INN REST. ");
+        else if (index == 44) append_text(out, size, "RESTORES CURRENT HEALTH TO MAXIMUM AND CURES POISON AND DISEASE WITHOUT RESTORING SPELL POINTS. ");
         else if (index == 2) append_text(out, size, "HEALS 1-20 HP, WITH A SMALL WISDOM BONUS. ");
         else if (index == 6) append_text(out, size, "HEALS 10-40 HP, WITH A SMALL WISDOM BONUS. ");
         else if (index == 15) append_text(out, size, "HEALS 20-90 HP, WITH A SMALL WISDOM BONUS. ");
@@ -3093,7 +3193,8 @@ static void spell_help_text(Game *g, int category, int index,
         case BS_BUFF_PROTECT: snprintf(out + strlen(out), size - strlen(out),
              "PROTECTION TIER %d SUBTRACTS TIER-SQUARED X 2 FROM ENEMY HIT SCORE FOR 60 TURNS. ", sd->param1); break;
         case BS_POWER_WEAPON: snprintf(out + strlen(out), size - strlen(out),
-             "CONJURES POWER WEAPON %d FOR 60 TURNS; SAME-TIER RECASTS EXTEND IT. ", sd->param1); break;
+             "CONJURES POWER WEAPON %d (DAMAGE DIE 0-%d) FOR 60 TURNS; SAME-TIER RECASTS EXTEND IT. ENHANCED MODE NEVER REPLACES A STRONGER WEAPON DIE. ",
+             sd->param1, combat_power_weapon_max_damage(sd->param1) - 1); break;
         case BS_SLEEP: append_text(out, size, "PUTS A NON-IMMUNE MONSTER TO SLEEP FOR ABOUT 10 TURNS. "); break;
         case BS_HOLD: append_text(out, size, "PARALYZES A NON-IMMUNE MONSTER FOR ABOUT 15 TURNS. "); break;
         case BS_STOP: snprintf(out + strlen(out), size - strlen(out),
@@ -3326,6 +3427,41 @@ static int apply_permanent_spell(Game *g, Character *p, CombatState *cs,
             (u8)(charges > 255 ? 255 : charges);
         snprintf(message, message_size,
                  "THE ASCENDANT WAND GAINS TWENTY CHARGES!");
+    } else if (index == 40) {
+        int w = p->equipped_weapon < WEAPON_STAT_COUNT &&
+                !(p->equipped_weapon >= 8 && p->equipped_weapon <= 11) ?
+                p->equipped_weapon : 0;
+        if (mw_weapon_enchant(p, w) >= 1000) return 0;
+        mw_set_weapon_enchant(p, w, 1000);
+        snprintf(message, message_size,
+                 "WEAPON PERMANENTLY ENCHANTED TO +1000!");
+    } else if (index == 41) {
+        int armor = p->equipped_armor < ARMOR_STAT_COUNT ?
+                    p->equipped_armor : 0;
+        if (mw_armor_enchant(p, armor) >= 750) return 0;
+        mw_set_armor_enchant(p, armor, 750);
+        snprintf(message, message_size,
+                 "ARMOR PERMANENTLY ENCHANTED TO +750!");
+    } else if (index == 42) {
+        if (mw_body_armor_plus(p) >= 650) return 0;
+        mw_set_body_armor_plus(p, 650);
+        snprintf(message, message_size, "BODY ARMOR IS NOW +650!");
+    } else if (index == 43) {
+        if (!select_created_spell(g, p, cs, 15,
+                                  &target_category, &target_index))
+            return 0;
+        if (p->scrolls[target_category][target_index] < UINT8_MAX)
+            ++p->scrolls[target_category][target_index];
+        snprintf(message, message_size, "THE MYTHIC SCROLL IS COMPLETE!");
+    } else if (index == 44) {
+        if (!select_created_spell(g, p, cs, 15,
+                                  &target_category, &target_index))
+            return 0;
+        int charges = p->wands[target_category][target_index] + 40;
+        p->wands[target_category][target_index] =
+            (u8)(charges > UINT8_MAX ? UINT8_MAX : charges);
+        snprintf(message, message_size,
+                 "THE MYTHIC WAND GAINS FORTY CHARGES!");
     } else return 0;
     return 1;
 }
@@ -3532,6 +3668,56 @@ static int apply_preparation_spell(Game *g, Character *p, int index,
                  "YOUR SOUL IS ANCHORED HERE AGAINST ONE DEATH!");
         break;
     }
+    case 40:
+        if (g->cur_floor >= game_traversal_rules(g)->max_floor) {
+            snprintf(message, message_size,
+                     "YOU CANNOT DESCEND ANY FARTHER!");
+            return 0;
+        }
+        target = g->cur_floor + 200;
+        if (target > game_traversal_rules(g)->max_floor)
+            target = game_traversal_rules(g)->max_floor;
+        if (!game_change_floor(g, p, target) || !game_relocate(g, p))
+            return 0;
+        snprintf(message, message_size, "YOU DESCEND TWO HUNDRED LEVELS!");
+        break;
+    case 41:
+        if (g->cur_floor <= 0) {
+            snprintf(message, message_size,
+                     "YOU CANNOT ASCEND ANY FARTHER!");
+            return 0;
+        }
+        target = g->cur_floor - 200;
+        if (target < 0) target = 0;
+        if (!game_change_floor(g, p, target) || !game_relocate(g, p))
+            return 0;
+        snprintf(message, message_size, "YOU ASCEND TWO HUNDRED LEVELS!");
+        break;
+    case 42:
+        if (p->eff_protect_lv < 10) p->eff_protect_lv = 10;
+        if (p->eff_protect_turns < 3000) p->eff_protect_turns = 3000;
+        if (p->eff_resist_poison < 3000) p->eff_resist_poison = 3000;
+        if (p->eff_resist_disease < 3000) p->eff_resist_disease = 3000;
+        if (p->eff_anti_cold < 3000) p->eff_anti_cold = 3000;
+        if (p->eff_anti_fire < 3000) p->eff_anti_fire = 3000;
+        if (p->eff_resist_drain < 3000) p->eff_resist_drain = 3000;
+        snprintf(message, message_size,
+                 "MYTHIC SANCTUARY PROTECTS YOU FOR 3000 TURNS!");
+        break;
+    case 43:
+        if (p->eff_feather != 100) p->eff_feather = 1;
+        if (p->eff_invisible != 100) p->eff_invisible = 1;
+        p->eff_fast_move = 1;
+        snprintf(message, message_size,
+                 "ASTRAL FORM LASTS UNTIL THE INN!");
+        break;
+    case 44:
+        mw_set_hp_cur(p, mw_hp_max(p));
+        p->poisoned_turns = 0;
+        p->diseased_turns = 0;
+        snprintf(message, message_size,
+                 "PERFECT VITALITY RESTORES YOUR BODY!");
+        break;
     default: return 0;
     }
     return 1;
@@ -4155,6 +4341,12 @@ int combat_self_test(void) {
           spell_index_from_hotkey('4') == 29 &&
           spell_index_from_hotkey('0') == -1,
           "spell selector direct-key decoding");
+    CHECK(spell_deep_grid_index(0, 0) == 30 &&
+          spell_deep_grid_index(0, 7) == 37 &&
+          spell_deep_grid_index(1, 0) == 38 &&
+          spell_deep_grid_index(1, 6) == 44 &&
+          spell_deep_grid_index(1, 7) == -1,
+          "all fifteen deep spells fit the two-column second page");
     {
         static const u16 expected[6][6] = {
             /* STR INT WIS CON AGI LUCK */
@@ -4285,7 +4477,9 @@ int combat_self_test(void) {
         CHECK(!strcmp(combat_monster_spell_name(116), "ABYSSAL LANCE") &&
               !strcmp(combat_monster_spell_name(135), "STARFIRE") &&
               !strcmp(combat_monster_spell_name(151), "MANA TEMPEST") &&
-              !strcmp(combat_monster_spell_name(177), "ANNIHILATION") &&
+              !strcmp(combat_monster_spell_name(174), "COSMIC IMPLOSION") &&
+              !strcmp(combat_monster_spell_name(176), "CREATION'S WRATH") &&
+              !strcmp(combat_monster_spell_name(177), "END OF AGES") &&
               combat_monster_spell_chance(114) == 0 &&
               combat_monster_spell_chance(177) == 2,
               "late monsters receive progression-appropriate signature magic");
@@ -4304,9 +4498,9 @@ int combat_self_test(void) {
         const MonsterSpellProfile *profile = monster_spell_profile(177);
         int damage = combat_monster_spell_effect(
             &g, &caster, &victim, profile);
-        CHECK(damage >= 3116 && damage <= 3366 &&
-              strstr(caster.special_message, "ANNIHILATION"),
-              "enemy Annihilation scales against late-game player HP");
+        CHECK(damage >= 3000 && damage <= 3250 &&
+              strstr(caster.special_message, "END OF AGES"),
+              "enemy End of Ages scales against late-game player HP");
 
         caster.monster_type_idx = 151;
         caster.monster_level = 725;
@@ -4521,6 +4715,16 @@ int combat_self_test(void) {
           "monk equipment permissions");
     p.class_id = CLASS_WIZARD;
     CHECK(class_can_read_spellbook(&p, SPELL_CAT_WIZARD), "wizard book access");
+    p.class_id = CLASS_SPELLBLADE;
+    CHECK(class_can_read_spellbook(&p, SPELL_CAT_WIZARD) &&
+          !class_can_read_spellbook(&p, SPELL_CAT_PRIEST) &&
+          combat_weapon_allowed(&p, 19) && combat_armor_allowed(&p, 15),
+          "Enhanced Spellblade magic and late gear access");
+    p.class_id = CLASS_PALADIN;
+    CHECK(class_can_read_spellbook(&p, SPELL_CAT_PRIEST) &&
+          !class_can_read_spellbook(&p, SPELL_CAT_WIZARD) &&
+          combat_weapon_allowed(&p, 19) && combat_armor_allowed(&p, 15),
+          "Enhanced Paladin magic and late gear access");
     p.class_id = CLASS_FIGHTER;
     CHECK(!class_can_read_spellbook(&p, SPELL_CAT_PREPARATION), "fighter book denial");
     p.class_id = CLASS_MONK;
@@ -4573,6 +4777,53 @@ int combat_self_test(void) {
     apply_battle_spell(&g, &cs, &p, &wiz_spells[14], 5);
     apply_battle_spell(&g, &cs, &p, &wiz_spells[14], 5);
     CHECK(p.eff_resist_poison == 120, "resistance duration stacks");
+    p.eff_pwr_weapon = 0;
+    p.eff_pwr_wpn_turns = 0;
+    apply_battle_spell(&g, &cs, &p, &wiz_spells[44], 15);
+    apply_battle_spell(&g, &cs, &p, &wiz_spells[40], 14);
+    CHECK(p.eff_pwr_weapon == 6 && p.eff_pwr_wpn_turns == 120 &&
+          combat_effective_damage_max(19, p.eff_pwr_weapon, 1) == 2000,
+          "Enhanced Power Weapon VI and lower-tier no-downgrade rule");
+    p.equipped_weapon = 1;
+    p.equipped_armor = 1;
+    CHECK(apply_permanent_spell(&g, &p, NULL, 40,
+                                message, sizeof(message)) &&
+          mw_weapon_enchant(&p, 1) == 1000,
+          "mythic permanent weapon enchant");
+    CHECK(apply_permanent_spell(&g, &p, NULL, 41,
+                                message, sizeof(message)) &&
+          mw_armor_enchant(&p, 1) == 750,
+          "mythic permanent armor enchant");
+    CHECK(apply_permanent_spell(&g, &p, NULL, 42,
+                                message, sizeof(message)) &&
+          mw_body_armor_plus(&p) == 650,
+          "mythic permanent body armor");
+    p.eff_protect_lv = 0;
+    p.eff_protect_turns = 0;
+    CHECK(apply_preparation_spell(&g, &p, 42,
+                                  message, sizeof(message)) &&
+          p.eff_protect_lv == 10 && p.eff_protect_turns == 3000 &&
+          p.eff_resist_drain == 3000,
+          "mythic sanctuary applies tier ten and all resistances");
+    p.poisoned_turns = p.diseased_turns = 99;
+    mw_set_hp_cur(&p, 1);
+    CHECK(apply_preparation_spell(&g, &p, 44,
+                                  message, sizeof(message)) &&
+          mw_hp_cur(&p) == mw_hp_max(&p) && !p.poisoned_turns &&
+          !p.diseased_turns,
+          "perfect vitality heals and cures without restoring SP");
+    mw_set_weapon_enchant(&p, 1, 0);
+    mw_set_armor_enchant(&p, 1, 0);
+    mw_set_body_armor_plus(&p, 0);
+    p.eff_pwr_weapon = 0;
+    p.eff_pwr_wpn_turns = 0;
+    p.eff_protect_lv = 0;
+    p.eff_protect_turns = 0;
+    p.eff_resist_poison = 120;
+    p.eff_resist_disease = 0;
+    p.eff_anti_cold = 0;
+    p.eff_anti_fire = 0;
+    p.eff_resist_drain = 0;
     p.poisoned_turns = 1;
     character_tick_effects(&g, &p);
     CHECK(p.stat_str == 20 && p.poisoned_turns == 1,

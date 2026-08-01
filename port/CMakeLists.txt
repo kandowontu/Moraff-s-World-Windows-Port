@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(moraffs_world VERSION 1.0.1 LANGUAGES C)
+project(moraffs_world VERSION 1.1.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 option(MORAFF_COPY_ORIGINAL_DATA
@@ -27,6 +27,8 @@ set(SOURCES
     src/mw_audio.c
     src/mw_wilderness.c
     src/mw_model_viewer.c
+    src/mw_battle_simulator.c
+    src/mw_arena.c
     src/mw_game.c
     src/mw_combat.c
     src/mw_trainer.c
@@ -107,6 +109,9 @@ add_custom_command(TARGET moraffs_world POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/DEEP_SPELLS.md"
         "$<TARGET_FILE_DIR:moraffs_world>/DEEP_SPELLS.md"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/COLOSSEUM.md"
+        "$<TARGET_FILE_DIR:moraffs_world>/COLOSSEUM.md"
     COMMAND ${CMAKE_COMMAND} -E echo
         "Build complete. Run moraffs_world with its local game data files."
 )

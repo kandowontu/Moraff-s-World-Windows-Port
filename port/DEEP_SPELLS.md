@@ -1,20 +1,29 @@
 # Enhanced deep-dungeon spells
 
-Enhanced Experience adds 40 spells: ten in each of the original four spell
+Enhanced Experience adds 60 spells: fifteen in each of the original four spell
 families. Classic Experience keeps the exact original 30-entry catalog per
 family and cannot display, cast, create, or find these additions.
 
 Press Page Down from any spell, scroll, wand, paper, or spell-help selector to
-open the deep-spell page. Page Up returns to the original level 1-10 list.
-Enhanced selectors show a large directional arrow and the current page in the
-top strip; the paging badge can also be clicked.
-Deep magic spans levels 11-14 and uses the displayed spell level as its
+open the single two-column Enhanced page. Its A-O entries contain every level
+11-15 spell; Page Up returns to the original level 1-10 list. Enhanced
+selectors show a large directional arrow and the current page in the top
+strip; the paging badge can also be clicked.
+Deep magic spans levels 11-15 and uses the displayed spell level as its
 spell-point cost when cast from a spellbook.
+The Enhanced trainer expands its four magic grids through level 15, names the
+highlighted spell, and permits active Power Weapon tiers through VI. Classic
+continues to hide these cells and caps the effect at Power Weapon III.
+The `Ctrl+F2` battle simulator likewise adds every Enhanced offensive wizard
+and priest spell to its Spell Damage selector. Its results use the live combat
+formulas, including maximum-HP damage, Life Convergence's declining current-HP
+component, and Soul Rend's scaled monster-level drain. Classic saves retain the
+original simulator catalog.
 
 ## Unlock progression
 
 One entry in all four families unlocks after the first victory at or beyond
-each 100-floor milestone. The unlock mask is stored with the character.
+each listed milestone. The unlock mask is stored with the character.
 
 | Floor | Permanent | Preparation | Wizard battle | Priest battle |
 |---|---|---|---|---|
@@ -25,9 +34,14 @@ each 100-floor milestone. The unlock mask is stored with the character.
 | 500 | Charge Deep Wand | Town Portal | Oblivion | Final Judgment |
 | 600 | Enchant Weapon Level 500 | Rift Descend | Starfire | Life Convergence |
 | 700 | Enchant Armor Level 350 | Rift Ascend | Chrono Lock | Eternal Ward |
-| 800 | Body Armor Level 300 | Eternal Sanctuary | Reality Rupture | Wrath of Heaven |
-| 900 | Write Ascendant Scroll | World Reveal | Mana Tempest | Phoenix Prayer |
-| 1000 | Charge Ascendant Wand | Soul Anchor | Annihilation | Divine Verdict |
+| 775 | Body Armor Level 300 | Eternal Sanctuary | Reality Rupture | Wrath of Heaven |
+| 850 | Write Ascendant Scroll | World Reveal | Mana Tempest | Phoenix Prayer |
+| 900 | Charge Ascendant Wand | Soul Anchor | Annihilation | Divine Verdict |
+| 925 | Enchant Weapon Level 1000 | Titan Descend | Power Weapon IV | Power Weapon IV |
+| 950 | Enchant Armor Level 750 | Titan Ascend | Cosmic Implosion | Seraphic Reprieve |
+| 975 | Body Armor Level 650 | Mythic Sanctuary | Power Weapon V | Power Weapon V |
+| 990 | Write Mythic Scroll | Astral Form | End of Ages | Creation's Wrath |
+| 1000 | Charge Mythic Wand | Perfect Vitality | Power Weapon VI | Power Weapon VI |
 
 ## Permanent spells
 
@@ -36,11 +50,11 @@ take one month, and a spellbook cast permanently spends maximum spell points.
 
 | Spell | Effect |
 |---|---|
-| Enchant Weapon Level 150 / 500 | Raises the equipped physical weapon to at least the named enchantment. |
-| Enchant Armor Level 100 / 350 | Raises the equipped armor to at least the named enchantment. |
-| Body Armor Level 100 / 300 | Raises innate body armor to at least the named value. |
-| Write Deep / Ascendant Scroll | Creates a one-use scroll containing any level 1-14 spell. |
-| Charge Deep / Ascendant Wand | Adds ten or twenty charges of any level 1-14 spell, saturating at 255. |
+| Enchant Weapon Level 150 / 500 / 1000 | Raises the equipped physical weapon to at least the named enchantment. |
+| Enchant Armor Level 100 / 350 / 750 | Raises the equipped armor to at least the named enchantment. |
+| Body Armor Level 100 / 300 / 650 | Raises innate body armor to at least the named value. |
+| Write Deep / Ascendant / Mythic Scroll | Creates a one-use scroll containing any spell through level 14 or 15, as named. |
+| Charge Deep / Ascendant / Mythic Wand | Adds ten, twenty, or forty charges of any eligible spell, saturating at 255. |
 
 ## Preparation spells
 
@@ -53,6 +67,10 @@ take one month, and a spellbook cast permanently spends maximum spell points.
 | Cartographer's Eye / World Reveal | Reveals every map cell on the current floor. |
 | Town Portal | Returns the caster to a safe position in town. |
 | Soul Anchor | Binds the caster's current floor and position as a one-use raise-dead return point. Death consumes the anchor, restores the character through the normal raise-contract flow, and costs one Constitution. It does not restore HP or SP when cast. |
+| Titan Descend / Ascend | Moves 200 floors down/up, relocates safely, and clamps at the dungeon boundary. |
+| Mythic Sanctuary | Protection tier 10 and every resistance for at least 3,000 turns. |
+| Astral Form | Grants Feather, Invisibility, and Fast Move until the next inn rest. |
+| Perfect Vitality | Fully heals and cures poison and disease without restoring spell points. |
 
 ## Wizard battle spells
 
@@ -67,6 +85,9 @@ take one month, and a spellbook cast permanently spends maximum spell points.
 | Reality Rupture | 40% maximum monster HP plus 25,000 damage. |
 | Mana Tempest | Caster level × 50 plus 2,000 damage. |
 | Annihilation | 60,000-120,000 damage. |
+| Power Weapon IV / V / VI | Sets a minimum melee damage die of 0-799, 0-1,299, or 0-1,999 for 60 turns. A lower tier never weakens a stronger Enhanced weapon or active Power Weapon tier. |
+| Cosmic Implosion | 60% maximum monster HP plus 50,000 damage. |
+| End of Ages | 200,000-400,000 damage. |
 
 ## Priest battle spells
 
@@ -81,6 +102,9 @@ take one month, and a spellbook cast permanently spends maximum spell points.
 | Phoenix Prayer | Heals half maximum HP, cures poison and disease, grants protection tier 7 for 300 turns, and fire resistance for 600 turns. It does not restore SP. |
 | Wrath of Heaven | 12,000-26,000 damage. |
 | Divine Verdict | 50% maximum monster HP plus 30,000 damage. |
+| Power Weapon IV / V / VI | Sets a minimum melee damage die of 0-799, 0-1,299, or 0-1,999 for 60 turns. A lower tier never weakens a stronger Enhanced weapon or active Power Weapon tier. |
+| Seraphic Reprieve | Heals half maximum HP, cures poison and disease, grants protection tier 8 for 1,200 turns, and fire resistance for 2,400 turns. |
+| Creation's Wrath | 75% maximum monster HP plus 100,000 damage. |
 
 ## Scrolls, wands, and papers
 
@@ -92,9 +116,9 @@ take one month, and a spellbook cast permanently spends maximum spell points.
   but not from scrolls or wands.
 
 Starting at floor 100, normal spell-item treasure can choose from the deep
-catalog. One more deep entry enters its drop range every 100 floors. Deep and
+catalog. One more deep entry enters its drop range at each unlock floor. Deep and
 original magic then have equal selection weight.
 
 The original character record already reserved 45 slots for every spell and
-item family. Enhanced uses slots 30-39. Native save version 6 tracks the ten
-legitimate unlocks and migrates older five-spell Enhanced saves automatically.
+item family. Enhanced uses slots 30-44. Native save version 6 tracks all fifteen
+legitimate unlocks and migrates older Enhanced saves automatically.
