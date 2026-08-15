@@ -94,6 +94,50 @@ static int save_framebuffer_bmp(Video *v, const char *path) {
     return 0;
 }
 
+/* Save the image the selected original adapter actually presents.  The
+ * logical 1024x768 framebuffer is only a composition surface; low-resolution
+ * tests must include native-pixel sampling, monochrome dithering and the
+ * CGA/EGA palette restriction performed by video_present(). */
+static int save_presented_bmp(Video *v, const char *path) {
+    if (!v || !v->argb_pixels || v->output_w <= 0 || v->output_h <= 0)
+        return -1;
+    video_present(v);
+
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    int w = v->output_w, h = v->output_h;
+    int row_bytes = w * 3;
+    int pad = (4 - row_bytes % 4) % 4;
+    int stride = row_bytes + pad;
+    int img_size = stride * h;
+    int file_size = 54 + img_size;
+    u8 hdr[54] = {0};
+    hdr[0] = 'B'; hdr[1] = 'M';
+    hdr[2] = (u8)file_size; hdr[3] = (u8)(file_size >> 8);
+    hdr[4] = (u8)(file_size >> 16); hdr[5] = (u8)(file_size >> 24);
+    hdr[10] = 54; hdr[14] = 40;
+    hdr[18] = (u8)w; hdr[19] = (u8)(w >> 8);
+    hdr[20] = (u8)(w >> 16); hdr[21] = (u8)(w >> 24);
+    hdr[22] = (u8)h; hdr[23] = (u8)(h >> 8);
+    hdr[24] = (u8)(h >> 16); hdr[25] = (u8)(h >> 24);
+    hdr[26] = 1; hdr[28] = 24;
+    hdr[34] = (u8)img_size; hdr[35] = (u8)(img_size >> 8);
+    hdr[36] = (u8)(img_size >> 16); hdr[37] = (u8)(img_size >> 24);
+    fwrite(hdr, 1, sizeof(hdr), f);
+
+    const u8 zero[3] = {0, 0, 0};
+    for (int y = h - 1; y >= 0; y--) {
+        for (int x = 0; x < w; x++) {
+            u32 argb = v->argb_pixels[y * w + x];
+            u8 bgr[3] = {(u8)argb, (u8)(argb >> 8), (u8)(argb >> 16)};
+            fwrite(bgr, 1, sizeof(bgr), f);
+        }
+        if (pad) fwrite(zero, 1, (size_t)pad, f);
+    }
+    fclose(f);
+    return 0;
+}
+
 static int run_test_sprite(const char *data_dir, int monster_type, int asset_test) {
     Game game;
     if (game_init(&game, data_dir) < 0) {
@@ -252,15 +296,15 @@ static int run_test_title(const char *data_dir) {
              "%s/test_title_credits.bmp", data_dir);
 
     game_draw_title_background_preview(&game);
-    int background_rc = save_framebuffer_bmp(&game.video, background_path);
+    int background_rc = save_presented_bmp(&game.video, background_path);
     if (background_rc == 0) printf("Saved: %s\n", background_path);
 
     game_draw_title_preview(&game, 0);
-    int lineup_rc = save_framebuffer_bmp(&game.video, lineup_path);
+    int lineup_rc = save_presented_bmp(&game.video, lineup_path);
     if (lineup_rc == 0) printf("Saved: %s\n", lineup_path);
 
     game_draw_title_preview(&game, 1);
-    int credits_rc = save_framebuffer_bmp(&game.video, credits_path);
+    int credits_rc = save_presented_bmp(&game.video, credits_path);
     if (credits_rc == 0) printf("Saved: %s\n", credits_path);
 
     video_present(&game.video);
@@ -407,7 +451,7 @@ static int run_test_wilderness(const char *data_dir) {
     wilderness_draw_test(&game, &p);
     char bmp_path[300];
     snprintf(bmp_path, sizeof(bmp_path), "%s/test_wilderness.bmp", data_dir);
-    if (save_framebuffer_bmp(&game.video, bmp_path) < 0) failures++;
+    if (save_presented_bmp(&game.video, bmp_path) < 0) failures++;
     else printf("Saved: %s\n", bmp_path);
     game_shutdown(&game);
     return failures;
@@ -664,6 +708,13 @@ static int run_test_frame(const char *data_dir, int test_x, int test_y,
     int auto_shop = test_x == -3;
     int auto_ladder = test_x == -4 ? 1 : (test_x == -5 ? -1 : 0);
     int auto_trap = test_x == -6;
+    int auto_door = test_x == -7;
+    int auto_side_door = test_x == -8;
+    int door_test_found = 0;
+    int door_test_passable = 0;
+    int door_test_opaque = 1;
+    int door_target_x = -1, door_target_y = -1;
+    int door_texture_loaded = game.wall_texture[0] != NULL;
     int actor_index = -1;
     if (test_x < 0) test_x = 0;
     if (test_x >= MAP_W) test_x = MAP_W - 1;
@@ -712,6 +763,57 @@ static int run_test_frame(const char *data_dir, int test_x, int test_y,
                     y = MAP_H;
                     break;
                 }
+            }
+        }
+    }
+    if (auto_door || auto_side_door) {
+        for (int y = 1; y < MAP_H - 1 && !door_test_found; y++) {
+            for (int x = 1; x < MAP_W - 1; x++) {
+                if (map_is_wall(&game, x, y)) continue;
+                int edge[4] = {
+                    map_get_edge(&game, x,     y,     1),
+                    map_get_edge(&game, x,     y + 1, 1),
+                    map_get_edge(&game, x,     y,     0),
+                    map_get_edge(&game, x + 1, y,     0)
+                };
+                static const int dx[4] = {0, 0, -1, 1};
+                static const int dy[4] = {-1, 1, 0, 0};
+                for (int d = 0; d < 4; d++) {
+                    int nx = x + dx[d], ny = y + dy[d];
+                    if (edge[d] != 1 || nx < 0 || nx >= MAP_W ||
+                        ny < 0 || ny >= MAP_H || map_is_wall(&game, nx, ny))
+                        continue;
+                    door_test_passable = game_can_move(&game, x, y, nx, ny);
+                    int px = x, py = y;
+                    if (auto_side_door) {
+                        static const int side_a[4] = {2, 2, 0, 0};
+                        static const int side_b[4] = {3, 3, 1, 1};
+                        int candidate[2] = {side_a[d], side_b[d]};
+                        int side_found = 0;
+                        for (int s = 0; s < 2; s++) {
+                            int sd = candidate[s];
+                            int sx = x + dx[sd], sy = y + dy[sd];
+                            if (sx <= 0 || sx >= MAP_W - 1 || sy <= 0 ||
+                                sy >= MAP_H - 1 || map_is_wall(&game, sx, sy) ||
+                                !game_can_move(&game, sx, sy, x, y))
+                                continue;
+                            px = sx;
+                            py = sy;
+                            side_found = 1;
+                            break;
+                        }
+                        if (!side_found) continue;
+                    }
+                    game.cur_x = px;
+                    game.cur_y = py;
+                    game.last_move_dir = d;
+                    dummy.facing_dir = (u16)d;
+                    door_target_x = nx;
+                    door_target_y = ny;
+                    door_test_found = 1;
+                    break;
+                }
+                if (door_test_found) break;
             }
         }
     }
@@ -767,6 +869,14 @@ static int run_test_frame(const char *data_dir, int test_x, int test_y,
            game_trapdoor_floor(&game, game.cur_x, game.cur_y));
 
     game_update_visibility(&game);
+    if (auto_door) {
+        /* A normal door opens as part of traversal, but WORLD treats the
+         * closed edge as opaque until that move occurs.  This catches the
+         * especially easy regression where a visible/passable door leaks the
+         * unexplored cell behind it onto the map. */
+        door_test_opaque = door_target_x >= 0 && door_target_y >= 0 &&
+                           !game.visited[door_target_y][door_target_x];
+    }
 
     if (combat_overlay && actor_index >= 0) {
         MonsterRecord *m = &game.monster_map[game.monster_layer][actor_index];
@@ -780,17 +890,18 @@ static int run_test_frame(const char *data_dir, int test_x, int test_y,
     char bmp_path[300];
     snprintf(bmp_path, sizeof(bmp_path), "%s/%s", data_dir,
              combat_overlay ? "test_combat_overlay.bmp" : "test_exploration.bmp");
-    int rc = save_framebuffer_bmp(&game.video, bmp_path);
+    int rc = save_presented_bmp(&game.video, bmp_path);
     if (rc == 0) printf("Saved: %s\n", bmp_path);
     else fprintf(stderr, "Failed to save BMP\n");
 
-    video_present(&game.video);
     SDL_Delay(100);
     /* Test rendering is read-only even when a real MON.MAP was loaded. */
     game.active_save_slot = -1;
     game.pit_state_loaded = 0;
     game_shutdown(&game);
-    return rc < 0;
+    return rc < 0 || ((auto_door || auto_side_door) &&
+                      (!door_test_found || !door_test_passable ||
+                       !door_test_opaque || !door_texture_loaded));
 }
 
 static int run_test_state_roundtrip(const char *data_dir, int slot, int floor) {

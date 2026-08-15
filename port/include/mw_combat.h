@@ -88,6 +88,12 @@ typedef enum {
 
 /* Canonical display name for one of the four mode-aware spell tables. */
 const char *combat_spell_name(int category, int index);
+/* Colosseum rewards are limited to offensive/status magic and battle healing. */
+int combat_spell_arena_eligible(int category, int index);
+/* Colosseum drafts/casting use WORLD's class/source restrictions even though
+   arena equipment retains its separate universal-access rules. */
+int combat_spell_source_allowed(const Character *player, int category,
+                                int source);
 
 /* Combat lifecycle */
 void combat_init_encounter(Game *g, CombatState *cs);

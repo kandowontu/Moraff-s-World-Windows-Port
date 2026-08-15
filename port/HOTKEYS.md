@@ -5,10 +5,16 @@ They do not replace any keyboard command from the original DOS game.
 
 On character selection, `Tab` switches between the ten ordinary Adventure
 slots and ten wholly separate Colosseum slots. See `COLOSSEUM.md`; Colosseum
-records never load or overwrite ordinary character/world saves.
+records never load or overwrite ordinary character/world saves. On either
+page, press `D`, then `0`-`9` (or click a slot), and confirm with `Y` to
+permanently delete that save. Adventure deletion also removes that character's
+monster, pitfall, map, and Beastiary sidecars; Colosseum deletion affects only
+the selected `COLOSSEUM#.SAV` file.
 
 | Shortcut | Function |
 | --- | --- |
+| `Alt+V` | Open the original-video-driver selector from character selection or dungeon exploration. It lists all 12 `WORLD.EXE` branches, including separate CGA/EGA/VGA renderers at 320×200 and separate 16-/256-color branches at repeated higher resolutions. Each retains its native map grid, wall treatment, palette limit, and viewport rounding. The choice is saved locally in `MWPORT.CFG`. |
+| `Ctrl+F1` | Toggle runtime Turbo Mode. While enabled, `+` and `-` adjust all gameplay pauses and held-key repeat timing in 25% steps from 25% through 1000%. The current percentage is shown on screen and in the window title. Turning Turbo off always restores and resets normal 100% timing. |
 | `Ctrl+F2` | Open the native battle simulator. Its Melee and Spell tabs reproduce the inputs, 10,000-trial calculations, result cards, formula breakdowns, and distributions from `mw_reference_guide.html`; Enhanced saves also expose every deep offensive spell as well as Enhanced monsters and gear. Select a numeric row and type a value followed by `Enter` for direct entry; `Backspace` edits and `Escape` cancels. |
 | `Ctrl+F3` | Randomize the current floor's 77-step palette choice, background tint, and stone-texture phase. Changing floors restores that floor's normal appearance. |
 | `Ctrl+F4` | If the current floor has an undefeated quest boss, ask for confirmation and warp to an open cell directly beside it. If no quest boss exists, the game reports that without moving the player. |

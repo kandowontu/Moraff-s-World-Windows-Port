@@ -10,6 +10,7 @@
 #include <string.h>
 #include <math.h>
 #include <limits.h>
+#include <errno.h>
 
 /*
  * Original-routine coverage
@@ -42,6 +43,12 @@ static int left_column_text(Game *g, int y, const char *text, u8 color);
 static int confirm_town_teleport(Game *g, Character *player);
 static int confirm_max_character(Game *g, Character *player);
 static int game_try_step(Game *g, Character *player, int direction);
+static void game_video_mode_menu(Game *g, int startup);
+static int game_load_display_font(Game *g, int display_mode);
+static void game_normal_map_rect(const Game *g, int *x, int *y,
+                                 int *w, int *h);
+
+#define MW_PORT_CONFIG_FILE "MWPORT.CFG"
 
 /* MW_PORT: WORLD build_filepath (0x277E7)/build_open_file (0x2792F) family,
  * expressed as safe local paths instead of DOS drive/path manipulation. */
@@ -49,6 +56,81 @@ static int game_try_step(Game *g, Character *player, int direction);
 
 void game_make_path(Game *g, char *out, int out_sz, const char *filename) {
     snprintf(out, out_sz, "%s/%s", g->game_dir, filename);
+}
+
+static int load_display_mode_setting(Game *g) {
+    char path[300], line[96];
+    /* MW.EXE option A is the native port's default when no preference has
+       been saved yet.  A and B share 1024x768x256 dimensions but remain
+       separate original driver paths. */
+    int mode = MW_DISPLAY_SVGA_1024X768_256_A;
+    int legacy_mode = -1;
+    /* Headless visual regression runs can select a WORLD driver without
+     * rewriting the player's persistent configuration. */
+    const char *test_driver = getenv("MW_TEST_DISPLAY_DRIVER");
+    if (test_driver && *test_driver) {
+        int parsed = atoi(test_driver);
+        if (video_display_mode_info(parsed)) return parsed;
+    }
+    game_make_path(g, path, sizeof(path), MW_PORT_CONFIG_FILE);
+    FILE *f = fopen(path, "rt");
+    if (!f) return mode;
+    while (fgets(line, sizeof(line), f)) {
+        int parsed;
+        if (sscanf(line, "display_driver=%d", &parsed) == 1 &&
+            video_display_mode_info(parsed)) {
+            mode = parsed;
+            break;
+        }
+        if (sscanf(line, "video_mode=%d", &parsed) == 1)
+            legacy_mode = parsed;
+    }
+    fclose(f);
+    /* Migrate the first implementation's seven resolution-only indices.
+       Prefer each resolution's fullest original renderer. */
+    if (legacy_mode >= 0) {
+        static const int migrate[7] = {
+            MW_DISPLAY_HERCULES_720X348,
+            MW_DISPLAY_VGA_320X200,
+            MW_DISPLAY_VGA_360X480,
+            MW_DISPLAY_EGA_640X350,
+            MW_DISPLAY_VESA_640X480_256,
+            MW_DISPLAY_SVGA_800X600_16,
+            MW_DISPLAY_SVGA_1024X768_256_A
+        };
+        if (legacy_mode < 7) mode = migrate[legacy_mode];
+    }
+    return mode;
+}
+
+static int save_display_mode_setting(Game *g, int mode) {
+    char path[300];
+    if (!video_display_mode_info(mode)) return -1;
+    game_make_path(g, path, sizeof(path), MW_PORT_CONFIG_FILE);
+    FILE *f = fopen(path, "wt");
+    if (!f) return -1;
+    fprintf(f, "# Moraff's World native-port settings\n");
+    fprintf(f, "# WORLD.EXE driver number (0-11); repeated resolutions use\n");
+    fprintf(f, "# different native palette, wall, font and map paths.\n");
+    fprintf(f, "display_driver=%d\n", mode);
+    fclose(f);
+    return 0;
+}
+
+static int game_load_display_font(Game *g, int display_mode) {
+    const MwDisplayModeInfo *info = video_display_mode_info(display_mode);
+    char path[260];
+    /* The shipped data set contains the same three font families selected by
+       WORLD's jump table.  The native text scaler supplies the intermediate
+       high-resolution sizes from 360X480.FNT. */
+    const char *preferred = info && info->font_family == 0 ?
+                            "320X200.FNT" : "360X480.FNT";
+    game_make_path(g, path, sizeof(path), preferred);
+    if (video_load_font(&g->video, path) == 0) return 0;
+    game_make_path(g, path, sizeof(path),
+                   info && info->font_family == 0 ?
+                   "360X480.FNT" : "320X200.FNT");
+    return video_load_font(&g->video, path);
 }
 
 /* MW_PORT: WORLD's shared random stream used by map, monster, combat,
@@ -112,6 +194,50 @@ int game_clamp_dungeon_floor(const Game *g, int floor) {
     if (floor < 0) return 0;
     int max_floor = game_traversal_rules(g)->max_floor;
     return floor > max_floor ? max_floor : floor;
+}
+
+u32 game_scaled_delay_ms(const Game *g, u32 milliseconds) {
+    if (!g || !g->turbo_enabled) return milliseconds;
+    int percent = g->turbo_percent;
+    if (percent < 25 || percent > 1000) percent = 100;
+    if (!milliseconds) return 0;
+    uint64_t scaled = ((uint64_t)milliseconds * 100u +
+                       (unsigned)percent - 1u) / (unsigned)percent;
+    if (!scaled) scaled = 1;
+    return scaled > UINT32_MAX ? UINT32_MAX : (u32)scaled;
+}
+
+void game_delay(Game *g, u32 milliseconds) {
+    SDL_Delay(game_scaled_delay_ms(g, milliseconds));
+}
+
+int game_handle_turbo_key(Game *g, int key) {
+    if (!g) return 0;
+    if (key == INPUT_TURBO_TOGGLE) {
+        g->turbo_enabled = !g->turbo_enabled;
+        /* Turning Turbo off always discards the prior multiplier; enabling it
+           therefore begins at the documented normal 100-percent baseline. */
+        g->turbo_percent = 100;
+    } else if (g->turbo_enabled && key == '+') {
+        if (g->turbo_percent < 1000) g->turbo_percent += 25;
+    } else if (g->turbo_enabled && key == '-') {
+        if (g->turbo_percent > 25) g->turbo_percent -= 25;
+    } else {
+        return 0;
+    }
+    if (!g->turbo_enabled) g->turbo_percent = 100;
+    input_set_timing_percent(&g->input,
+        g->turbo_enabled ? g->turbo_percent : 100);
+    if (g->video.window) {
+        char title[96];
+        if (g->turbo_enabled)
+            snprintf(title, sizeof(title),
+                     "Moraff's World - TURBO %d%% (+/-)", g->turbo_percent);
+        else
+            snprintf(title, sizeof(title), "Moraff's World");
+        SDL_SetWindowTitle(g->video.window, title);
+    }
+    return 1;
 }
 
 /* MW_PORT: WORLD func_0A4CF, func_0A51B, func_0A548 and func_0A60D.
@@ -1450,27 +1576,19 @@ int game_init(Game *g, const char *data_dir) {
         return -1;
     }
 
+    int saved_display_mode = load_display_mode_setting(g);
+    if (video_set_display_mode(&g->video, saved_display_mode, 1) < 0)
+        video_set_display_mode(&g->video,
+                               MW_DISPLAY_SVGA_1024X768_256_A, 1);
+
     if (!SDL_WasInit(SDL_INIT_AUDIO)) SDL_InitSubSystem(SDL_INIT_AUDIO);
     mw_audio_init(&g->audio); /* A missing host audio device is non-fatal. */
     mw_audio_set_enabled(&g->audio, g->sound_enabled);
 
     input_init(&g->input);
+    g->turbo_percent = 100;
 
-    char path[260];
-    game_make_path(g, path, sizeof(path), "1024X768.FNT");
-    if (video_load_font(&g->video, path) < 0) {
-        game_make_path(g, path, sizeof(path), "1024x768.FNT");
-        if (video_load_font(&g->video, path) < 0) {
-            game_make_path(g, path, sizeof(path), "640X480.FNT");
-            if (video_load_font(&g->video, path) < 0) {
-                game_make_path(g, path, sizeof(path), "360X480.FNT");
-                if (video_load_font(&g->video, path) < 0) {
-                    game_make_path(g, path, sizeof(path), "320X200.FNT");
-                    video_load_font(&g->video, path);
-                }
-            }
-        }
-    }
+    game_load_display_font(g, g->video.display_mode);
 
     game_srand(g, (u32)SDL_GetTicks());
 
@@ -1486,10 +1604,11 @@ int game_init(Game *g, const char *data_dir) {
     g->cur_player = 0;
     g->dungeon_max_floor = MAX_DUNGEON_FLOOR;
 
-    /* WORLD.ASM modes 8-10 are the chipset-specific 1024x768 variants. */
-    g->video_mode = 8;
-    g->screen_w = LOGICAL_W;
-    g->screen_h = LOGICAL_H;
+    const MwDisplayModeInfo *display =
+        video_display_mode_info(g->video.display_mode);
+    g->video_mode = display ? display->world_mode : 8;
+    g->screen_w = display ? display->raster_w : LOGICAL_W;
+    g->screen_h = display ? display->raster_h : LOGICAL_H;
 
     return 0;
 }
@@ -1582,12 +1701,13 @@ static void reveal_around_player_animated(Game *g, Character *player) {
                     continue;
                 g->visited[y][x] = 1;
                 changed = 1;
-            }
+        }
         if (changed) {
-            draw_minimap(g, 0, 0x1AE * LOGICAL_H / 1200,
-                         0x11B * LOGICAL_W / 1600, 38 * 10);
+            int mx, my, mw, mh;
+            game_normal_map_rect(g, &mx, &my, &mw, &mh);
+            draw_minimap(g, mx, my, mw, mh);
             video_present(&g->video);
-            SDL_Delay((u32)delay_ms[g->brick_speed & 3]);
+            game_delay(g, (u32)delay_ms[g->brick_speed & 3]);
         }
     }
     memcpy(g->visited, target, sizeof(target));
@@ -1601,44 +1721,103 @@ static int has_adjacent_monster(Game *g) {
     return g->monster_adjacent;
 }
 
-/* MW_PORT: WORLD func_1F077, func_1F3FD and far_1FAE6 (1024-mode map),
+/* Convert WORLD's common 1600x1200 design coordinates through the selected
+ * driver's integer raster first.  Drawing directly with SX/SY and shrinking
+ * afterward loses the characteristic rounding of the CGA/EGA branches. */
+static int display_design_x(const Game *g, int design_x) {
+    const MwDisplayModeInfo *info =
+        video_display_mode_info(g->video.display_mode);
+    if (!info) return design_x * LOGICAL_W / 1600;
+    int native = design_x * info->raster_w / 1600;
+    return native * LOGICAL_W / info->raster_w;
+}
+
+static int display_design_y(const Game *g, int design_y) {
+    const MwDisplayModeInfo *info =
+        video_display_mode_info(g->video.display_mode);
+    if (!info) return design_y * LOGICAL_H / 1200;
+    int native = design_y * info->raster_h / 1200;
+    return native * LOGICAL_H / info->raster_h;
+}
+
+static void game_normal_map_rect(const Game *g, int *x, int *y,
+                                 int *w, int *h) {
+    const MwDisplayModeInfo *info =
+        video_display_mode_info(g->video.display_mode);
+    if (!info) {
+        *x = 0; *y = 0x1AE * LOGICAL_H / 1200;
+        *w = 0x11B * LOGICAL_W / 1600; *h = 380;
+        return;
+    }
+    *x = 0;
+    *y = display_design_y(g, 0x1AE);
+    *w = info->map_cell_px * info->map_cols * LOGICAL_W / info->raster_w;
+    *h = info->map_cell_px * info->map_rows * LOGICAL_H / info->raster_h;
+}
+
+/* MW_PORT: WORLD func_1F077, func_1F3FD and far_1FAE6 (all driver maps),
  * including wall, door, ladder, trap-door, known-pit and blinking-player
  * symbols. */
-/* ── Drawing: 1024-mode map window (WORLD.ASM sub_086F1/far_1FAE6) ── */
+/* ── Drawing: native-driver map window (WORLD.ASM sub_086F1/far_1FAE6) ── */
 
 /* WORLD.ASM sub_1F077 does not recolor a door's wall.  At the ten-pixel
  * 1024-mode scale it draws a small white crossbar symbol perpendicular to
  * that wall.  The five-pixel expanded map takes the routine's compact path
  * and uses one three-pixel crossbar. */
-static void draw_map_door_marker(Video *v, int x, int y, int cell_px,
-                                 int horizontal, u8 color) {
-    int half = cell_px / 3;
-    if (half < 1) half = 1;
+static void map_native_pixel(Video *v, int x, int y, int cw, int ch,
+                             int cell, int px, int py, u8 color) {
+    int x0 = x + px * cw / cell;
+    int y0 = y + py * ch / cell;
+    int x1 = x + (px + 1) * cw / cell;
+    int y1 = y + (py + 1) * ch / cell;
+    if (x1 <= x0) x1 = x0 + 1;
+    if (y1 <= y0) y1 = y0 + 1;
+    video_fill_rect(v, x0, y0, x1 - x0, y1 - y0, color);
+}
 
+static void map_native_hline(Video *v, int x, int y, int cw, int ch,
+                             int cell, int px, int py, int length, u8 color) {
+    for (int i = 0; i < length; i++)
+        map_native_pixel(v, x, y, cw, ch, cell, px + i, py, color);
+}
+
+static void map_native_vline(Video *v, int x, int y, int cw, int ch,
+                             int cell, int px, int py, int length, u8 color) {
+    for (int i = 0; i < length; i++)
+        map_native_pixel(v, x, y, cw, ch, cell, px, py + i, color);
+}
+
+static void draw_map_door_marker(Video *v, int x, int y, int cw, int ch,
+                                 int cell, int horizontal, int far_edge,
+                                 u8 color) {
+    int half = cell >= 8 ? cell / 3 : 1;
+    int cx = cell / 2;
+    int cy = cell / 2;
     if (horizontal) {
-        int cx = x + cell_px / 2;
-        if (cell_px >= 8) {
-            video_vline(v, cx - 1, y - half, half * 2 + 1, color);
-            video_vline(v, cx + 1, y - half, half * 2 + 1, color);
-        } else {
-            video_vline(v, cx, y - 1, 3, color);
-        }
+        int py = far_edge ? cell - 1 - half : 0;
+        map_native_vline(v, x, y, cw, ch, cell, cx, py, half + 1, color);
+        if (cell >= 8 && cx + 1 < cell)
+            map_native_vline(v, x, y, cw, ch, cell, cx + 1, py,
+                             half + 1, color);
     } else {
-        int cy = y + cell_px / 2;
-        if (cell_px >= 8) {
-            video_hline(v, x - half, cy - 1, half * 2 + 1, color);
-            video_hline(v, x - half, cy + 1, half * 2 + 1, color);
-        } else {
-            video_hline(v, x - 1, cy, 3, color);
-        }
+        int px = far_edge ? cell - 1 - half : 0;
+        map_native_hline(v, x, y, cw, ch, cell, px, cy, half + 1, color);
+        if (cell >= 8 && cy + 1 < cell)
+            map_native_hline(v, x, y, cw, ch, cell, px, cy + 1,
+                             half + 1, color);
     }
 }
 
 void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
     Video *v = &g->video;
-    const int cell_px = 10; /* mode 8-10 value at DS:4488 */
-    int cols = mw / cell_px; /* 18 columns */
-    int rows = mh / cell_px; /* 38 rows */
+    const MwDisplayModeInfo *info = video_display_mode_info(v->display_mode);
+    const int cell_px = info ? info->map_cell_px : 10;
+    int cols = info ? info->map_cols : 18;
+    int rows = info ? info->map_rows : 38;
+    int raster_w = info ? info->raster_w : LOGICAL_W;
+    int raster_h = info ? info->raster_h : LOGICAL_H;
+    mw = cell_px * cols * LOGICAL_W / raster_w;
+    mh = cell_px * rows * LOGICAL_H / raster_h;
     int first_x = g->cur_x - cols / 2;
     int first_y = g->cur_y - rows / 2;
 
@@ -1654,8 +1833,11 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
             if (wx < 0 || wx >= MAP_W || wy < 0 || wy >= MAP_H) continue;
             if (!g->visited[wy][wx]) continue;
 
-            video_fill_rect(v, mx + gx * cell_px, my + gy * cell_px,
-                            cell_px, cell_px, 0);
+            int x0 = mx + gx * cell_px * LOGICAL_W / raster_w;
+            int y0 = my + gy * cell_px * LOGICAL_H / raster_h;
+            int x1 = mx + (gx + 1) * cell_px * LOGICAL_W / raster_w;
+            int y1 = my + (gy + 1) * cell_px * LOGICAL_H / raster_h;
+            video_fill_rect(v, x0, y0, x1 - x0, y1 - y0, 0);
         }
     }
 
@@ -1668,8 +1850,12 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
             if (wx < 0 || wx >= MAP_W || wy < 0 || wy >= MAP_H) continue;
             if (!g->visited[wy][wx]) continue;
 
-            int x = mx + gx * cell_px;
-            int y = my + gy * cell_px;
+            int x = mx + gx * cell_px * LOGICAL_W / raster_w;
+            int y = my + gy * cell_px * LOGICAL_H / raster_h;
+            int next_x = mx + (gx + 1) * cell_px * LOGICAL_W / raster_w;
+            int next_y = my + (gy + 1) * cell_px * LOGICAL_H / raster_h;
+            int cw = next_x - x;
+            int ch = next_y - y;
             int edge[4] = {
                 map_get_edge(g, wx,     wy,     1),
                 map_get_edge(g, wx + 1, wy,     0),
@@ -1681,58 +1867,63 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
              * the original map renderer: store, temple, bank, inn, hotel. */
             int shop = game_shop_type(g, wx, wy);
             if (shop)
-                video_fill_rect(v, x + 1, y + 1, cell_px - 2, cell_px - 2,
-                                (u8)(shop + 2));
+                video_fill_rect(v, x, y, cw, ch, (u8)(shop + 2));
 
             /* far_1F3FD calls func_1F077 once for each actual edge.  Open
              * value 3 is left undrawn.  Stone and door edges retain the same
              * white wall; doors receive sub_1F077's perpendicular marker. */
             if (edge[0] != 3) {
-                video_hline(v, x, y, cell_px, MW_COLOR_MAP_WHITE);
+                map_native_hline(v, x, y, cw, ch, cell_px,
+                                 0, 0, cell_px, MW_COLOR_MAP_WHITE);
                 if (edge[0] == 1)
-                    draw_map_door_marker(v, x, y, cell_px, 1,
+                    draw_map_door_marker(v, x, y, cw, ch, cell_px, 1, 0,
                                          MW_COLOR_MAP_WHITE);
             }
             if (edge[2] != 3) {
-                video_hline(v, x, y + cell_px - 1, cell_px,
-                            MW_COLOR_MAP_WHITE);
+                map_native_hline(v, x, y, cw, ch, cell_px,
+                                 0, cell_px - 1, cell_px,
+                                 MW_COLOR_MAP_WHITE);
                 if (edge[2] == 1)
-                    draw_map_door_marker(v, x, y + cell_px - 1,
-                                         cell_px, 1, MW_COLOR_MAP_WHITE);
+                    draw_map_door_marker(v, x, y, cw, ch,
+                                         cell_px, 1, 1,
+                                         MW_COLOR_MAP_WHITE);
             }
             if (edge[3] != 3) {
-                video_vline(v, x, y, cell_px, MW_COLOR_MAP_WHITE);
+                map_native_vline(v, x, y, cw, ch, cell_px,
+                                 0, 0, cell_px, MW_COLOR_MAP_WHITE);
                 if (edge[3] == 1)
-                    draw_map_door_marker(v, x, y, cell_px, 0,
+                    draw_map_door_marker(v, x, y, cw, ch, cell_px, 0, 0,
                                          MW_COLOR_MAP_WHITE);
             }
             if (edge[1] != 3) {
-                video_vline(v, x + cell_px - 1, y, cell_px,
-                            MW_COLOR_MAP_WHITE);
+                map_native_vline(v, x, y, cw, ch, cell_px,
+                                 cell_px - 1, 0, cell_px,
+                                 MW_COLOR_MAP_WHITE);
                 if (edge[1] == 1)
-                    draw_map_door_marker(v, x + cell_px - 1, y,
-                                         cell_px, 0, MW_COLOR_MAP_WHITE);
+                    draw_map_door_marker(v, x, y, cw, ch,
+                                         cell_px, 0, 1,
+                                         MW_COLOR_MAP_WHITE);
             }
 
             /* Red corner pixels reproduce the brick joints against the
              * dark-red unexplored field without inventing neighbor walls. */
-            video_put_pixel(v, x, y, 10);
-            video_put_pixel(v, x + cell_px - 1, y + cell_px - 1, 10);
+            map_native_pixel(v, x, y, cw, ch, cell_px, 0, 0, 10);
+            map_native_pixel(v, x, y, cw, ch, cell_px,
+                             cell_px - 1, cell_px - 1, 10);
 
             int ladder = ladder_delta(g, wx, wy);
             if (ladder > 0) {
                 /* The DOS map uses opposite diagonal strokes for the two
                  * ladder directions.  Down is a backslash. */
-                for (int p = 2; p <= 7; p++) {
-                    video_put_pixel(v, x + p, y + p, MW_COLOR_STATUS_CYAN);
-                    video_put_pixel(v, x + p, y + p + 1,
-                                    MW_COLOR_STATUS_CYAN);
+                for (int p = 1; p < cell_px - 1; p++) {
+                    map_native_pixel(v, x, y, cw, ch, cell_px, p, p,
+                                     MW_COLOR_STATUS_CYAN);
                 }
             } else if (ladder < 0) {
                 /* Up is a forward slash. */
-                for (int p = 2; p <= 7; p++) {
-                    video_put_pixel(v, x + p, y + 9 - p, 4);
-                    video_put_pixel(v, x + p, y + 8 - p, 4);
+                for (int p = 1; p < cell_px - 1; p++) {
+                    map_native_pixel(v, x, y, cw, ch, cell_px,
+                                     p, cell_px - 1 - p, 4);
                 }
             }
 
@@ -1740,35 +1931,42 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
                 /* The town help calls these "colored squares" and explicitly
                  * identifies them as ladders going up to a location.  Put a
                  * high-contrast ladder inside the authentic type+2 color. */
-                u8 shop_color = (u8)(shop + 2);
-                video_fill_rect(v, x + 1, y + 1, 8, 8, shop_color);
-                video_hline(v, x + 1, y + 1, 8, MW_COLOR_MAP_WHITE);
-                video_hline(v, x + 1, y + 8, 8, MW_COLOR_MAP_WHITE);
-                video_vline(v, x + 1, y + 1, 8, MW_COLOR_MAP_WHITE);
-                video_vline(v, x + 8, y + 1, 8, MW_COLOR_MAP_WHITE);
-                video_vline(v, x + 3, y + 2, 6, 0);
-                video_vline(v, x + 6, y + 2, 6, 0);
-                video_hline(v, x + 3, y + 3, 4, 4);
-                video_hline(v, x + 3, y + 5, 4, 4);
-                video_hline(v, x + 3, y + 7, 4, 4);
-                video_vline(v, x + 5, y + 2, 5, 4);
-                video_put_pixel(v, x + 4, y + 2, 4);
-                video_put_pixel(v, x + 6, y + 2, 4);
+                map_native_hline(v, x, y, cw, ch, cell_px,
+                                 0, 0, cell_px, MW_COLOR_MAP_WHITE);
+                map_native_hline(v, x, y, cw, ch, cell_px,
+                                 0, cell_px - 1, cell_px,
+                                 MW_COLOR_MAP_WHITE);
+                map_native_vline(v, x, y, cw, ch, cell_px,
+                                 0, 0, cell_px, MW_COLOR_MAP_WHITE);
+                map_native_vline(v, x, y, cw, ch, cell_px,
+                                 cell_px - 1, 0, cell_px,
+                                 MW_COLOR_MAP_WHITE);
+                int rail1 = cell_px / 3;
+                int rail2 = cell_px - 1 - rail1;
+                map_native_vline(v, x, y, cw, ch, cell_px,
+                                 rail1, 1, cell_px - 2, 0);
+                map_native_vline(v, x, y, cw, ch, cell_px,
+                                 rail2, 1, cell_px - 2, 0);
+                for (int rung = 2; rung < cell_px - 1; rung += 2)
+                    map_native_hline(v, x, y, cw, ch, cell_px,
+                                     rail1, rung, rail2 - rail1 + 1, 4);
             }
 
             int trap = game_trapdoor_floor(g, wx, wy);
             if (!ladder && trap >= 0) {
                 /* WORLD describes a trap door with an X, not a generic
                    unexplained square. */
-                for (int p = 2; p <= 7; p++) {
-                    video_put_pixel(v, x + p, y + p, 4);
-                    video_put_pixel(v, x + 9 - p, y + p, 4);
+                for (int p = 1; p < cell_px - 1; p++) {
+                    map_native_pixel(v, x, y, cw, ch, cell_px, p, p, 4);
+                    map_native_pixel(v, x, y, cw, ch, cell_px,
+                                     cell_px - 1 - p, p, 4);
                 }
             } else if (!ladder && game_is_known_pitfall(g, wx, wy)) {
                 /* WORLD draws a discovered chute as a color-3 (magenta) X. */
-                for (int p = 2; p <= 7; p++) {
-                    video_put_pixel(v, x + p, y + p, 3);
-                    video_put_pixel(v, x + 9 - p, y + p, 3);
+                for (int p = 1; p < cell_px - 1; p++) {
+                    map_native_pixel(v, x, y, cw, ch, cell_px, p, p, 3);
+                    map_native_pixel(v, x, y, cw, ch, cell_px,
+                                     cell_px - 1 - p, p, 3);
                 }
             }
 
@@ -1776,8 +1974,14 @@ void draw_minimap(Game *g, int mx, int my, int mw, int mh) {
                 /* Like WORLD's map cursor, the party is a blinking square.
                  * Its off phase exposes the feature beneath it. */
                 if (g->map_player_visible) {
-                    video_fill_rect(v, x + 3, y + 3, 4, 4, 15);
-                    video_fill_rect(v, x + 4, y + 4, 2, 2, 6);
+                    int p0 = cell_px / 3;
+                    int p1 = cell_px - p0;
+                    for (int py = p0; py < p1; py++)
+                        for (int px = p0; px < p1; px++)
+                            map_native_pixel(v, x, y, cw, ch, cell_px,
+                                             px, py, 15);
+                    map_native_pixel(v, x, y, cw, ch, cell_px,
+                                     cell_px / 2, cell_px / 2, 6);
                 }
             }
         }
@@ -1853,7 +2057,58 @@ static void dungeon_line(Video *v, int x0, int y0, int x1, int y1, u8 color,
     }
 }
 
-static u8 remap_wall_texel(u8 src, int door, int screen_x) {
+static u8 remap_wall_texel(Video *v, u8 src, int door,
+                           int screen_x, int screen_y) {
+    const MwDisplayModeInfo *info = video_display_mode_info(v->display_mode);
+    int style = info ? info->wall_style : MW_WALL_CHUNKY256;
+    int nx = info ? screen_x * info->raster_w / LOGICAL_W : screen_x;
+    int ny = info ? screen_y * info->raster_h / LOGICAL_H : screen_y;
+
+    if (style == MW_WALL_HERCULES) {
+        if (door)
+            return src == 1 ? 0 : 15;
+        if (src == 13) return 0;
+        if (src == 18 || src == 19)
+            return ((nx + ny + (src == 19)) & 1) ? 15 : 0;
+        return ((nx >> 1) + ny) % 5 == 0 ? 0 : 15;
+    }
+
+    if (style == MW_WALL_CGA) {
+        if (src == 0 || src == 1 || src == 16) return 0;
+        if (door) {
+            /* Mode 1's four-colour line writer encodes the WALL.PIC colors
+             * as red masonry, a green arch/door face and yellow ironwork.
+             * Preserve those semantic groups instead of turning the complete
+             * door wall yellow. */
+            if (src == 14 || src == 12) return 6;
+            if (src == 13) return 0;
+            if (src == 6 || src == 11) return 8;
+            return 4;
+        }
+        /* WORLD's mode-1 branch does not retain WALL.PIC's 16-colour
+         * texture.  func_16488 reduces an opaque wall plane to the selected
+         * CGA red and supplies the corridor construction lines separately. */
+        return 6;
+    }
+
+    if (style == MW_WALL_PLANAR16) {
+        if (door) {
+            if (src == 1) return 0;
+            if (src == 6 || src == 11 || src == 13) return 2;
+            /* WALL.PIC already distinguishes gray stone (14), dark mortar
+             * (12) and white ironwork (15).  Flattening all three to white
+             * made planar doors look blown out and much denser than DOS. */
+            return src < 16 ? src : 0;
+        }
+        /* Literal func_14F53 planar path: ordinary 0..15 texels remain
+         * logical EGA indices, command 16 is transparent, and both gradient
+         * commands collapse to logical colour 4. */
+        if (src == 16) return 0;
+        if (src == 17) return 3;
+        if (src == 18 || src == 19) return 4;
+        return src < 16 ? src : 0;
+    }
+
     if (door) {
         /* Mode 8 changes these low DAC entries while drawing WALL.PIC. */
         if (src == 1) return 0;                 /* black door boards */
@@ -1866,10 +2121,15 @@ static u8 remap_wall_texel(u8 src, int door, int screen_x) {
     if (src == 0 || src == 16) return MW_COLOR_WALL_TINT;
     /* WORLD's mode-8 wall renderer turns its two gradient commands into
      * screen-position palette indices spanning 0x40..0xBF. */
-    if (src == 18)
-        return (u8)(0x40 + ((screen_x >> 1) & 0x7F));
-    if (src == 19)
-        return (u8)(0x40 + (((LOGICAL_W - screen_x) >> 3) & 0x7F));
+    if (src == 18) {
+        int shift = info && info->raster_w > 1000 ? 1 : 2;
+        return (u8)(0x40 + ((nx >> shift) & 0x7F));
+    }
+    if (src == 19) {
+        int width = info ? info->raster_w : LOGICAL_W;
+        int shift = width > 1000 ? 3 : 2;
+        return (u8)(0x40 + (((width - nx) >> shift) & 0x7F));
+    }
     /* Preserve the original floor-colored surface ramp for uncommon wall
      * details instead of flattening every high source color to blue. */
     if (src >= 20 && src <= 31) return src;
@@ -1921,7 +2181,8 @@ static void textured_triangle(Video *v, const u8 *tex,
             if (tx < 0) tx = 0; if (tx > 255) tx = 255;
             if (ty < 0) ty = 0; if (ty > 199) ty = 199;
             v->pixels[y * LOGICAL_W + x] =
-                remap_wall_texel(sample_wall_texel(tex, tx, ty), door, x);
+                remap_wall_texel(v, sample_wall_texel(tex, tx, ty), door,
+                                 x, y);
         }
     }
     v->dirty = 1;
@@ -1954,6 +2215,77 @@ static ProjRect projection_rect(int vx, int vy, int vw, int vh, int depth) {
     return p;
 }
 
+static void solid_triangle(Video *v, WallVertex a, WallVertex b, WallVertex c,
+                           int clip_x, int clip_y, int clip_w, int clip_h,
+                           u8 color) {
+    int minx = (int)floorf(fminf(a.x, fminf(b.x, c.x)));
+    int maxx = (int)ceilf(fmaxf(a.x, fmaxf(b.x, c.x)));
+    int miny = (int)floorf(fminf(a.y, fminf(b.y, c.y)));
+    int maxy = (int)ceilf(fmaxf(a.y, fmaxf(b.y, c.y)));
+    if (minx < clip_x) minx = clip_x;
+    if (miny < clip_y) miny = clip_y;
+    if (maxx >= clip_x + clip_w) maxx = clip_x + clip_w - 1;
+    if (maxy >= clip_y + clip_h) maxy = clip_y + clip_h - 1;
+    float denom = (b.y - c.y) * (a.x - c.x) +
+                  (c.x - b.x) * (a.y - c.y);
+    if (fabsf(denom) < 0.001f) return;
+    for (int y = miny; y <= maxy; y++)
+        for (int x = minx; x <= maxx; x++) {
+            float px = x + 0.5f, py = y + 0.5f;
+            float wa = ((b.y - c.y) * (px - c.x) +
+                        (c.x - b.x) * (py - c.y)) / denom;
+            float wb = ((c.y - a.y) * (px - c.x) +
+                        (a.x - c.x) * (py - c.y)) / denom;
+            float wc = 1.0f - wa - wb;
+            if (wa >= -0.001f && wb >= -0.001f && wc >= -0.001f)
+                v->pixels[y * LOGICAL_W + x] = color;
+        }
+    v->dirty = 1;
+}
+
+static void solid_quad(Video *v, WallVertex a, WallVertex b,
+                       WallVertex c, WallVertex d,
+                       int vx, int vy, int vw, int vh, u8 color) {
+    solid_triangle(v, a, b, c, vx, vy, vw, vh, color);
+    solid_triangle(v, a, c, d, vx, vy, vw, vh, color);
+}
+
+static void draw_dungeon_perspective_tiles(Video *v, int vx, int vy,
+                                           int vw, int vh,
+                                           u8 first, u8 second) {
+    int cx = vx + (vw - 1) / 2;
+    for (int depth = 7; depth >= 0; depth--) {
+        ProjRect outer = projection_rect(vx, vy, vw, vh, depth);
+        ProjRect inner = projection_rect(vx, vy, vw, vh, depth + 1);
+        u8 left = (depth & 1) ? first : second;
+        u8 right = (depth & 1) ? second : first;
+        solid_quad(v,
+            (WallVertex){outer.left, outer.top,0,0},
+            (WallVertex){cx, outer.top,0,0},
+            (WallVertex){cx, inner.top,0,0},
+            (WallVertex){inner.left, inner.top,0,0},
+            vx,vy,vw,vh,left);
+        solid_quad(v,
+            (WallVertex){cx, outer.top,0,0},
+            (WallVertex){outer.right, outer.top,0,0},
+            (WallVertex){inner.right, inner.top,0,0},
+            (WallVertex){cx, inner.top,0,0},
+            vx,vy,vw,vh,right);
+        solid_quad(v,
+            (WallVertex){inner.left, inner.bottom,0,0},
+            (WallVertex){cx, inner.bottom,0,0},
+            (WallVertex){cx, outer.bottom,0,0},
+            (WallVertex){outer.left, outer.bottom,0,0},
+            vx,vy,vw,vh,left);
+        solid_quad(v,
+            (WallVertex){cx, inner.bottom,0,0},
+            (WallVertex){inner.right, inner.bottom,0,0},
+            (WallVertex){outer.right, outer.bottom,0,0},
+            (WallVertex){cx, outer.bottom,0,0},
+            vx,vy,vw,vh,right);
+    }
+}
+
 static void draw_dungeon_gradient(Video *v, int vx, int vy, int vw, int vh) {
     static const u8 ceiling[] = {
         MW_COLOR_CEILING_1, MW_COLOR_CEILING_2,
@@ -1966,10 +2298,38 @@ static void draw_dungeon_gradient(Video *v, int vx, int vy, int vw, int vh) {
         MW_COLOR_FLOOR_3, 0, MW_COLOR_FLOOR_4, 0,
         MW_COLOR_FLOOR_5, 0
     };
+    const MwDisplayModeInfo *info = video_display_mode_info(v->display_mode);
+    int style = info ? info->wall_style : MW_WALL_CHUNKY256;
+    int world_mode = info ? info->world_mode : 10;
     int horizon = vy + vh / 2;
+    video_fill_rect(v, vx, vy, vw, vh, 0);
+
+    if (style == MW_WALL_PLANAR16) {
+        draw_dungeon_perspective_tiles(v, vx, vy, vw, vh, 10, 11);
+        return;
+    }
+
+    if (style == MW_WALL_CHUNKY256 && world_mode != 9) {
+        draw_dungeon_perspective_tiles(v, vx, vy, vw, vh, 26, 27);
+        return;
+    }
+
     for (int x = vx; x < vx + vw; x++) {
-        u8 cc = ceiling[(x - vx) & 7];
-        u8 fc = floor[(x - vx) % 10];
+        int nx = info ? x * info->raster_w / LOGICAL_W : x;
+        u8 cc, fc;
+        if (style == MW_WALL_HERCULES) {
+            cc = ((nx >> 1) & 1) ? 0 : 15;
+            fc = (nx & 1) ? 0 : 15;
+        } else if (style == MW_WALL_CGA) {
+            cc = ((nx >> 1) & 1) ? 0 : 3;
+            fc = (nx & 1) ? 0 : 2;
+        } else if (style == MW_WALL_PLANAR16) {
+            cc = ((nx >> 1) & 1) ? 1 : 9;
+            fc = (nx & 1) ? 0 : 2;
+        } else {
+            cc = ceiling[(x - vx) & 7];
+            fc = floor[(x - vx) % 10];
+        }
         video_vline(v, x, vy, horizon - vy, cc);
         video_vline(v, x, horizon, vy + vh - horizon, fc);
     }
@@ -2084,7 +2444,8 @@ static void draw_ray_walls(Game *g, int vx, int vy, int vw, int vh, int dir,
             if (ty < 0) ty = 0;
             if (ty > 199) ty = 199;
             v->pixels[y * LOGICAL_W + sx] =
-                remap_wall_texel(sample_wall_texel(tex, tx, ty), door, sx);
+                remap_wall_texel(v, sample_wall_texel(tex, tx, ty), door,
+                                 sx, y);
         }
     }
     v->dirty = 1;
@@ -2378,6 +2739,22 @@ static void draw_view_actors(Game *g, int vx, int vy, int vw, int vh, int dir,
      * that information instead. */
 }
 
+static void draw_low_color_corridor_edges(Video *v, int vx, int vy,
+                                          int vw, int vh, u8 color) {
+    for (int depth = 0; depth < 7; depth++) {
+        ProjRect a = projection_rect(vx, vy, vw, vh, depth);
+        ProjRect b = projection_rect(vx, vy, vw, vh, depth + 1);
+        dungeon_line(v, a.left, a.top, b.left, b.top,
+                     color, vx, vy, vw, vh);
+        dungeon_line(v, a.right, a.top, b.right, b.top,
+                     color, vx, vy, vw, vh);
+        dungeon_line(v, a.left, a.bottom, b.left, b.bottom,
+                     color, vx, vy, vw, vh);
+        dungeon_line(v, a.right, a.bottom, b.right, b.bottom,
+                     color, vx, vy, vw, vh);
+    }
+}
+
 static void draw_3d_viewport(Game *g, int vx, int vy, int vw, int vh, int dir) {
     Video *v = &g->video;
 
@@ -2387,6 +2764,13 @@ static void draw_3d_viewport(Game *g, int vx, int vy, int vw, int vh, int dir) {
      * one connected scene. */
     float wall_depth[LOGICAL_W];
     draw_ray_walls(g, vx, vy, vw, vh, dir, wall_depth);
+
+    const MwDisplayModeInfo *mode =
+        video_display_mode_info(v->display_mode);
+    if (mode && mode->world_mode == 1)
+        draw_low_color_corridor_edges(v, vx, vy, vw, vh, 8);
+    else if (mode && mode->world_mode == 0)
+        draw_low_color_corridor_edges(v, vx, vy, vw, vh, 15);
 
     draw_view_actors(g, vx, vy, vw, vh, dir, wall_depth);
 
@@ -2417,34 +2801,64 @@ typedef struct {
 
 #define SX(x) ((x) * LOGICAL_W / 1600)
 #define SY(y) ((y) * LOGICAL_H / 1200)
-#define VR(x1,y1,x2,y2) {SX(x1), SY(y1), SX(x2)-SX(x1)+1, SY(y2)-SY(y1)+1}
+#define DVR(x1,y1,x2,y2) {x1, y1, x2, y2}
 
-static const ViewLayout view_layouts[3] = {
+typedef struct { int x1, y1, x2, y2; } DesignViewRect;
+typedef struct {
+    DesignViewRect north, west, south, east;
+} DesignViewLayout;
+
+static const DesignViewLayout view_layout_design[3] = {
     /* Mode 0: Full size */
     {
-        VR(0x2D3, 0x000, 0x484, 0x258), /* North */
-        VR(0x11B, 0x1AE, 0x2CD, 0x406), /* West */
-        VR(0x2D3, 0x25D, 0x484, 0x487), /* South */
-        VR(0x48A, 0x1AE, 0x63E, 0x406), /* East */
+        DVR(0x2D3, 0x000, 0x484, 0x258), /* North */
+        DVR(0x11B, 0x1AE, 0x2CD, 0x406), /* West */
+        DVR(0x2D3, 0x25D, 0x484, 0x487), /* South */
+        DVR(0x48A, 0x1AE, 0x63E, 0x406), /* East */
     },
     /* Mode 1: Medium */
     {
-        VR(0x2D3, 0x12C, 0x484, 0x258), /* North */
-        VR(0x11B, 0x1AE, 0x2CD, 0x2DA), /* West */
-        VR(0x2D3, 0x25D, 0x484, 0x389), /* South */
-        VR(0x48A, 0x1AE, 0x63E, 0x2DA), /* East */
+        DVR(0x2D3, 0x12C, 0x484, 0x258), /* North */
+        DVR(0x11B, 0x1AE, 0x2CD, 0x2DA), /* West */
+        DVR(0x2D3, 0x25D, 0x484, 0x389), /* South */
+        DVR(0x48A, 0x1AE, 0x63E, 0x2DA), /* East */
     },
     /* Mode 2: Small */
     {
-        VR(0x340, 0x12C, 0x417, 0x258), /* North */
-        VR(0x260, 0x1AE, 0x33A, 0x2DA), /* West */
-        VR(0x340, 0x25D, 0x417, 0x384), /* South */
-        VR(0x41D, 0x1AE, 0x4F7, 0x2DA), /* East */
+        DVR(0x340, 0x12C, 0x417, 0x258), /* North */
+        DVR(0x260, 0x1AE, 0x33A, 0x2DA), /* West */
+        DVR(0x340, 0x25D, 0x417, 0x384), /* South */
+        DVR(0x41D, 0x1AE, 0x4F7, 0x2DA), /* East */
     },
 };
 
+static ViewRect game_view_rect(const Game *g, DesignViewRect design) {
+    ViewRect result;
+    int x2 = display_design_x(g, design.x2);
+    int y2 = display_design_y(g, design.y2);
+    result.x = display_design_x(g, design.x1);
+    result.y = display_design_y(g, design.y1);
+    result.w = x2 - result.x + 1;
+    result.h = y2 - result.y + 1;
+    if (result.w < 1) result.w = 1;
+    if (result.h < 1) result.h = 1;
+    return result;
+}
+
+static void game_view_layout(const Game *g, int mode, ViewLayout *layout) {
+    mode %= 3;
+    if (mode < 0) mode += 3;
+    const DesignViewLayout *design = &view_layout_design[mode];
+    layout->north = game_view_rect(g, design->north);
+    layout->west  = game_view_rect(g, design->west);
+    layout->south = game_view_rect(g, design->south);
+    layout->east  = game_view_rect(g, design->east);
+}
+
 static void draw_4way_view(Game *g) {
-    const ViewLayout *vl = &view_layouts[g->view_mode % 3];
+    ViewLayout layout;
+    const ViewLayout *vl = &layout;
+    game_view_layout(g, g->view_mode, &layout);
 
     draw_3d_viewport(g, vl->north.x, vl->north.y, vl->north.w, vl->north.h, 0);
     draw_3d_viewport(g, vl->west.x,  vl->west.y,  vl->west.w,  vl->west.h,  2);
@@ -2614,7 +3028,9 @@ static void draw_mouse_hover(Game *g) {
                     half, spacing, 4);
         return;
     }
-    const ViewLayout *vl = &view_layouts[g->view_mode % 3];
+    ViewLayout layout;
+    const ViewLayout *vl = &layout;
+    game_view_layout(g, g->view_mode, &layout);
     const ViewRect *rects[4] = {&vl->north, &vl->south, &vl->west, &vl->east};
     for (int i = 0; i < 4; i++)
         if (x >= rects[i]->x && x < rects[i]->x + rects[i]->w &&
@@ -2639,11 +3055,12 @@ int game_mouse_command_key(Game *g) {
  * click on a border cannot accidentally spend a turn. */
 int game_mouse_view_direction(Game *g) {
     int x, y;
-    const ViewLayout *vl;
+    ViewLayout layout;
+    const ViewLayout *vl = &layout;
     const ViewRect *rects[4];
     static const int direction[4] = {0, 1, 2, 3};
     if (!game_mouse_click_logical(g, &x, &y)) return -1;
-    vl = &view_layouts[g->view_mode % 3];
+    game_view_layout(g, g->view_mode, &layout);
     rects[0] = &vl->north;
     rects[1] = &vl->south;
     rects[2] = &vl->west;
@@ -3845,10 +4262,10 @@ static void dig_timed_message(Game *g, Character *p, const char *message,
                               u32 before_ms, u32 hold_ms) {
     town_pane_begin(g, p);
     video_present(&g->video);
-    if (before_ms) SDL_Delay(before_ms);
+    if (before_ms) game_delay(g, before_ms);
     town_pane_text(g, 0, message, 4);
     video_present(&g->video);
-    if (hold_ms) SDL_Delay(hold_ms);
+    if (hold_ms) game_delay(g, hold_ms);
 }
 
 static int dig_depth_allowed(Game *g, int floor) {
@@ -4455,7 +4872,7 @@ static void reward_show_kill(Game *g, Character *p, int xp) {
     snprintf(line, sizeof(line), "YOU GAIN %d EXPERIENCE POINTS.", xp);
     town_pane_text(g, y, line, 7);
     video_present(&g->video);
-    SDL_Delay(1050);
+    game_delay(g, 1050);
 }
 
 static void reward_pill(Game *g, Character *p, int depth,
@@ -4666,11 +5083,11 @@ static void reward_find_pause(Game *g, Character *p) {
     /* WORLD func_21F9C calls far_022A2(0x2EE), then shows only
        "YOU FIND...", and calls far_022A2(0xBB8) before clearing the pane
        for the actual result: 750 ms of lead-in plus a 3000 ms reveal hold. */
-    SDL_Delay(0x2EE);
+    game_delay(g, 0x2EE);
     town_pane_begin(g, p);
     town_pane_text(g, 0, "YOU FIND...", 8);
     video_present(&g->video);
-    SDL_Delay(0xBB8);
+    game_delay(g, 0xBB8);
 }
 
 static void reward_misc_stage(Game *g, Character *p, int depth) {
@@ -5383,6 +5800,16 @@ static int game_door_encounter_self_test(Game *g) {
             }
         }
     }
+    if (race_stat_base[RACE_DRAGONKIN][0] != 18 ||
+        race_stat_base[RACE_DRAGONKIN][3] != 17 ||
+        race_stat_base[RACE_DRAGONKIN][1] >= race_stat_base[RACE_HUMAN][1] ||
+        race_stat_base[RACE_DRAGONKIN][4] >= race_stat_base[RACE_HUMAN][4] ||
+        race_stat_base[RACE_CELESTIAL][1] != 17 ||
+        race_stat_base[RACE_CELESTIAL][2] != 18 ||
+        race_stat_base[RACE_CELESTIAL][0] >= race_stat_base[RACE_HUMAN][0] ||
+        race_stat_base[RACE_CELESTIAL][3] >= race_stat_base[RACE_HUMAN][3] ||
+        race_stat_base[RACE_CELESTIAL][5] >= race_stat_base[RACE_HUMAN][5])
+        failures++;
 
     memset(g->monster_map[test_layer], 0,
            sizeof(g->monster_map[test_layer]));
@@ -5656,7 +6083,7 @@ int game_ui_self_test(Game *g) {
         {'j','g'}, {'1','1'}, {'2','2'}, {'3','3'}, {'q','h'}
     };
     int failures = battle_simulator_self_test() + arena_self_test() +
-                   input_self_test();
+                   input_self_test() + video_display_mode_self_test(&g->video);
     int catalog_count = 0;
     while (bestiary_type_at_catalog_index(catalog_count) >= 0)
         catalog_count++;
@@ -5798,10 +6225,42 @@ int game_ui_self_test(Game *g) {
     if (input_sdl_to_dos(SDLK_8, KMOD_SHIFT) != '*') failures++;
     if (input_sdl_to_dos(SDLK_9, KMOD_SHIFT) != '(') failures++;
     if (input_sdl_to_dos(SDLK_0, KMOD_SHIFT) != ')') failures++;
-    if (input_sdl_to_dos(SDLK_F1, KMOD_NONE) != -0x3B) failures++;
+    if (input_sdl_to_dos(SDLK_F1, KMOD_NONE) != -0x3B ||
+        input_sdl_to_dos(SDLK_F1, KMOD_CTRL) != INPUT_TURBO_TOGGLE)
+        failures++;
+    {
+        int saved_enabled = g->turbo_enabled;
+        int saved_percent = g->turbo_percent;
+        int saved_input_percent = g->input.timing_percent;
+        g->turbo_enabled = 0;
+        g->turbo_percent = 100;
+        input_set_timing_percent(&g->input, 100);
+        if (game_scaled_delay_ms(g, 1000) != 1000 ||
+            !game_handle_turbo_key(g, INPUT_TURBO_TOGGLE) ||
+            !g->turbo_enabled || g->turbo_percent != 100)
+            failures++;
+        for (int i = 0; i < 50; i++) game_handle_turbo_key(g, '+');
+        if (g->turbo_percent != 1000 ||
+            game_scaled_delay_ms(g, 1000) != 100)
+            failures++;
+        for (int i = 0; i < 50; i++) game_handle_turbo_key(g, '-');
+        if (g->turbo_percent != 25 ||
+            game_scaled_delay_ms(g, 100) != 400)
+            failures++;
+        game_handle_turbo_key(g, INPUT_TURBO_TOGGLE);
+        if (g->turbo_enabled || g->turbo_percent != 100 ||
+            g->input.timing_percent != 100)
+            failures++;
+        g->turbo_enabled = saved_enabled;
+        g->turbo_percent = saved_percent;
+        input_set_timing_percent(&g->input, saved_input_percent);
+    }
     if (input_sdl_to_dos(SDLK_F2, KMOD_CTRL) != INPUT_BATTLE_SIMULATOR ||
         input_sdl_to_dos(SDLK_F3, KMOD_CTRL) != INPUT_RANDOMIZE_FLOOR ||
         input_sdl_to_dos(SDLK_F4, KMOD_CTRL) != INPUT_QUEST_BOSS_WARP)
+        failures++;
+    if (input_sdl_to_dos(SDLK_v, KMOD_ALT) != INPUT_VIDEO_MODE ||
+        input_sdl_to_dos(SDLK_v, KMOD_NONE) != 'v')
         failures++;
     if (input_sdl_to_dos(SDLK_F5, KMOD_CTRL) != INPUT_MODEL_VIEWER)
         failures++;
@@ -5875,7 +6334,9 @@ int game_ui_self_test(Game *g) {
         int saved_y = g->input.last_mouse_y;
         int saved_mode = g->view_mode;
         for (int mode = 0; mode < 3; mode++) {
-            const ViewLayout *vl = &view_layouts[mode];
+            ViewLayout layout;
+            const ViewLayout *vl = &layout;
+            game_view_layout(g, mode, &layout);
             const ViewRect *rects[4] = {
                 &vl->north, &vl->south, &vl->west, &vl->east
             };
@@ -6026,7 +6487,7 @@ static void cmd_bestiary(Game *g) {
                                    "ALL BESTIARY ENTRIES UNLOCKED", 4,
                                    3, 4);
             video_present(&g->video);
-            SDL_Delay(700);
+            game_delay(g, 700);
             continue;
         }
         if (key == INPUT_MOUSE_CLICK) {
@@ -6237,114 +6698,147 @@ static void cmd_help(Game *g, Character *p) {
  * primitives in func_1F077/func_1F3FD/far_1FAE6. */
 /* ── Command: Expand Map (dungeon map viewer) ── */
 
-static void draw_expanded_map_frame(Game *g) {
+static void draw_expanded_map_frame(Game *g, int third) {
     Video *v = &g->video;
-    int cs = 5;
-    int ox = 8, oy = 20;
+    const MwDisplayModeInfo *info = video_display_mode_info(v->display_mode);
+    int raster_w = info ? info->raster_w : LOGICAL_W;
+    int raster_h = info ? info->raster_h : LOGICAL_H;
+    int cs = info ? info->expanded_map_cell_px : 7;
+    int split = raster_w == 320;
+    int first_row = split ? third * 37 : 0;
+    int last_row = split ? first_row + 37 : MAP_H;
+    if (last_row > MAP_H) last_row = MAP_H;
+    int visible_rows = last_row - first_row;
+    int native_map_w = MAP_W * cs;
+    int native_ox = (raster_w - native_map_w) / 2;
+    int native_oy = 0;
+    if (native_ox < 0) native_ox = 0;
+    int ox = native_ox * LOGICAL_W / raster_w;
+    int oy = native_oy * LOGICAL_H / raster_h;
 
     video_clear(v, 0);
-    video_draw_text(v, 8, 4, "DUNGEON MAP - HIT ANY KEY", 15);
-
-    for (int y = 0; y < MAP_H && y * cs + oy < LOGICAL_H - cs; y++) {
-        for (int x = 0; x < MAP_W && x * cs + ox < LOGICAL_W - cs; x++) {
+    for (int y = first_row; y < last_row; y++) {
+        int row = y - first_row;
+        for (int x = 0; x < MAP_W; x++) {
             if (!g->visited[y][x]) continue;
 
-            int px = ox + x * cs;
-            int py = oy + y * cs;
-            video_fill_rect(v, px, py, cs, cs, 0);
+            int px = ox + x * cs * LOGICAL_W / raster_w;
+            int py = oy + row * cs * LOGICAL_H / raster_h;
+            int nx = ox + (x + 1) * cs * LOGICAL_W / raster_w;
+            int ny = oy + (row + 1) * cs * LOGICAL_H / raster_h;
+            int cw = nx - px;
+            int ch = ny - py;
+            if (cw < 1) cw = 1;
+            if (ch < 1) ch = 1;
+            video_fill_rect(v, px, py, cw, ch, 0);
 
             int n = map_get_edge(g, x,     y,     1);
             int e = map_get_edge(g, x + 1, y,     0);
             int s = map_get_edge(g, x,     y + 1, 1);
             int w = map_get_edge(g, x,     y,     0);
             if (n != 3) {
-                video_hline(v, px, py, cs, 15);
-                if (n == 1) draw_map_door_marker(v, px, py, cs, 1, 15);
+                map_native_hline(v, px, py, cw, ch, cs, 0, 0, cs, 15);
+                if (n == 1)
+                    draw_map_door_marker(v, px, py, cw, ch, cs, 1, 0, 15);
             }
             if (s != 3) {
-                video_hline(v, px, py + cs - 1, cs, 15);
+                map_native_hline(v, px, py, cw, ch, cs,
+                                 0, cs - 1, cs, 15);
                 if (s == 1)
-                    draw_map_door_marker(v, px, py + cs - 1, cs, 1, 15);
+                    draw_map_door_marker(v, px, py, cw, ch, cs, 1, 1, 15);
             }
             if (w != 3) {
-                video_vline(v, px, py, cs, 15);
-                if (w == 1) draw_map_door_marker(v, px, py, cs, 0, 15);
+                map_native_vline(v, px, py, cw, ch, cs, 0, 0, cs, 15);
+                if (w == 1)
+                    draw_map_door_marker(v, px, py, cw, ch, cs, 0, 0, 15);
             }
             if (e != 3) {
-                video_vline(v, px + cs - 1, py, cs, 15);
+                map_native_vline(v, px, py, cw, ch, cs,
+                                 cs - 1, 0, cs, 15);
                 if (e == 1)
-                    draw_map_door_marker(v, px + cs - 1, py, cs, 0, 15);
+                    draw_map_door_marker(v, px, py, cw, ch, cs, 0, 1, 15);
             }
 
             int shop = game_shop_type(g, x, y);
             int ladder = game_ladder_delta(g, x, y);
             int trap = game_trapdoor_floor(g, x, y);
             if (shop) {
-                video_fill_rect(v, px + 1, py + 1, cs - 2, cs - 2,
-                                (u8)(shop + 2));
+                for (int iy = 1; iy < cs - 1; iy++)
+                    map_native_hline(v, px, py, cw, ch, cs,
+                                     1, iy, cs - 2, (u8)(shop + 2));
             } else if (ladder < 0) {
                 for (int p = 1; p < cs - 1; p++)
-                    video_put_pixel(v, px + p, py + cs - 1 - p, 4);
+                    map_native_pixel(v, px, py, cw, ch, cs,
+                                     p, cs - 1 - p, 4);
             } else if (ladder > 0) {
                 for (int p = 1; p < cs - 1; p++)
-                    video_put_pixel(v, px + p, py + p,
-                                    MW_COLOR_STATUS_CYAN);
+                    map_native_pixel(v, px, py, cw, ch, cs,
+                                     p, p, MW_COLOR_STATUS_CYAN);
             } else if (trap >= 0) {
                 for (int p = 1; p < cs - 1; p++) {
-                    video_put_pixel(v, px + p, py + p, 4);
-                    video_put_pixel(v, px + cs - 1 - p, py + p, 4);
+                    map_native_pixel(v, px, py, cw, ch, cs, p, p, 4);
+                    map_native_pixel(v, px, py, cw, ch, cs,
+                                     cs - 1 - p, p, 4);
                 }
             } else if (game_is_known_pitfall(g, x, y)) {
                 for (int p = 1; p < cs - 1; p++) {
-                    video_put_pixel(v, px + p, py + p, 3);
-                    video_put_pixel(v, px + cs - 1 - p, py + p, 3);
+                    map_native_pixel(v, px, py, cw, ch, cs, p, p, 3);
+                    map_native_pixel(v, px, py, cw, ch, cs,
+                                     cs - 1 - p, p, 3);
                 }
             }
 
             if (x == g->cur_x && y == g->cur_y &&
                 g->map_player_visible) {
-                video_fill_rect(v, px + 1, py + 1, 3, 3, 15);
-                video_put_pixel(v, px + 2, py + 2, 6);
+                int p0 = cs / 3;
+                int p1 = cs - p0;
+                for (int iy = p0; iy < p1; iy++)
+                    for (int ix = p0; ix < p1; ix++)
+                        map_native_pixel(v, px, py, cw, ch, cs,
+                                         ix, iy, 15);
+                map_native_pixel(v, px, py, cw, ch, cs,
+                                 cs / 2, cs / 2, 6);
             }
         }
     }
 
-    int lx = 430;
-    int ly = 30;
-    int step = v->font_char_h + 5;
-    video_draw_text(v, lx, ly, "MAP KEY", 15); ly += step * 2;
-    video_draw_text(v, lx, ly, "WHITE CROSSBAR: DOOR", 15); ly += step;
-    video_draw_text(v, lx, ly, "STORE LADDER", 3); ly += step;
-    video_draw_text(v, lx, ly, "TEMPLE LADDER", 4); ly += step;
-    video_draw_text(v, lx, ly, "BANK LADDER", 5); ly += step;
-    video_draw_text(v, lx, ly, "INN LADDER", 6); ly += step;
-    video_draw_text(v, lx, ly, "WILDERNESS EXIT", 7); ly += step * 2;
-    video_draw_text(v, lx, ly, "YELLOW /: UP", 4); ly += step;
-    video_draw_text(v, lx, ly, "CYAN \\: DOWN",
-                    MW_COLOR_STATUS_CYAN); ly += step;
-    video_draw_text(v, lx, ly, "ORANGE X: TRAPDOOR", 4); ly += step;
-    video_draw_text(v, lx, ly, "MAGENTA X: KNOWN PIT", 3);
-    draw_quest_compass_hint(g);
+    const char *caption = "EXPANDED DUNGEON MAP, HIT ANY KEY...";
+    if (split) {
+        static const char *const third_caption[3] = {
+            "DUNGEON MAP, TOP THIRD, HIT ANY KEY...",
+            "DUNGEON MAP, MIDDLE THIRD, HIT ANY KEY...",
+            "DUNGEON MAP, BOTTOM THIRD, HIT ANY KEY..."
+        };
+        caption = third_caption[third < 0 ? 0 : (third > 2 ? 2 : third)];
+    }
+    int caption_y = (raster_h - (v->font_char_h > 0 ?
+                    v->font_char_h : 8) - 2) * LOGICAL_H / raster_h;
+    video_draw_text(v, 0, caption_y, caption, split ? 11 : 15);
 }
 
 static void cmd_expand_map(Game *g) {
-    u32 next_blink = SDL_GetTicks() + 350;
-    g->map_player_visible = 1;
-    draw_expanded_map_frame(g);
-    video_present(&g->video);
+    const MwDisplayModeInfo *info =
+        video_display_mode_info(g->video.display_mode);
+    int pages = info && info->raster_w == 320 ? 3 : 1;
+    for (int page = 0; page < pages; page++) {
+        u32 next_blink = SDL_GetTicks() + 350;
+        g->map_player_visible = 1;
+        draw_expanded_map_frame(g, page);
+        video_present(&g->video);
 
-    while (!input_poll_quit(&g->input) && !input_kbhit(&g->input)) {
-        u32 now = SDL_GetTicks();
-        if (SDL_TICKS_PASSED(now, next_blink)) {
-            g->map_player_visible = !g->map_player_visible;
-            next_blink = now + 350;
-            draw_expanded_map_frame(g);
-            video_present(&g->video);
+        while (!input_poll_quit(&g->input) && !input_kbhit(&g->input)) {
+            u32 now = SDL_GetTicks();
+            if (SDL_TICKS_PASSED(now, next_blink)) {
+                g->map_player_visible = !g->map_player_visible;
+                next_blink = now + 350;
+                draw_expanded_map_frame(g, page);
+                video_present(&g->video);
+            }
+            SDL_Delay(10);
         }
-        SDL_Delay(10);
-    }
-    if (!input_poll_quit(&g->input))
+        if (input_poll_quit(&g->input)) break;
         input_wait_any_key(&g->input);
+    }
     g->map_player_visible = 1;
 }
 
@@ -6694,9 +7188,263 @@ int game_dialog_ui_self_test(Game *g, Character *p) {
 /* MW_PORT: WORLD select_player (0x0889F) and character_menu (0x092B4). */
 /* ── Player selection screen ── */
 
+/* MW_PORT: native counterpart to MW.EXE's initial adapter/driver picker.
+ * The twelve WORLD branches are deliberately listed separately: equal
+ * resolutions can use different palettes, wall rasterizers and map paths. */
+static void game_video_mode_menu(Game *g, int startup) {
+    Video *v = &g->video;
+    int selected = v->display_mode;
+    if (!video_display_mode_info(selected))
+        selected = MW_DISPLAY_SVGA_1024X768_256_A;
+    const int first_y = 118;
+    const int row_h = 41;
+    static const char choice_key[MW_DISPLAY_MODE_COUNT + 1] =
+        "123456789ABC";
+
+    for (;;) {
+        video_clear(v, 0);
+        video_draw_text(v, 32, 24, "MORAFF'S WORLD VIDEO DISPLAY", 8);
+        video_draw_text_scaled(v, 32, 63,
+            "THE 12 ORIGINAL WORLD.EXE DRIVERS (SAME RESOLUTION CAN DIFFER):",
+            3, 3, 4);
+        video_draw_text_scaled(v, 32, 91,
+            "KEY  RASTER     PALETTE  ORIGINAL ADAPTER / RENDERER",
+            7, 3, 4);
+
+        for (int i = 0; i < MW_DISPLAY_MODE_COUNT; i++) {
+            const MwDisplayModeInfo *info = video_display_mode_info(i);
+            int y = first_y + i * row_h;
+            char line[128];
+            if (i == selected)
+                video_fill_rect(v, 20, y - 5, LOGICAL_W - 40, row_h - 2, 1);
+            snprintf(line, sizeof(line), "%c) %-10s %3d-COLOR  %s",
+                     choice_key[i], info->resolution, info->palette_colors,
+                     info->adapter);
+            video_draw_text_scaled(v, 42, y, line,
+                                   i == selected ? 4 : 15, 3, 4);
+        }
+
+        const MwDisplayModeInfo *choice = video_display_mode_info(selected);
+        char detail[160];
+        static const char *wall_name[] = {
+            "HERCULES HATCH", "CGA 4-COLOR", "PLANAR 16-COLOR",
+            "CHUNKY 256-COLOR"
+        };
+        snprintf(detail, sizeof(detail),
+                 "DRIVER %d: %dX%d  MAP %dX%d CELLS @ %dPX  WALLS: %s",
+                 choice->world_mode, choice->raster_w, choice->raster_h,
+                 choice->map_cols, choice->map_rows, choice->map_cell_px,
+                 wall_name[choice->wall_style]);
+        video_draw_text_scaled(v, 32, 624, detail, 14, 3, 4);
+        video_draw_text_scaled(v, 32, 654,
+            "UP/DOWN OR 1-9/A-C SELECTS. ENTER OR CLICK APPLIES.", 8, 3, 4);
+        video_draw_text_scaled(v, 32, 682,
+            startup ? "ESC KEEPS THE SAVED MODE. ALT+V REOPENS THIS MENU LATER."
+                    : "ESC OR ALT+V RETURNS WITHOUT CHANGING THE MODE.",
+            7, 3, 4);
+        video_fill_rect(v, 80, 720, 320, 42, 1);
+        video_draw_text_scaled(v, 150, 729, "APPLY DRIVER", 4, 3, 4);
+        video_fill_rect(v, 620, 720, 300, 42, 1);
+        video_draw_text_scaled(v, 710, 729, "CANCEL", 15, 3, 4);
+        video_present(v);
+
+        int key = input_getch(&g->input);
+        int apply = 0;
+        if (input_poll_quit(&g->input)) return;
+        if (key == 0) {
+            int scan = input_getch(&g->input);
+            if (scan == 0x48) {
+                selected = (selected + MW_DISPLAY_MODE_COUNT - 1) %
+                           MW_DISPLAY_MODE_COUNT;
+            } else if (scan == 0x50) {
+                selected = (selected + 1) % MW_DISPLAY_MODE_COUNT;
+            } else if (scan == 0x49) {
+                selected = 0;
+            } else if (scan == 0x51) {
+                selected = MW_DISPLAY_MODE_COUNT - 1;
+            }
+            continue;
+        }
+        if (key >= '1' && key <= '9') {
+            selected = key - '1';
+            continue;
+        }
+        if (key >= 'a' && key <= 'c') key -= 'a' - 'A';
+        if (key >= 'A' && key <= 'C') {
+            selected = 9 + key - 'A';
+            continue;
+        }
+        if (key == '\r') {
+            apply = 1;
+        } else if (key == INPUT_MOUSE_CLICK) {
+            int x, y;
+            if (!game_mouse_click_logical(g, &x, &y)) continue;
+            if (y >= first_y - 8 &&
+                y < first_y - 8 + MW_DISPLAY_MODE_COUNT * row_h) {
+                int row = (y - (first_y - 8)) / row_h;
+                if (row >= 0 && row < MW_DISPLAY_MODE_COUNT)
+                    selected = row;
+                continue;
+            }
+            if (y >= 714 && x >= 60 && x < 430) apply = 1;
+            else if (y >= 714 && x >= 590) return;
+            else continue;
+        } else if (key == 0x1B || key == INPUT_VIDEO_MODE) {
+            return;
+        } else {
+            continue;
+        }
+
+        if (apply) {
+            if (video_set_display_mode(v, selected, 1) == 0) {
+                const MwDisplayModeInfo *info =
+                    video_display_mode_info(selected);
+                g->video_mode = info->world_mode;
+                g->screen_w = info->raster_w;
+                g->screen_h = info->raster_h;
+                game_load_display_font(g, selected);
+                if (save_display_mode_setting(g, selected) != 0) {
+                    video_clear(v, 0);
+                    video_draw_text(v, 70, 260,
+                        "THE DISPLAY CHANGED, BUT MWPORT.CFG COULD NOT BE SAVED.",
+                        12);
+                    video_draw_text(v, 160, 340,
+                        "HIT ANY KEY TO CONTINUE.", 15);
+                    video_present(v);
+                    input_wait_any_key(&g->input);
+                }
+            }
+            return;
+        }
+    }
+}
+
+static int remove_save_file(Game *g, const char *name) {
+    char path[300];
+    game_make_path(g, path, sizeof(path), name);
+    errno = 0;
+    if (remove(path) == 0 || errno == ENOENT) return 0;
+    return -1;
+}
+
+/* A native Adventure character owns the original numeric character file and
+ * three kinds of port sidecar. Delete the complete slot so reusing its number
+ * cannot inherit monsters, Beastiary discoveries, or known pitfalls. */
+static int delete_adventure_save(Game *g, int slot) {
+    if (!g || slot < 0 || slot >= MAX_PLAYERS) return -1;
+    char name[32];
+    snprintf(name, sizeof(name), "%d", slot);
+    if (remove_save_file(g, name) != 0) return -1;
+
+    int sidecar_error = 0;
+    make_bestiary_name(name, sizeof(name), slot);
+    sidecar_error |= remove_save_file(g, name) != 0;
+    make_monster_map_name(name, sizeof(name), slot);
+    sidecar_error |= remove_save_file(g, name) != 0;
+    for (int group = 0; group <= MAX_DUNGEON_FLOOR / PIT_GROUP_FLOORS; group++) {
+        make_pit_name(name, sizeof(name), slot, group);
+        sidecar_error |= remove_save_file(g, name) != 0;
+    }
+
+    memset(&g->chars[slot], 0, sizeof(g->chars[slot]));
+    g->char_exists[slot] = 0;
+    if (g->active_save_slot == slot) {
+        g->active_save_slot = -1;
+        g->monster_map_loaded = 0;
+        g->monster_map_dirty = 0;
+        g->pit_state_loaded = 0;
+        g->pit_state_dirty = 0;
+        g->bestiary_loaded = 0;
+        g->bestiary_dirty = 0;
+        memset(g->bestiary_kills, 0, sizeof(g->bestiary_kills));
+    }
+    return sidecar_error ? 1 : 0;
+}
+
+static void player_delete_notice(Game *g, const char *title,
+                                 const char *detail, u8 color) {
+    video_clear(&g->video, 0);
+    video_draw_text(&g->video, SX(0), SY(140), title, color);
+    video_draw_text(&g->video, SX(0), SY(260), detail, 15);
+    video_draw_text(&g->video, SX(0), SY(430), "HIT ANY KEY TO CONTINUE.", 7);
+    video_present(&g->video);
+    input_wait_any_key(&g->input);
+}
+
+static int player_confirm_delete(Game *g, int colosseum, int slot,
+                                 const char *name) {
+    char line[112];
+    video_clear(&g->video, 0);
+    snprintf(line, sizeof(line), "DELETE %s SAVE %d?",
+             colosseum ? "COLOSSEUM" : "ADVENTURE", slot);
+    video_draw_text(&g->video, SX(0), SY(120), line, 12);
+    snprintf(line, sizeof(line), "CHARACTER: %s", name && name[0] ? name : "(UNNAMED)");
+    video_draw_text(&g->video, SX(0), SY(230), line, 15);
+    video_draw_text(&g->video, SX(0), SY(360),
+                    "THIS PERMANENTLY DELETES THE CHARACTER AND ITS SAVE DATA.", 12);
+    video_draw_text(&g->video, SX(110), SY(540), "Y) DELETE", 12);
+    video_draw_text(&g->video, SX(610), SY(540), "N) KEEP SAVE", 8);
+    video_present(&g->video);
+    for (;;) {
+        int key = input_wait_any_key(&g->input);
+        if (key >= 'a' && key <= 'z') key -= 'a' - 'A';
+        if (key == 'Y') return 1;
+        if (key == 'N' || key == 0x1B || input_poll_quit(&g->input)) return 0;
+        if (key == INPUT_MOUSE_CLICK) {
+            int x, y;
+            if (game_mouse_click_logical(g, &x, &y) &&
+                y >= SY(490) && y < SY(650))
+                return x < LOGICAL_W / 2;
+        }
+    }
+}
+
+static void player_delete_slot(Game *g, int colosseum, int slot) {
+    char name[sizeof(((Character *)0)->name) + 1];
+    memset(name, 0, sizeof(name));
+    if (colosseum) {
+        ArenaSave arena;
+        if (arena_load_save(g, slot, &arena) != 0) {
+            player_delete_notice(g, "THAT COLOSSEUM SLOT IS EMPTY.",
+                                 "NO FILES WERE CHANGED.", 14);
+            return;
+        }
+        memcpy(name, arena.base_character.name, sizeof(arena.base_character.name));
+        if (!player_confirm_delete(g, 1, slot, name)) return;
+        if (arena_delete_save(g, slot) != 0) {
+            player_delete_notice(g, "COULD NOT DELETE THE COLOSSEUM SAVE.",
+                                 "CHECK THAT THE SAVE FILE IS WRITABLE.", 12);
+            return;
+        }
+        player_delete_notice(g, "COLOSSEUM SAVE DELETED.",
+                             "THE SLOT IS NOW AVAILABLE.", 8);
+        return;
+    }
+
+    if (!g->char_exists[slot]) {
+        player_delete_notice(g, "THAT ADVENTURE SLOT IS EMPTY.",
+                             "NO FILES WERE CHANGED.", 14);
+        return;
+    }
+    memcpy(name, g->chars[slot].name, sizeof(g->chars[slot].name));
+    if (!player_confirm_delete(g, 0, slot, name)) return;
+    int result = delete_adventure_save(g, slot);
+    if (result < 0) {
+        player_delete_notice(g, "COULD NOT DELETE THE ADVENTURE SAVE.",
+                             "CHECK THAT THE CHARACTER FILE IS WRITABLE.", 12);
+    } else if (result > 0) {
+        player_delete_notice(g, "CHARACTER DELETED.",
+                             "SOME ORPHANED SIDECAR FILES COULD NOT BE REMOVED.", 14);
+    } else {
+        player_delete_notice(g, "ADVENTURE SAVE DELETED.",
+                             "CHARACTER, MAP, MONSTERS, PITS, AND BESTIARY REMOVED.", 8);
+    }
+}
+
 static int player_select_screen(Game *g, int *colosseum_page) {
     Video *v = &g->video;
     int page = colosseum_page && *colosseum_page ? 1 : 0;
+    int delete_mode = 0;
     enum {
         MODE_DESCRIPTION_Y = 55,
         MODE_SWITCH_Y = 105,
@@ -6722,7 +7470,7 @@ static int player_select_screen(Game *g, int *colosseum_page) {
                         15);
         video_hline(v, SX(0), SY(150), LOGICAL_W, page ? 14 : 4);
         video_draw_text(v, SX(0), SY(SLOT_HEADER_Y),
-                        page ? "NUMBER     NAME        RUN  ROUND  BEST"
+                        page ? "NUMBER  NAME          MODE    RUN ROUND BEST"
                              : "NUMBER     NAME    SEX   RACE       CLASS",
                         5);
 
@@ -6733,8 +7481,10 @@ static int player_select_screen(Game *g, int *colosseum_page) {
                 if (arena_load_save(g, i, &arena) == 0) {
                     const Character *ch = &arena.base_character;
                     snprintf(line, sizeof(line),
-                             "%d) %-13.13s  %3u  %5u  %4u%s",
-                             i, ch->name, arena.run_number, arena.round,
+                             "%d) %-13.13s %-6s %3u %5u %4u%s",
+                             i, ch->name,
+                             arena_difficulty_name(arena.difficulty),
+                             arena.run_number, arena.round,
                              arena.best_streak,
                              arena.in_run ? "" : "  (RUN ENDED)");
                     video_draw_text(v, SX(0),
@@ -6779,11 +7529,20 @@ static int player_select_screen(Game *g, int *colosseum_page) {
             }
         }
 
-        video_draw_text(v, SX(0), SY(1100),
-                        "0-9 SELECTS A SAVE   ESCAPE OR Q QUITS", 5);
-        video_draw_text(v, SX(0), SY(1150),
-                        "MAIN GAME AND COLOSSEUM SAVES ARE COMPLETELY SEPARATE.",
-                        8);
+        if (delete_mode) {
+            video_draw_text(v, SX(0), SY(1100),
+                            "DELETE MODE: PRESS 0-9 OR CLICK AN OCCUPIED SLOT.", 12);
+            video_draw_text(v, SX(0), SY(1150),
+                            "ESCAPE CANCELS. A FINAL Y/N CONFIRMATION IS REQUIRED.", 14);
+        } else {
+            video_draw_text(v, SX(0), SY(1100), "0-9 SELECTS", 5);
+            video_draw_text(v, SX(360), SY(1100), "D DELETE SAVE", 12);
+            video_draw_text(v, SX(780), SY(1100), "ESCAPE OR Q QUITS", 5);
+            video_draw_text(v, SX(0), SY(1150),
+                            "MAIN GAME AND COLOSSEUM SAVES ARE COMPLETELY SEPARATE.",
+                            8);
+            video_draw_text(v, SX(1210), SY(1150), "ALT+V VIDEO", 14);
+        }
         video_present(v);
 
         /* Consume a complete DOS key.  Previously Page Down left its 0x51
@@ -6793,12 +7552,18 @@ static int player_select_screen(Game *g, int *colosseum_page) {
         if (input_poll_quit(&g->input)) return -1;
         if (key == '\t') {
             page = !page;
+            delete_mode = 0;
             if (colosseum_page) *colosseum_page = page;
             continue;
         }
         if (key == INPUT_MOUSE_CLICK) {
             int x, y;
             if (game_mouse_click_logical(g, &x, &y)) {
+                if (!delete_mode && y >= SY(1080) && y < SY(1145) &&
+                    x >= SX(330) && x < SX(750)) {
+                    delete_mode = 1;
+                    continue;
+                }
                 if (y >= SY(MODE_DESCRIPTION_Y - 10) &&
                     y < SY(SLOT_HEADER_Y - 5)) {
                     page = !page;
@@ -6809,6 +7574,11 @@ static int player_select_screen(Game *g, int *colosseum_page) {
                     int top = SY(SLOT_FIRST_Y - 15 + SLOT_ROW_H * i);
                     int bottom = top + SY(SLOT_ROW_H);
                     if (y >= top && y < bottom) {
+                        if (delete_mode) {
+                            player_delete_slot(g, page, i);
+                            delete_mode = 0;
+                            break;
+                        }
                         if (colosseum_page) *colosseum_page = page;
                         return i;
                     }
@@ -6817,8 +7587,25 @@ static int player_select_screen(Game *g, int *colosseum_page) {
             continue;
         }
         if (key >= '0' && key <= '9') {
+            if (delete_mode) {
+                player_delete_slot(g, page, key - '0');
+                delete_mode = 0;
+                continue;
+            }
             if (colosseum_page) *colosseum_page = page;
             return key - '0';
+        }
+        if (key == 'd' || key == 'D') {
+            delete_mode = 1;
+            continue;
+        }
+        if (key == INPUT_VIDEO_MODE) {
+            game_video_mode_menu(g, 0);
+            continue;
+        }
+        if (delete_mode && (key == 0x1B || key == 'q' || key == 'Q')) {
+            delete_mode = 0;
+            continue;
         }
         if (key == 0x1B || key == 'q' || key == 'Q') return -1;
     }
@@ -6850,10 +7637,11 @@ static const u8 race_stat_base[RACE_COUNT][6] = {
     {17, 5, 6,15, 7,10}, /* Ogre */
     { 4,15, 9, 6,15,18}, /* Sprite */
     { 4,18,16,10, 7,11}, /* Imp */
-    /* MW_EXTENSION: Enhanced-only races keep the original 60-point roller,
-       but begin from profiles suited to the late dungeon. */
-    {18,10,10,17, 8, 9}, /* Dragonkin */
-    { 7,17,18, 9,14,16}, /* Celestial */
+    /* MW_EXTENSION: Enhanced races are specialists, not upgrades. Dragonkin
+       trade mental ability, agility, and luck for STR/CON; Celestials trade
+       physical resilience, agility, and luck for INT/WIS. */
+    {18, 7, 6,17, 6, 8}, /* Dragonkin */
+    { 5,17,18, 7,11, 8}, /* Celestial */
 };
 
 /* Height, weight and lifespan are the final six bytes of each fourteen-byte
@@ -6998,8 +7786,8 @@ static int select_character_race(Game *g, const CreationText *text,
         "9) DRAGONKIN", "0) CELESTIAL"
     };
     static const int enhanced_race_stats[2][6] = {
-        {28, 20, 20, 27, 18, 19},
-        {17, 27, 28, 19, 24, 26}
+        {28, 17, 16, 27, 16, 18},
+        {15, 27, 28, 17, 21, 18}
     };
     static const int enhanced_stat_x[6] = {
         225, 433, 620, 809, 1014, 1126
@@ -7650,7 +8438,11 @@ static void game_draw_exploration_base(Game *g, Character *player) {
     game_refresh_world_palette(g);
     video_clear(&g->video, 0);
     draw_4way_view(g);
-    draw_minimap(g, 0, SY(0x1AE), SX(0x11B), 38 * 10);
+    {
+        int mx, my, mw, mh;
+        game_normal_map_rect(g, &mx, &my, &mw, &mh);
+        draw_minimap(g, mx, my, mw, mh);
+    }
     draw_command_menu(g);
     draw_status_bar(g, player);
     draw_contextual_advice(g, player);
@@ -7777,7 +8569,7 @@ static int game_apply_pitfall_interactive(Game *g, Character *player) {
                               7, 6, 12, 17);
     video_present(v);
     mw_audio_play(&g->audio, MW_SFX_FALL);
-    SDL_Delay(1500);
+    game_delay(g, 1500);
 
     video_draw_text_scaled_xy(v, 0, SY(0x28),
                               "YOU HAVE FALLEN DOWN A CHUTE!", 5,
@@ -7803,7 +8595,7 @@ static void show_movement_block(Game *g, Character *player,
     video_draw_text_scaled_xy(&g->video, 8, 8, message, 12,
                               7, 6, 12, 17);
     video_present(&g->video);
-    SDL_Delay(350);
+    game_delay(g, 350);
 }
 
 static void show_runtime_indicator(Game *g, Character *player,
@@ -7816,6 +8608,28 @@ static void show_runtime_indicator(Game *g, Character *player,
     draw_combat_message(&g->video, y, pane_h, detail, 15);
     video_present(&g->video);
     mw_audio_play(&g->audio, MW_SFX_UI);
+    game_delay(g, 700);
+}
+
+static void show_turbo_indicator(Game *g, Character *player) {
+    char detail[96];
+    const int pane_w = SX(0x2D3), pane_h = SY(0x78);
+    game_draw_exploration_base(g, player);
+    video_fill_rect(&g->video, 0, 0, pane_w, pane_h, 0);
+    int y = draw_combat_message(&g->video, 0, pane_h,
+        g->turbo_enabled ? "TURBO MODE: ON" : "TURBO MODE: OFF",
+        g->turbo_enabled ? 4 : 8);
+    if (g->turbo_enabled)
+        snprintf(detail, sizeof(detail),
+                 "GAME SPEED: %d%%   USE + OR - TO ADJUST.",
+                 g->turbo_percent);
+    else
+        snprintf(detail, sizeof(detail),
+                 "NORMAL 100%% TIMING RESTORED.");
+    draw_combat_message(&g->video, y, pane_h, detail, 15);
+    video_present(&g->video);
+    mw_audio_play(&g->audio, MW_SFX_UI);
+    /* Keep the control readout legible even at 1000 percent. */
     SDL_Delay(700);
 }
 
@@ -8325,8 +9139,9 @@ static void game_draw_arena_combat(Game *g, Character *player,
     }
 
     char line[160];
-    snprintf(line, sizeof(line), "COLOSSEUM  ROUND %u%s",
-             g->arena_round, g->arena_champion ? "  -  CHAMPION" : "");
+    snprintf(line, sizeof(line), "COLOSSEUM %s  ROUND %u%s",
+             arena_difficulty_name(g->arena_difficulty), g->arena_round,
+             g->arena_champion ? "  -  CHAMPION" : "");
     draw_arena_centered(g, 14, line, g->arena_champion ? 14 : 8, 1, 1);
     snprintf(line, sizeof(line), "STREAK %u   CAREER BEST %u",
              g->arena_streak, g->arena_best);
@@ -8395,7 +9210,9 @@ void game_draw_combat_overlay(Game *g, Character *player,
         return;
     }
     static const char *dir_name[4] = {"NORTH", "SOUTH", "WEST", "EAST"};
-    const ViewLayout *layout = &view_layouts[g->view_mode % 3];
+    ViewLayout view_layout;
+    const ViewLayout *layout = &view_layout;
+    game_view_layout(g, g->view_mode, &view_layout);
     const ViewRect *pane[4] = {
         &layout->north, &layout->south, &layout->west, &layout->east
     };
@@ -8491,10 +9308,17 @@ enum {
     TITLE_GRAY_SOURCE_Y = 450
 };
 
-static int title_scale_source_y(int source_y) {
+static int title_scale_source_y(const Game *g, int source_y) {
     /* WORLD scales against the maximum source and destination coordinates,
-     * not their pixel counts: source_y * 767 / 1199 in 1024x768 mode. */
-    return source_y * (LOGICAL_H - 1) / (TITLE_SOURCE_H - 1);
+     * not their pixel counts.  Preserve each driver's integer rounding before
+     * expanding its native scanline onto the SDL logical surface. */
+    const MwDisplayModeInfo *mode =
+        video_display_mode_info(g->video.display_mode);
+    if (!mode)
+        return source_y * (LOGICAL_H - 1) / (TITLE_SOURCE_H - 1);
+    int native = source_y * (mode->raster_h - 1) /
+                 (TITLE_SOURCE_H - 1);
+    return native * LOGICAL_H / mode->raster_h;
 }
 
 static void title_load_original_palette(Video *v) {
@@ -8512,8 +9336,9 @@ static void title_load_original_palette(Video *v) {
 
 static void title_draw_base(Game *g) {
     Video *v = &g->video;
-    int blue_y = title_scale_source_y(TITLE_BLUE_SOURCE_Y);
-    int gray_y = title_scale_source_y(TITLE_GRAY_SOURCE_Y);
+    const MwDisplayModeInfo *mode = video_display_mode_info(v->display_mode);
+    int blue_y = title_scale_source_y(g, TITLE_BLUE_SOURCE_Y);
+    int gray_y = title_scale_source_y(g, TITLE_GRAY_SOURCE_Y);
 
     title_load_original_palette(v);
     video_clear(v, 0);
@@ -8522,14 +9347,28 @@ static void title_draw_base(Game *g) {
      * stops before y2, so the original screen has one black scanline beneath
      * the gray field at y=767.  The title text lies above both rectangles and
      * is therefore equivalent (and clearer here) when drawn afterward. */
-    video_fill_rect(v, 0, blue_y, LOGICAL_W, gray_y - blue_y, 1);
-    video_fill_rect(v, 0, gray_y, LOGICAL_W,
-                    (LOGICAL_H - 1) - gray_y, 13);
+    if (mode && mode->world_mode < 2) {
+        /* WORLD func_1FC56 does not use the two solid rectangles in the
+         * Hercules/CGA branches.  It draws every other native scanline in
+         * colour 1 from source y=230 to the bottom, leaving black gaps. */
+        int first_native = TITLE_BLUE_SOURCE_Y * (mode->raster_h - 1) /
+                           (TITLE_SOURCE_H - 1);
+        for (int ny = first_native; ny < mode->raster_h; ny += 2) {
+            int y0 = ny * LOGICAL_H / mode->raster_h;
+            int y1 = (ny + 1) * LOGICAL_H / mode->raster_h;
+            if (y1 <= y0) y1 = y0 + 1;
+            video_fill_rect(v, 0, y0, LOGICAL_W, y1 - y0, 1);
+        }
+    } else {
+        video_fill_rect(v, 0, blue_y, LOGICAL_W, gray_y - blue_y, 1);
+        video_fill_rect(v, 0, gray_y, LOGICAL_W,
+                        (LOGICAL_H - 1) - gray_y, 13);
+    }
 
     title_draw_centered(g, 0, "MORAFF'S WORLD", 5, 2, 1);
     title_draw_centered(g, 78, "VERSION 6.1, COPYRIGHT 1993,", 3, 1, 1);
     title_draw_centered(g, 116, "ALL RIGHTS RESERVED", 3, 1, 1);
-    title_draw_centered(g, 732, "ANY KEY CONTINUES - ESC OR Q QUITS",
+    title_draw_centered(g, 732, "HIT ANY KEY TO SKIP INTRODUCTION",
                         5, 3, 4);
 }
 
@@ -8583,15 +9422,17 @@ static void title_draw_monster_popup(Game *g, int type, int source_size) {
     int source_span = 1580 - source_width;
     if (source_span < 1) source_span = 1;
     int source_left = 10 + game_rand(g) * source_span / 0x8000;
-    int source_center = source_left + source_size;
-    int draw_w = (source_width * LOGICAL_W + TITLE_SOURCE_W / 2) /
-                 TITLE_SOURCE_W;
-    int draw_h = (source_size * 3 * LOGICAL_H + TITLE_SOURCE_H / 2) /
-                 TITLE_SOURCE_H;
-    int cx = (source_center * LOGICAL_W + TITLE_SOURCE_W / 2) /
-             TITLE_SOURCE_W;
-    int top = ((820 - source_size) * LOGICAL_H + TITLE_SOURCE_H) /
-              (TITLE_SOURCE_H * 2);
+    int source_top = 410 - source_size / 2;
+    int source_bottom = 410 + source_size * 5 / 2;
+    int left = display_design_x(g, source_left);
+    int right = display_design_x(g, source_left + source_width);
+    int top = display_design_y(g, source_top);
+    int bottom = display_design_y(g, source_bottom);
+    int draw_w = right - left;
+    int draw_h = bottom - top;
+    int cx = (left + right) / 2;
+    if (draw_w < 1) draw_w = 1;
+    if (draw_h < 1) draw_h = 1;
 
     draw_pic_billboard_sized(g, pic, cx, top, draw_w, draw_h, 0.0f,
                              0, 0, LOGICAL_W, LOGICAL_H, NULL,
@@ -8619,7 +9460,7 @@ static void title_draw_credit_card(Game *g) {
     title_draw_centered(g, 604, "MARTIN AND LAURIE NOEL", 8, 1, 1);
     title_draw_centered(g, 642, "FINANCED BY OUR REGISTERED USERS",
                         5, 1, 1);
-    title_draw_centered(g, 680, "1024 X 768 NATIVE EDITION BY KANDOWONTU",
+    title_draw_centered(g, 680, "WINDOWS PRESERVATION PORT BY KANDOWONTU",
                         15, 3, 4);
 }
 
@@ -8646,17 +9487,26 @@ int game_title_background_self_test(Game *g) {
     if (!g) return 1;
 
     int failures = 0;
-    int blue_y = title_scale_source_y(TITLE_BLUE_SOURCE_Y);
-    int gray_y = title_scale_source_y(TITLE_GRAY_SOURCE_Y);
+    const MwDisplayModeInfo *mode =
+        video_display_mode_info(g->video.display_mode);
+    int blue_y = title_scale_source_y(g, TITLE_BLUE_SOURCE_Y);
+    int gray_y = title_scale_source_y(g, TITLE_GRAY_SOURCE_Y);
     title_draw_base(g);
 
     /* Sample the unobstructed left edge at every transition. */
     if (video_get_pixel(&g->video, 0, blue_y - 1) != 0) failures++;
     if (video_get_pixel(&g->video, 0, blue_y) != 1) failures++;
-    if (video_get_pixel(&g->video, 0, gray_y - 1) != 1) failures++;
-    if (video_get_pixel(&g->video, 0, gray_y) != 13) failures++;
-    if (video_get_pixel(&g->video, 0, LOGICAL_H - 2) != 13) failures++;
-    if (video_get_pixel(&g->video, 0, LOGICAL_H - 1) != 0) failures++;
+    if (mode && mode->world_mode < 2) {
+        int native = TITLE_BLUE_SOURCE_Y * (mode->raster_h - 1) /
+                     (TITLE_SOURCE_H - 1);
+        int gap_y = (native + 1) * LOGICAL_H / mode->raster_h;
+        if (video_get_pixel(&g->video, 0, gap_y) != 0) failures++;
+    } else {
+        if (video_get_pixel(&g->video, 0, gray_y - 1) != 1) failures++;
+        if (video_get_pixel(&g->video, 0, gray_y) != 13) failures++;
+        if (video_get_pixel(&g->video, 0, LOGICAL_H - 2) != 13) failures++;
+        if (video_get_pixel(&g->video, 0, LOGICAL_H - 1) != 0) failures++;
+    }
 
     const PaletteEntry *pal = g->video.palette;
     if (pal[1].r != 0 || pal[1].g != 0 || pal[1].b != 152) failures++;
@@ -8751,6 +9601,11 @@ static void game_leave_character_session(Game *g) {
 void game_run(Game *g) {
     Video *v = &g->video;
 
+    /* MW.EXE asks for a display driver before WORLD.EXE begins.  Keep that
+     * startup flow, defaulting the highlight to the last saved choice. */
+    game_video_mode_menu(g, 1);
+    if (input_poll_quit(&g->input)) return;
+
 title_screen:
     ;
     if (!game_run_title_intro(g)) return;
@@ -8772,7 +9627,13 @@ title_screen:
                     if (input_poll_quit(&g->input)) return;
                     continue;
                 }
+                int difficulty = arena_select_difficulty(g);
+                if (difficulty < 0) {
+                    if (input_poll_quit(&g->input)) return;
+                    continue;
+                }
                 arena_initialize_save(&arena, &created);
+                arena.difficulty = (u8)difficulty;
                 if (arena_save_save(g, slot, &arena) != 0) {
                     video_clear(v, 0);
                     video_draw_text(v, SX(0), SY(0),
@@ -8854,7 +9715,11 @@ title_screen:
             if (SDL_TICKS_PASSED(now, next_map_blink)) {
                 g->map_player_visible = !g->map_player_visible;
                 next_map_blink = now + 350;
-                draw_minimap(g, 0, SY(0x1AE), SX(0x11B), 38 * 10);
+                {
+                    int mx, my, mw, mh;
+                    game_normal_map_rect(g, &mx, &my, &mw, &mh);
+                    draw_minimap(g, mx, my, mw, mh);
+                }
                 video_present(v);
             }
             SDL_Delay(10);
@@ -8897,7 +9762,11 @@ title_screen:
             }
         }
 
-        if (key == INPUT_MAX_CHARACTER) {
+        if (game_handle_turbo_key(g, key)) {
+            show_turbo_indicator(g, player);
+        } else if (key == INPUT_VIDEO_MODE) {
+            game_video_mode_menu(g, 0);
+        } else if (key == INPUT_MAX_CHARACTER) {
             game_debug_max_character(g, player);
         } else if (key == INPUT_BATTLE_SIMULATOR) {
             battle_simulator_run(g, player);
@@ -9008,7 +9877,7 @@ title_screen:
             video_draw_text(v, 8, 8, line, 4);
             video_present(v);
             mw_audio_play(&g->audio, MW_SFX_UI);
-            SDL_Delay(450);
+            game_delay(g, 450);
         } else if (key == 'o' || key == 'O') {
             g->sound_enabled = !g->sound_enabled;
             mw_audio_set_enabled(&g->audio, g->sound_enabled);
@@ -9084,7 +9953,7 @@ title_screen:
             video_fill_rect(v, 0, 0, SX(0x2D3), SY(42), 0);
             video_draw_text(v, 8, 8, "GAME SAVED - CONTINUING.", 15);
             video_present(v);
-            SDL_Delay(600);
+            game_delay(g, 600);
         } else if (key == 'q' || key == 'Q') {
             player->x_pos = (u16)g->cur_x;
             player->y_pos = (u16)g->cur_y;
@@ -9096,7 +9965,7 @@ title_screen:
             video_clear(v, 0);
             video_draw_text(v, 180, 200, "GAME SAVED.", 15);
             video_present(v);
-            SDL_Delay(1000);
+            game_delay(g, 1000);
             game_leave_character_session(g);
             goto title_screen;
         } else if (key == 0) {

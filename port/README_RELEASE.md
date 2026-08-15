@@ -1,4 +1,4 @@
-# Moraff's World — 1024×768 Native Edition
+# Moraff's World — Native Windows Edition
 
 Version 1.1 for 64-bit Windows.
 
@@ -40,13 +40,39 @@ executable variants and exact tested checksums of all ten files.
 ## System requirements
 
 - 64-bit Windows 10 or Windows 11
-- A 1024×768 or larger display
+- A 640×480 or larger display (1024×768 recommended)
 - Keyboard; mouse supported
 - A writable game directory for character saves, dungeon state, and bestiary
   progress
 - The ten original files listed above
 
 SDL is statically linked, so no separate SDL DLL is required.
+
+## Original video modes
+
+The selector exposes all twelve `WORLD.EXE` display-driver branches. Repeated
+resolutions remain separate because their renderers are not interchangeable:
+320×200 has CGA 4-color, EGA 16-color, and MCGA/VGA 256-color paths;
+640×480 has planar 16-color and VESA 256-color paths; and 1024×768 has planar
+16-color plus two original 256-color driver choices. The other drivers are
+Hercules 720×348, VGA 360×480, EGA 640×350, and planar SVGA 800×600.
+
+Each choice uses its original visible map dimensions and native map-cell size,
+integer-rounded viewport geometry, driver palette limits, title backdrop, and
+the matching Hercules/CGA/planar/chunky dungeon-wall treatment. The expanded
+map also follows the original driver: 320-pixel modes show three separately
+acknowledged 37-row thirds, while wider drivers show the complete map at their
+native 3-, 4-, 5-, or 7-pixel cell scale. Wilderness projection likewise uses
+each branch's original horizon, horizontal/depth steps, height multiplier, and
+16- or 256-color palette path. Native pixels are enlarged with nearest-neighbor
+sampling, non-square-pixel modes are shown in corrected 4:3 CRT shape, and
+Hercules uses ordered monochrome dithering.
+
+The selected mode is saved in the local `MWPORT.CFG` beside the executable.
+On a new installation, option **A** (1024×768, 256-color chipset driver) is
+selected by default.
+Press `Alt+V` from character selection or during dungeon exploration to
+change it again. The SDL window remains resizable in every mode.
 
 ## Classic and Enhanced experiences
 
@@ -69,6 +95,10 @@ combatant through randomized enemy rounds, champion fights, rarity-scaled
 weapons, armor, magic, healing, and permanent run perks. Its
 `COLOSSEUM0.SAV`-`COLOSSEUM9.SAV` records are isolated from all ordinary
 adventure characters and world state. See `COLOSSEUM.md` for the full rules.
+On either save page, press `D`, choose `0`-`9` (or click the desired row), and
+confirm with `Y` to permanently delete that save. Adventure deletion includes
+its map, monster, pitfall, and Beastiary sidecars; Colosseum deletion removes
+only the selected Colosseum record.
 
 ## Useful documentation
 
@@ -84,9 +114,9 @@ adventure characters and world state. See `COLOSSEUM.md` for the full rules.
 ## Saves and local files
 
 The port uses only files beside its executable. Character saves, generated
-dungeons, monster state, bestiary progress, and other runtime data are created
-in the game directory. Do not install it under a location where your account
-cannot write files.
+dungeons, monster state, bestiary progress, display settings, and other
+runtime data are created in the game directory. Do not install it under a
+location where your account cannot write files.
 
 Back up the entire directory to preserve all characters and generated dungeon
 state.

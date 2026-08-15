@@ -41,7 +41,7 @@ _Static_assert(sizeof(MonsterRecord) == 9, "native monster record layout");
 typedef struct Game {
     /* Video */
     Video video;
-    int   video_mode;           /* original chipset mode (8 = 1024x768 here) */
+    int   video_mode;           /* exact original WORLD driver branch 0-11 */
     int   screen_w;
     int   screen_h;
 
@@ -71,6 +71,8 @@ typedef struct Game {
     int   cheat_noclip;
     int   cheat_god_mode;
     int   cheat_open_floor;
+    int   turbo_enabled;       /* Ctrl+F1; runtime-only timing multiplier */
+    int   turbo_percent;       /* 25..1000 in 25-percent increments */
     int   bestiary_unlock_all;
     u32   advice_counter;       /* WORLD func_1D5A7 contextual hint cycle */
     u8    wall_color_r;         /* hidden '*': palette background red */
@@ -86,6 +88,7 @@ typedef struct Game {
     u32   arena_streak;
     u32   arena_best;
     int   arena_champion;
+    int   arena_difficulty;
     u8   *dungeon_data;         /* loaded from dung.bin */
     int   dungeon_data_size;
     u8   *worldmap_data;        /* loaded from worldmap.bin */
@@ -182,6 +185,9 @@ void game_update_visibility(Game *g);
 const GameTraversalRules *game_traversal_rules(const Game *g);
 int  game_dungeon_max_floor(const Game *g);
 int  game_clamp_dungeon_floor(const Game *g, int floor);
+u32  game_scaled_delay_ms(const Game *g, u32 milliseconds);
+void game_delay(Game *g, u32 milliseconds);
+int  game_handle_turbo_key(Game *g, int key);
 void game_max_character(Game *g, Character *player);
 void game_debug_max_character(Game *g, Character *player);
 /* Shared modal-menu mouse helpers.  SDL events carry window coordinates;

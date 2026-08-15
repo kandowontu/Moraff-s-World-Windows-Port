@@ -24,6 +24,8 @@
 #define INPUT_QUEST_BOSS_WARP 0x10C  /* Ctrl+F4 */
 #define INPUT_RANDOMIZE_FLOOR 0x10D  /* Ctrl+F3 */
 #define INPUT_BATTLE_SIMULATOR 0x10E /* Ctrl+F2 */
+#define INPUT_TURBO_TOGGLE 0x10F /* Ctrl+F1 */
+#define INPUT_VIDEO_MODE 0x110 /* Alt+V */
 
 typedef struct {
     int keys[KEY_QUEUE_SIZE];
@@ -47,6 +49,9 @@ typedef struct {
     SDL_Keycode repeat_sym;
     u32 repeat_next;
     int fight_repeating;
+    /* Runtime timing multiplier. One hundred is the original DOS-compatible
+       cadence; Turbo Mode changes this without changing turn mechanics. */
+    int timing_percent;
 } Input;
 
 void input_init(Input *inp);
@@ -58,6 +63,8 @@ int  input_poll_quit(Input *inp);     /* returns 1 if window close requested */
 void input_last_mouse_click(Input *inp, int *x, int *y);
 void input_mouse_position(Input *inp, int *x, int *y, unsigned *serial);
 SDL_Keymod input_last_key_modifiers(const Input *inp);
+void input_set_timing_percent(Input *inp, int percent);
+u32  input_scaled_milliseconds(const Input *inp, u32 milliseconds);
 int  input_self_test(void);
 
 /* Map SDL keysym to the DOS-compatible value the game expects.

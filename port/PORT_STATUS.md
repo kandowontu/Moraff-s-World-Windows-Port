@@ -32,7 +32,7 @@ Source comments use the corresponding tags `MW_PORT`,
 | `[x]` | `func_0A4CF`, `func_0A51B`, `func_0A548`, `func_0A60D` | Packed 0x928-byte character save/load in `game_load_character` / `game_save_character` |
 | `[x]` | `inn_service`, `func_0A6F2`, `func_0A751` | Experience thresholds, exact class-specific level gains and age; inn restores SP while each earned level adds HP without erasing existing wounds |
 | `[x]` | Dungeon portions of `func_0F5CD`, `func_0F6E5` | `game_init`, `game_run`, status, keyboard command dispatch, movement, save/quit-to-title, death-to-title and raise contract |
-| `[x]` | `func_1FC56` | Original black/royal-blue/charcoal 1024x768 title backdrop and DAC colors, cumulative monster-pop introduction, weighted original roster, timed credit card and interruptible input; native showcase slots add selected Enhanced monsters; Esc/Q explicitly exit |
+| `[x]` | `func_1FC56` | Original per-driver title backdrop (alternating Hercules/CGA scanlines or solid blue/charcoal fields), native-coordinate monster-pop introduction, weighted original roster, timed credit card and interruptible input; native showcase slots add selected Enhanced monsters; Esc/Q explicitly exit |
 
 ### Dungeon generation, state, movement, and map
 
@@ -55,7 +55,7 @@ Source comments use the corresponding tags `MW_PORT`,
 |---|---|---|
 | `[x]` | `func_14B85`, `func_14F53`, `func_16488` | PIC actors, textured wall faces, doors and perspective scene renderer |
 | `[x]` | `func_1F355`, `func_1F3B2`, `func_1F9EF` | Dungeon geometry and projection helpers |
-| `[x]` | `func_0D74F` | Four simultaneous 1024-mode viewports |
+| `[x]` | `func_0D74F` | Four simultaneous viewports rounded through the selected driver's native raster |
 | `[x]` | `func_27112` | Command legend; the native version also gives every legend item a mouse hit box |
 | `[x]` | `use_item` `0x0F4E7` | Original expanded-map `GO WEST/EAST/NORTH/SOUTH` hint toward live quest records `0x68..0x6F` |
 | `[x]` | `examine_item` `0x0E3C8`, `func_0E578` | Original ZOOM chooser, arrow/mouse compass selection, full-screen directional viewport, adjacent-monster label and three view-size modes |
@@ -64,7 +64,7 @@ Source comments use the corresponding tags `MW_PORT`,
 | `[x]` | `func_0DF4A`, `func_0DBA5`, `func_0DBE8` | Statistics and status displays |
 | `[x]` | `shop_finances` `0x0803D` | Money and stone display |
 | `[x]` | `func_0DDAA` | Pockets, spells, scrolls, wands, papers, pills and misc-item inventory pages |
-| `[x]` | Expand-map and zoom branches of `func_0F6E5` | Expanded map plus the original modal directional zoom flow; pressing Z again in the chooser cycles the three four-view sizes |
+| `[x]` | Expand-map and zoom branches of `func_0F6E5` | Driver-sized expanded map (including the three separately acknowledged 320-wide thirds) plus the original modal directional zoom flow; pressing Z again in the chooser cycles the three four-view sizes |
 | `[x]` | `func_1D5A7` | Rotating floor-zero tutorial plus damage, poison, disease, level-ready, spell-point and carried-weight advice in the upper-left pane |
 
 ### Wilderness engine
@@ -72,7 +72,7 @@ Source comments use the corresponding tags `MW_PORT`,
 | Status | Original routine(s) | Native implementation |
 |---|---|---|
 | `[x]` | `func_1A765`, `func_1A786`, `func_1A841`, `func_1ADB1` | Original 64x64 `WORLDMAP.BIN` anchors, exact runtime LCG-seeded midpoint displacement, signed land/water heights, cached 257x129 regional pages and wrapped coordinates |
-| `[x]` | `func_1B137`, `func_1B169`, `func_1B504`, `func_1B5DB`, `func_1BC5B`, `func_1C232`, `func_1C571`, `func_1C732` | The original 1024x768x256 `func_1B5DB` 3x4x6 wireframe projection and literal 256-entry DAC ramp; lower-resolution chipset variants converge on that native output |
+| `[x]` | `func_1B137`, `func_1B169`, `func_1B504`, `func_1B5DB`, `func_1BC5B`, `func_1C232`, `func_1C571`, `func_1C732` | All six source wilderness projection families: native horizons 72/94/217/224/255, 1x1 through 3x4 sampling, the original height multipliers, literal planar 16-entry and chunky 256-entry palettes, Hercules monochrome dithering, and CRT aspect correction |
 | `[x]` | `func_1C8D2`, `func_1C92C`, `func_1CB3D` | Height-projected outdoor player/boat and generated-dungeon markers plus the projected complete-world overview |
 | `[x]` | `func_1CCB5` | Outdoor movement and edge wrapping, boat purchase/abandon rules, regional dungeon placement, `E` entry and clean floor-zero dungeon generation |
 
@@ -221,8 +221,11 @@ native launcher.
   executable directory.
 - `[=]` Original copy-protection check `func_08BDF`; it is replaced with
   SHA-256 verification of the required local `MW.EXE` and `WORLD.EXE`.
-- `[=]` Non-1024 video modes. This port intentionally targets the original
-  1024x768x256 presentation requested for the project.
+- `[x]` `func_06095` and the display/map setup block at `0x086FF`; all twelve
+  original driver branches are selectable, including their 2/4/16/256-color
+  restrictions, native normal/expanded map cell/count tables, integer viewport
+  and title rounding, per-driver wilderness projection, and distinct
+  Hercules/CGA/planar/chunky dungeon-wall raster treatments.
 
 `show_game_info` `0x08C53` is intentionally suppressed, not accidentally
 missing: the native GUI executable starts directly in the game without the

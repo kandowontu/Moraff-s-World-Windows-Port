@@ -1,4 +1,4 @@
-# Moraff's World — 1024×768 Native Edition
+# Moraff's World — Native Windows Edition
 
 Version 1.1 is an unofficial native Windows preservation port and optional
 Enhanced Edition of **Moraff's World**, the DOS dungeon crawler created by
@@ -78,7 +78,7 @@ For a distributable package that intentionally excludes copyrighted original
 files:
 
 ```powershell
-.\package_release.ps1 -Version 1.1.0
+.\package_release.ps1 -Version 1.1.1
 ```
 
 The port source is covered by [`LICENSE_PORT.txt`](port/LICENSE_PORT.txt).

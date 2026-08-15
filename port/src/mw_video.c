@@ -15,6 +15,116 @@ static u8 vga6_to_8(int v) {
     return (u8)((v * 255 + 31) / 63);
 }
 
+/* Exact WORLD func_06095 driver table plus the map configuration assigned in
+ * the block at WORLD 0x086FF.  Repeated resolutions remain separate because
+ * their palette, wall rasterizer, font, and framebuffer organization differ.
+ * Window dimensions correct the DOS modes' non-square pixels to 4:3. */
+static const MwDisplayModeInfo display_modes[MW_DISPLAY_MODE_COUNT] = {
+    /* resolution, adapter, raster, corrected window, WORLD mode, mono,
+       palette, wall path, font, normal-map cell/columns/rows,
+       expanded-map cell, wilderness baseline/x-step/y-step/height ratio */
+    {"720X348",  "HERCULES 2-COLOR",       720,348, 720,540, 0,1,
+        MW_PALETTE_MONO, MW_WALL_HERCULES, 2, 8,16,22, 3, 94,2,2,2,1},
+    {"320X200",  "CGA 4-COLOR",             320,200, 640,480, 1,0,
+        MW_PALETTE_CGA4, MW_WALL_CGA, 0, 4,13,24, 4, 72,1,1,1,1},
+    {"320X200",  "EGA 16-COLOR",            320,200, 640,480, 2,0,
+        MW_PALETTE_EGA16, MW_WALL_PLANAR16, 0, 4,13,24, 4, 72,1,1,1,1},
+    {"320X200",  "MCGA/VGA 256-COLOR",      320,200, 640,480, 3,0,
+        MW_PALETTE_VGA256, MW_WALL_CHUNKY256, 0, 4,13,24, 4, 72,1,1,1,1},
+    {"360X480",  "VGA 256-COLOR",            360,480, 640,480, 4,0,
+        MW_PALETTE_VGA256, MW_WALL_CHUNKY256, 1, 8,8,30, 4,224,1,2,4,1},
+    {"640X350",  "EGA 16-COLOR",             640,350, 640,480, 5,0,
+        MW_PALETTE_EGA16, MW_WALL_PLANAR16, 2, 8,14,22, 3, 94,2,2,2,1},
+    {"640X480",  "VGA PLANAR 16-COLOR",      640,480, 640,480, 6,0,
+        MW_PALETTE_EGA16, MW_WALL_PLANAR16, 2, 8,14,30, 4,224,2,2,4,1},
+    {"800X600",  "SVGA PLANAR 16-COLOR",     800,600, 800,600, 7,0,
+        MW_PALETTE_EGA16, MW_WALL_PLANAR16, 2, 8,16,37, 5,217,3,3,9,2},
+    {"1024X768", "SVGA PLANAR 16-COLOR",    1024,768,1024,768, 8,0,
+        MW_PALETTE_EGA16, MW_WALL_PLANAR16, 2,10,18,38, 7,255,3,4,6,1},
+    {"1024X768", "SVGA 256-COLOR (CHIPSET)",1024,768,1024,768, 9,0,
+        MW_PALETTE_VGA256, MW_WALL_CHUNKY256, 2,10,18,38, 7,255,3,4,6,1},
+    {"1024X768", "SVGA 256-COLOR (VESA)",   1024,768,1024,768,10,0,
+        MW_PALETTE_VGA256, MW_WALL_CHUNKY256, 2,10,18,38, 7,255,3,4,6,1},
+    {"640X480",  "VESA 256-COLOR",           640,480, 640,480,11,0,
+        MW_PALETTE_VGA256, MW_WALL_CHUNKY256, 2, 8,14,30, 4,224,2,2,4,1}
+};
+
+const MwDisplayModeInfo *video_display_mode_info(int mode) {
+    if (mode < 0 || mode >= MW_DISPLAY_MODE_COUNT) return NULL;
+    return &display_modes[mode];
+}
+
+int video_set_display_mode(Video *v, int mode, int resize_window) {
+    const MwDisplayModeInfo *info = video_display_mode_info(mode);
+    if (!v || !v->renderer || !info) return -1;
+
+    SDL_Texture *replacement = SDL_CreateTexture(v->renderer,
+        SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
+        info->raster_w, info->raster_h);
+    if (!replacement) {
+        fprintf(stderr, "SDL_CreateTexture (%s): %s\n",
+                info->resolution, SDL_GetError());
+        return -1;
+    }
+    SDL_SetTextureScaleMode(replacement, SDL_ScaleModeNearest);
+
+    if (v->framebuffer) SDL_DestroyTexture(v->framebuffer);
+    v->framebuffer = replacement;
+    v->display_mode = mode;
+    v->output_w = info->raster_w;
+    v->output_h = info->raster_h;
+    if (resize_window && v->window) {
+        SDL_SetWindowSize(v->window, info->window_w, info->window_h);
+        SDL_SetWindowPosition(v->window,
+                              SDL_WINDOWPOS_CENTERED,
+                              SDL_WINDOWPOS_CENTERED);
+    }
+    v->dirty = 1;
+    return 0;
+}
+
+int video_display_mode_self_test(Video *v) {
+    static const int expected[MW_DISPLAY_MODE_COUNT][8] = {
+        {720,348, 8,16,22, 1,3,94}, {320,200, 4,13,24, 4,4,72},
+        {320,200, 4,13,24,16,4,72}, {320,200, 4,13,24,256,4,72},
+        {360,480, 8, 8,30,256,4,224}, {640,350,8,14,22,16,3,94},
+        {640,480, 8,14,30,16,4,224}, {800,600,8,16,37,16,5,217},
+        {1024,768,10,18,38,16,7,255}, {1024,768,10,18,38,256,7,255},
+        {1024,768,10,18,38,256,7,255}, {640,480,8,14,30,256,4,224}
+    };
+    int failures = 0;
+    for (int i = 0; i < MW_DISPLAY_MODE_COUNT; i++) {
+        const MwDisplayModeInfo *info = video_display_mode_info(i);
+        if (!info || info->raster_w != expected[i][0] ||
+            info->raster_h != expected[i][1] ||
+            info->world_mode != i ||
+            info->map_cell_px != expected[i][2] ||
+            info->map_cols != expected[i][3] ||
+            info->map_rows != expected[i][4] ||
+            info->palette_colors != expected[i][5] ||
+            info->expanded_map_cell_px != expected[i][6] ||
+            info->wilderness_baseline != expected[i][7] ||
+            info->window_w * 3 != info->window_h * 4)
+            failures++;
+    }
+    if (video_display_mode_info(-1) ||
+        video_display_mode_info(MW_DISPLAY_MODE_COUNT)) failures++;
+
+    if (v && v->renderer) {
+        int saved_mode = v->display_mode;
+        for (int i = 0; i < MW_DISPLAY_MODE_COUNT; i++) {
+            int texture_w = 0, texture_h = 0;
+            if (video_set_display_mode(v, i, 0) != 0 ||
+                SDL_QueryTexture(v->framebuffer, NULL, NULL,
+                                 &texture_w, &texture_h) != 0 ||
+                texture_w != expected[i][0] || texture_h != expected[i][1])
+                failures++;
+        }
+        if (video_set_display_mode(v, saved_mode, 0) != 0) failures++;
+    }
+    return failures;
+}
+
 static void build_floor_low_ramp(u8 pal6[256][3], int floor) {
     static const u8 surface_palette[16][3] = {
         {15,  7,  7}, {20, 12, 12}, { 7, 15,  7}, {12, 20, 12},
@@ -286,20 +396,14 @@ int video_init(Video *v, const char *title, int scale) {
     SDL_RenderSetLogicalSize(v->renderer, LOGICAL_W, LOGICAL_H);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
 
-    v->framebuffer = SDL_CreateTexture(v->renderer,
-        SDL_PIXELFORMAT_ARGB8888,
-        SDL_TEXTUREACCESS_STREAMING,
-        LOGICAL_W, LOGICAL_H);
-    if (!v->framebuffer) {
-        fprintf(stderr, "SDL_CreateTexture: %s\n", SDL_GetError());
-        return -1;
-    }
-
     v->argb_pixels = malloc((size_t)LOGICAL_W * LOGICAL_H * sizeof(u32));
     if (!v->argb_pixels) {
         fprintf(stderr, "Cannot allocate presentation buffer\n");
         return -1;
     }
+
+    if (video_set_display_mode(v, MW_DISPLAY_SVGA_1024X768_256_A, 0) < 0)
+        return -1;
 
     video_load_vga_default_palette(v);
     v->dirty = 1;
@@ -318,12 +422,68 @@ void video_shutdown(Video *v) {
 void video_present(Video *v) {
     if (!v->dirty) return;
 
-    for (int i = 0; i < LOGICAL_W * LOGICAL_H; i++) {
-        PaletteEntry *c = &v->palette[v->pixels[i]];
-        v->argb_pixels[i] = 0xFF000000 | ((u32)c->r << 16) | ((u32)c->g << 8) | c->b;
+    const MwDisplayModeInfo *info = video_display_mode_info(v->display_mode);
+    if (!info) info = &display_modes[MW_DISPLAY_SVGA_1024X768_256_A];
+    static const u8 bayer4[4][4] = {
+        { 0,  8,  2, 10},
+        {12,  4, 14,  6},
+        { 3, 11,  1,  9},
+        {15,  7, 13,  5}
+    };
+
+    /* Mode-specific gameplay primitives have already been rounded through
+     * the selected native coordinate grid and rasterized with its wall/map
+     * path.  This final stage performs only the hardware framebuffer sample
+     * and adapter palette restriction before SDL enlarges the result. */
+    for (int y = 0; y < info->raster_h; y++) {
+        int source_y = y * LOGICAL_H / info->raster_h;
+        for (int x = 0; x < info->raster_w; x++) {
+            int source_x = x * LOGICAL_W / info->raster_w;
+            int source_index = v->pixels[source_y * LOGICAL_W + source_x];
+            PaletteEntry *c = &v->palette[source_index];
+            u32 argb;
+            if (info->monochrome) {
+                int luminance = (77 * c->r + 150 * c->g + 29 * c->b) >> 8;
+                int threshold = (int)bayer4[y & 3][x & 3] * 16 + 8;
+                argb = luminance > threshold ? 0xFFFFFFFFu : 0xFF000000u;
+            } else {
+                /* The planar branches cannot display arbitrary entries from
+                 * the 256-colour DAC.  Resolve every semantic/native colour
+                 * to the closest colour actually available to that adapter.
+                 * This is intentionally done after native-pixel sampling;
+                 * rendering a 256-colour frame and merely shrinking it was
+                 * the inaccurate behaviour this table replaces. */
+                if (info->palette_colors < 256) {
+                    /* WORLD's CGA branch selects the red/green/brown set,
+                     * visible in its wireframe corridors, rather than the
+                     * cyan/magenta palette used by the previous shortcut. */
+                    static const u8 cga_index[4] = {0, 8, 6, 4};
+                    int best = 0, best_distance = 0x7fffffff;
+                    int count = info->palette_colors == 4 ? 4 : 16;
+                    for (int candidate = 0; candidate < count; candidate++) {
+                        int pi = info->palette_colors == 4 ?
+                                 cga_index[candidate] : candidate;
+                        PaletteEntry *pc = &v->palette[pi];
+                        int dr = (int)c->r - pc->r;
+                        int dg = (int)c->g - pc->g;
+                        int db = (int)c->b - pc->b;
+                        int distance = dr * dr + dg * dg + db * db;
+                        if (distance < best_distance) {
+                            best_distance = distance;
+                            best = pi;
+                        }
+                    }
+                    c = &v->palette[best];
+                }
+                argb = 0xFF000000u | ((u32)c->r << 16) |
+                       ((u32)c->g << 8) | c->b;
+            }
+            v->argb_pixels[y * info->raster_w + x] = argb;
+        }
     }
 
-    SDL_UpdateTexture(v->framebuffer, NULL, v->argb_pixels, LOGICAL_W * sizeof(u32));
+    SDL_UpdateTexture(v->framebuffer, NULL, v->argb_pixels,
+                      info->raster_w * (int)sizeof(u32));
     SDL_RenderClear(v->renderer);
     SDL_RenderCopy(v->renderer, v->framebuffer, NULL, NULL);
     SDL_RenderPresent(v->renderer);
@@ -606,24 +766,37 @@ int video_load_font(Video *v, const char *path) {
     int bpc = char_h * 2;
     long variant_start = fsize - (long)FONT_REMAP_SLOTS * bpc;
 
+    /* 320x200 text is drawn through the original double-scan character
+       path.  Without this native vertical doubling, a nominal 14-row glyph
+       collapses to only three or four rows when the compositor is sampled
+       into the 200-line adapter raster. */
+    const MwDisplayModeInfo *display =
+        video_display_mode_info(v->display_mode);
+    int row_repeat = display && display->raster_h <= 200 ? 2 : 1;
+    int rendered_h = char_h * row_repeat;
     v->font_char_w = 16;
-    v->font_char_h = char_h;
+    v->font_char_h = rendered_h;
     v->font_slots = FONT_REMAP_SLOTS;
     font_build_remap(v->font_remap);
 
-    int expanded_size = FONT_REMAP_SLOTS * char_h * 16;
-    v->font_data = calloc(1, expanded_size);
-    if (!v->font_data) { free(raw); return -1; }
+    int expanded_size = FONT_REMAP_SLOTS * rendered_h * 16;
+    u8 *new_font_data = calloc(1, expanded_size);
+    if (!new_font_data) { free(raw); return -1; }
 
     for (int slot = 0; slot < FONT_REMAP_SLOTS; slot++) {
         long src_base = variant_start + (long)slot * bpc;
         for (int row = 0; row < char_h; row++) {
             long src_off = src_base + row * 2;
-            int dst_off = (slot * char_h + row) * 16;
             u8 lo = raw[src_off], hi = raw[src_off + 1];
-            for (int bit = 0; bit < 8; bit++) {
-                v->font_data[dst_off + bit]     = (lo & (1 << bit)) ? 0xFF : 0;
-                v->font_data[dst_off + 8 + bit] = (hi & (1 << bit)) ? 0xFF : 0;
+            for (int repeat = 0; repeat < row_repeat; repeat++) {
+                int dst_row = row * row_repeat + repeat;
+                int dst_off = (slot * rendered_h + dst_row) * 16;
+                for (int bit = 0; bit < 8; bit++) {
+                    new_font_data[dst_off + bit] =
+                        (lo & (1 << bit)) ? 0xFF : 0;
+                    new_font_data[dst_off + 8 + bit] =
+                        (hi & (1 << bit)) ? 0xFF : 0;
+                }
             }
         }
     }
@@ -632,17 +805,23 @@ int video_load_font(Video *v, const char *path) {
     for (int slot = 1; slot < FONT_REMAP_SLOTS; slot++) {
         for (int col = 15; col >= 0; col--) {
             int used = 0;
-            for (int row = 0; row < char_h; row++) {
-                if (v->font_data[(slot * char_h + row) * 16 + col]) { used = 1; break; }
+            for (int row = 0; row < rendered_h; row++) {
+                if (new_font_data[(slot * rendered_h + row) * 16 + col]) {
+                    used = 1;
+                    break;
+                }
             }
             if (used) { if (col + 2 > max_used) max_used = col + 2; break; }
         }
     }
+    free(v->font_data);
+    v->font_data = new_font_data;
     v->font_advance = (max_used > 4) ? max_used : v->font_char_w;
 
     free(raw);
     printf("Loaded font: %s (%dx%d, advance=%d, variant at %ld)\n",
-           path, v->font_char_w, v->font_char_h, v->font_advance, variant_start);
+           path, v->font_char_w, v->font_char_h, v->font_advance,
+           variant_start);
     return 0;
 }
 
