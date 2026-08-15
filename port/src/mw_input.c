@@ -9,6 +9,7 @@
 
 void input_init(Input *inp) {
     memset(inp, 0, sizeof(*inp));
+    inp->timing_percent = 100;
 }
 
 static void input_push(Input *inp, int key, int x, int y, SDL_Keymod mods) {
@@ -49,6 +50,26 @@ enum {
     DOS_TYPEMATIC_PERIOD_MS = 92
 };
 
+u32 input_scaled_milliseconds(const Input *inp, u32 milliseconds) {
+    int percent = inp && inp->timing_percent >= 25 &&
+                  inp->timing_percent <= 1000 ? inp->timing_percent : 100;
+    if (!milliseconds) return 0;
+    uint64_t scaled = ((uint64_t)milliseconds * 100u +
+                       (unsigned)percent - 1u) / (unsigned)percent;
+    if (!scaled) scaled = 1;
+    return scaled > UINT32_MAX ? UINT32_MAX : (u32)scaled;
+}
+
+void input_set_timing_percent(Input *inp, int percent) {
+    if (!inp) return;
+    if (percent < 25) percent = 25;
+    if (percent > 1000) percent = 1000;
+    inp->timing_percent = percent;
+    if (inp->repeat_held)
+        inp->repeat_next = SDL_GetTicks() +
+            input_scaled_milliseconds(inp, DOS_TYPEMATIC_PERIOD_MS);
+}
+
 static int original_repeatable_key(int dos_key) {
     /* Native commands begin above the byte range and deliberately do not
        auto-repeat. All original ASCII and extended BIOS keys do. */
@@ -72,7 +93,8 @@ static void input_emit_typematic_repeat(Input *inp) {
         inp->fight_repeating = 1;
     input_push_dos_key(inp, dos_key, mods);
     /* Do not flood the queue after a modal or paused window. */
-    inp->repeat_next = now + DOS_TYPEMATIC_PERIOD_MS;
+    inp->repeat_next = now +
+        input_scaled_milliseconds(inp, DOS_TYPEMATIC_PERIOD_MS);
 }
 
 void input_pump(Input *inp) {
@@ -94,7 +116,8 @@ void input_pump(Input *inp) {
             if (original_repeatable_key(dos_key)) {
                 inp->repeat_held = 1;
                 inp->repeat_sym = ev.key.keysym.sym;
-                inp->repeat_next = SDL_GetTicks() + DOS_TYPEMATIC_DELAY_MS;
+                inp->repeat_next = SDL_GetTicks() +
+                    input_scaled_milliseconds(inp, DOS_TYPEMATIC_DELAY_MS);
                 inp->fight_repeating = 0;
             }
             break;
@@ -199,6 +222,7 @@ int input_sdl_to_dos(SDL_Keycode sym, SDL_Keymod mod) {
     if (sym == SDLK_F12 && (mod & KMOD_CTRL) &&
         (mod & KMOD_SHIFT) && (mod & KMOD_ALT))
         return INPUT_MAX_CHARACTER;
+    if (sym == SDLK_F1 && (mod & KMOD_CTRL)) return INPUT_TURBO_TOGGLE;
     if (sym == SDLK_F2 && (mod & KMOD_CTRL)) return INPUT_BATTLE_SIMULATOR;
     if (sym == SDLK_F3 && (mod & KMOD_CTRL)) return INPUT_RANDOMIZE_FLOOR;
     if (sym == SDLK_F4 && (mod & KMOD_CTRL)) return INPUT_QUEST_BOSS_WARP;
@@ -210,6 +234,7 @@ int input_sdl_to_dos(SDL_Keycode sym, SDL_Keymod mod) {
     if (sym == SDLK_F10 && (mod & KMOD_CTRL)) return INPUT_NOCLIP_TOGGLE;
     if (sym == SDLK_F11 && (mod & KMOD_CTRL)) return INPUT_WILDERNESS_TEST;
     if (sym == SDLK_F12 && (mod & KMOD_CTRL)) return INPUT_TRAINER;
+    if (sym == SDLK_v && (mod & KMOD_ALT)) return INPUT_VIDEO_MODE;
 
     /* Standard ASCII range */
     if (sym >= SDLK_SPACE && sym <= SDLK_z) {
@@ -315,6 +340,21 @@ int input_self_test(void) {
     };
 
     if (DOS_TYPEMATIC_DELAY_MS != 500 || DOS_TYPEMATIC_PERIOD_MS != 92)
+        failures++;
+    input_init(&inp);
+    if (inp.timing_percent != 100 ||
+        input_scaled_milliseconds(&inp, 500) != 500)
+        failures++;
+    input_set_timing_percent(&inp, 1000);
+    if (inp.timing_percent != 1000 ||
+        input_scaled_milliseconds(&inp, 500) != 50 ||
+        input_scaled_milliseconds(&inp, 92) != 10)
+        failures++;
+    input_set_timing_percent(&inp, 25);
+    if (inp.timing_percent != 25 ||
+        input_scaled_milliseconds(&inp, 500) != 2000)
+        failures++;
+    if (input_sdl_to_dos(SDLK_F1, KMOD_CTRL) != INPUT_TURBO_TOGGLE)
         failures++;
     for (int i = 0; i < 10; i++) {
         if (input_sdl_to_dos(keypad_key[i], KMOD_NONE) != -keypad_scan[i] ||

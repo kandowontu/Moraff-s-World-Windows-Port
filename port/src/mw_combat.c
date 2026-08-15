@@ -1,5 +1,6 @@
 #include "mw_combat.h"
 #include "mw_game.h"
+#include "mw_arena.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -460,6 +461,39 @@ static const BattleSpellDef priest_spells[MW_ENHANCED_SPELL_COUNT] = {
               {BS_POWER_WEAPON,6,0},
 };
 
+int combat_spell_arena_eligible(int category, int index) {
+    const BattleSpellDef *spell;
+    if (index < 0 || index >= MW_ENHANCED_SPELL_COUNT ||
+        (category != SPELL_CAT_WIZARD && category != SPELL_CAT_PRIEST))
+        return 0;
+    spell = category == SPELL_CAT_WIZARD ?
+            &wiz_spells[index] : &priest_spells[index];
+    switch (spell->type) {
+    case BS_SLEEP:
+    case BS_DAMAGE_SCALE:
+    case BS_DAMAGE_FIXED:
+    case BS_DAMAGE_MULTI:
+    case BS_DAMAGE_RANGE:
+    case BS_HOLD:
+    case BS_DRAIN:
+    case BS_AUTOKILL:
+    case BS_BUFF_SLOW:
+    case BS_STOP:
+    case BS_SHOCK_125:
+    case BS_SHOCK_300:
+    case BS_HEAL_FIXED:
+    case BS_HEAL_ALL:
+    case BS_DRAIN_SCALE:
+    case BS_DAMAGE_PERCENT:
+    case BS_RESTORE_ALL:
+    case BS_LIFE_CONVERGENCE:
+    case BS_PHOENIX_PRAYER:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* Spell names (same arrays as in mw_game.c, duplicated here for self-containment) */
 static const char *wiz_spell_names[MW_ENHANCED_SPELL_COUNT] = {
     "SLEEP","MAGIC ZAP","MINOR PROTECTION",
@@ -788,7 +822,9 @@ void character_tick_effects(Game *g, Character *p) {
     dec_u16(&p->eff_resist_drain);
     dec_u16(&p->eff_stop_monster);
     dec_u16(&p->eff_hold_monster);
-    if (p->ring_regen && mw_hp_cur(p) < mw_hp_max(p))
+    /* Regeneration heals the living; it must never resurrect a character
+       between lethal damage and the caller's death check. */
+    if (mw_hp_cur(p) && p->ring_regen && mw_hp_cur(p) < mw_hp_max(p))
         heal_hp_capped(p, p->ring_regen);
     if (mw_relic_owned(p, MW_RELIC_ARCANE_RING)) {
         p->native.relic_regen_phase++;
@@ -1187,6 +1223,14 @@ int combat_player_attack(Game *g, CombatState *cs, Character *player) {
     }
 
     if (total_damage <= 0) return 0;
+    if (g->arena_active) {
+        /* Most Colosseum turns are deliberately ordinary attacks.  Give a
+           successful hit modest level-based momentum so a viable run does
+           not depend on drawing an early damage spell or jackpot weapon. */
+        int64_t boosted = (int64_t)total_damage * 5 / 4 +
+                          (int64_t)player->level / 2 + 1;
+        total_damage = boosted > INT_MAX ? INT_MAX : (int)boosted;
+    }
     return total_damage;
 }
 
@@ -1484,6 +1528,10 @@ static int combat_monster_special(Game *g, CombatState *cs, Character *p,
     }
 
     int drain_amount = combat_monster_drain_amount(type);
+    /* Adventure keeps each monster's source-derived drain strength. Arena
+       opponents already track the combatant's rapidly rising level, so one
+       response must not erase several victories. */
+    if (g->arena_active && drain_amount > 1) drain_amount = 1;
     if (drain_amount) {
         cs->special_used = 1;
         if (p->eff_resist_drain) {
@@ -1572,6 +1620,19 @@ int combat_monster_attack(Game *g, CombatState *cs, Character *player) {
     int hit_score = game_rand(g) % 80;
     hit_score += cs->monster_level * 2;
     hit_score += mt->atk;
+    if (g->arena_active) {
+        unsigned round = g->arena_round ? g->arena_round : 1u;
+        int pressure = 10 + (int)(round > 240u ? 480u : round * 2u);
+        /* Accuracy pressure now ramps continuously.  The former curve jumped
+           from 73 at round four to 100 at round five and exceeded 100 at
+           round six, before most builds owned meaningful armor. */
+        if (round > 20u) pressure += 20;
+        if (g->arena_champion) pressure += 18;
+        if (g->arena_difficulty == ARENA_DIFFICULTY_EASY) pressure -= 15;
+        else if (g->arena_difficulty == ARENA_DIFFICULTY_HARD) pressure += 25;
+        if (pressure < 0) pressure = 0;
+        hit_score += pressure;
+    }
 
     /* Subtract player defenses */
     hit_score -= player->level * 2;
@@ -1579,11 +1640,19 @@ int combat_monster_attack(Game *g, CombatState *cs, Character *player) {
     hit_score -= player->stat_luck;
     hit_score -= player->combat_bonus;
     int armor = player->equipped_armor < ARMOR_STAT_COUNT ? player->equipped_armor : 0;
-    hit_score -= armor_defense[armor];
-    hit_score -= mw_armor_enchant(player, armor);
-    hit_score -= mw_body_armor_plus(player);
-    hit_score -= mw_ring_prot_plus(player);
-    hit_score -= mw_armor_plus(player);
+    int equipment_defense = armor_defense[armor] +
+        mw_armor_enchant(player, armor) + mw_body_armor_plus(player) +
+        mw_ring_prot_plus(player) + mw_armor_plus(player);
+    if (g->arena_active) {
+        unsigned round = g->arena_round ? g->arena_round : 1u;
+        int soft_cap = 15 + (int)(round > 500u ? 500u : round);
+        if (g->arena_difficulty == ARENA_DIFFICULTY_EASY) soft_cap += 10;
+        else if (g->arena_difficulty == ARENA_DIFFICULTY_HARD && soft_cap > 5)
+            soft_cap -= 5;
+        if (equipment_defense > soft_cap)
+            equipment_defense = soft_cap + (equipment_defense - soft_cap) / 8;
+    }
+    hit_score -= equipment_defense;
     if (player->eff_slow_mon && (game_rand(g) % 4) != 0)
         hit_score -= player->stat_agi / 3;
 
@@ -1652,6 +1721,31 @@ static int combat_apply_player_damage(Game *g, Character *player, int damage,
         damage = (int)((int64_t)damage * 85 / 100);
         if (damage < 1) damage = 1;
     }
+    if (g->arena_active) {
+        /* Scale and cap a whole counterattack, including weight repeats and
+           specials.  The old safeguard vanished after round nine, creating a
+           cliff precisely at the first champion.  This curve tapers through
+           round twenty and leaves room for a combat cure to make net progress. */
+        unsigned round = g->arena_round ? g->arena_round : 1u;
+        int percent = 42 + (int)round * 3;
+        int cap_percent = round <= 20u ? 10 + (int)round :
+                          (round >= 110u ? 75 :
+                           30 + (int)((round - 20u) / 2u));
+        if (g->arena_difficulty == ARENA_DIFFICULTY_EASY) {
+            percent -= 10;
+            cap_percent -= 4;
+        } else if (g->arena_difficulty == ARENA_DIFFICULTY_HARD) {
+            percent += 10;
+            cap_percent += 4;
+        }
+        if (percent > 100) percent = 100;
+        damage = (int)(((int64_t)damage * percent + 99) / 100);
+        uint64_t cap = (uint64_t)mw_hp_max(player) *
+                       (unsigned)cap_percent / 100u;
+        if (cap < 1u) cap = 1u;
+        if ((uint64_t)damage > cap) damage = (int)cap;
+        if (damage < 1) damage = 1;
+    }
     u32 current_hp = mw_hp_cur(player);
     if ((u32)damage >= current_hp &&
         mw_relic_owned(player, MW_RELIC_PHOENIX_SEAL) &&
@@ -1678,9 +1772,30 @@ static int combat_apply_player_damage(Game *g, Character *player, int damage,
    -1 = instant kill, -2 = immune, -3 = effect only (sleep/hold/buff), 0 = miss/fail
    ══════════════════════════════════════════════════════════════════════ */
 
+static int arena_adjust_spell_damage(const Game *g, const Character *player,
+                                     int spell_level, int raw_damage) {
+    if (!g->arena_active || raw_damage <= 0) return raw_damage;
+    int mental = player->stat_int > player->stat_wis ?
+                 player->stat_int : player->stat_wis;
+    int64_t floor = (int64_t)player->level * (spell_level + 3) + mental / 2;
+    int64_t adjusted = raw_damage;
+    if (adjusted < floor) adjusted = floor;
+    /* Levels one through five were particularly poor compared with a free
+       melee swing.  A small novice multiplier makes scarce SP/charges worth
+       spending without inflating the already-large deep spell formulas. */
+    if (spell_level <= 5) adjusted = adjusted * 5 / 4;
+    return adjusted > INT_MAX ? INT_MAX : (int)adjusted;
+}
+
 static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
                               const BattleSpellDef *sd, int spell_level) {
     const MonsterType *mt = &monster_types[cs->monster_type_idx];
+
+    /* Arena magic competes with a repeatable melee command and always gives
+       the opponent a response.  Preserve WORLD's spell formulas everywhere
+       else, but give early Colosseum damage a useful level/mental-stat floor. */
+#define ARENA_SPELL_DAMAGE(raw_value) \
+    arena_adjust_spell_damage(g, player, spell_level, (raw_value))
 
     switch (sd->type) {
     case BS_NONE:
@@ -1696,10 +1811,10 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
         return -3;
 
     case BS_DAMAGE_SCALE:
-        return player->level * sd->param1 + sd->param2;
+        return ARENA_SPELL_DAMAGE(player->level * sd->param1 + sd->param2);
 
     case BS_DAMAGE_FIXED:
-        return sd->param1;
+        return ARENA_SPELL_DAMAGE(sd->param1);
 
     case BS_DAMAGE_MULTI: {
         int total = 0;
@@ -1707,12 +1822,12 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
         int range = sd->param2 - sd->param1 + 1;
         for (int i = 0; i < missiles; i++)
             total += (game_rand(g) % range) + sd->param1;
-        return total;
+        return ARENA_SPELL_DAMAGE(total);
     }
 
     case BS_DAMAGE_RANGE: {
         int range = sd->param2 - sd->param1 + 1;
-        return (game_rand(g) % range) + sd->param1;
+        return ARENA_SPELL_DAMAGE((game_rand(g) % range) + sd->param1);
     }
 
     case BS_GO_AWAY:
@@ -1756,7 +1871,7 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
                          sd->param2;
         if (damage < 1) damage = 1;
         if (damage > INT_MAX) damage = INT_MAX;
-        return (int)damage;
+        return ARENA_SPELL_DAMAGE((int)damage);
     }
 
     case BS_AUTOKILL: {
@@ -1769,10 +1884,10 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
     }
 
     case BS_SHOCK_125:
-        return 125;
+        return ARENA_SPELL_DAMAGE(125);
 
     case BS_SHOCK_300:
-        return 300;
+        return ARENA_SPELL_DAMAGE(300);
 
     case BS_BUFF_STR:
         (void)add_temporary_stat_stack(&player->stat_str,
@@ -1836,7 +1951,15 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
         return -4;
 
     case BS_HEAL_FIXED: {
-        heal_hp_capped(player, (unsigned)sd->param1);
+        unsigned amount = (unsigned)sd->param1;
+        if (g->arena_active) {
+            uint64_t scaled = (uint64_t)mw_hp_max(player) *
+                              (unsigned)(30 + spell_level * 5) / 100u;
+            scaled += (unsigned)player->level;
+            if (scaled > UINT_MAX) scaled = UINT_MAX;
+            if (amount < scaled) amount = (unsigned)scaled;
+        }
+        heal_hp_capped(player, amount);
         return -3;
     }
 
@@ -1920,6 +2043,7 @@ static int apply_battle_spell(Game *g, CombatState *cs, Character *player,
     default:
         return 0;
     }
+#undef ARENA_SPELL_DAMAGE
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -2237,9 +2361,9 @@ int combat_take_turn(Game *g, CombatState *cs, Character *player, int action) {
     /* A tapped attack keeps the native port's readable result pause.  Once
        the BIOS-style held-F stream begins, do not let that pause throttle
        WORLD's verified 92 ms typematic cadence. */
-    SDL_Delay(mw_hp_cur(player) && cs->monster_hp > 0 ?
-              (action == COMBAT_ACTION_FIGHT &&
-               g->input.fight_repeating ? 92 : 450) : 700);
+    game_delay(g, mw_hp_cur(player) && cs->monster_hp > 0 ?
+               (action == COMBAT_ACTION_FIGHT &&
+                g->input.fight_repeating ? 92 : 450) : 700);
     return result;
 }
 
@@ -2906,8 +3030,8 @@ static void spell_notice(Game *g, Character *p, CombatState *cs,
     input_wait_any_key(&g->input);
 }
 
-static int class_can_read_spellbook(const Character *p, int category) {
-    if (mw_universal_access(p)) return 1;
+static int class_can_read_spellbook_vanilla(const Character *p,
+                                             int category) {
     if (p->class_id == CLASS_MONK) return 1;
     if (p->class_id == CLASS_FIGHTER) return 0;
     if (category <= SPELL_CAT_PREPARATION) return 1;
@@ -2917,6 +3041,23 @@ static int class_can_read_spellbook(const Character *p, int category) {
                p->class_id == CLASS_SPELLBLADE;
     return p->class_id == CLASS_WORSHIPPER || p->class_id == CLASS_PRIEST ||
            p->class_id == CLASS_SAGE || p->class_id == CLASS_PALADIN;
+}
+
+static int class_can_read_spellbook(const Character *p, int category) {
+    return mw_universal_access(p) ||
+           class_can_read_spellbook_vanilla(p, category);
+}
+
+int combat_spell_source_allowed(const Character *p, int category,
+                                int source) {
+    if (!p || category < SPELL_CAT_WIZARD || category > SPELL_CAT_PRIEST ||
+        source < 0 || source > 3)
+        return 0;
+    if (source == 0)
+        return class_can_read_spellbook_vanilla(p, category);
+    /* WORLD lets every non-Fighter invoke either battle tradition from an
+       item. Fighters cannot use scrolls or wands, but can cast magic paper. */
+    return p->class_id != CLASS_FIGHTER || source == 3;
 }
 
 static int spell_is_available(Character *p, int category, int index,
@@ -3822,7 +3963,139 @@ static int choose_cast_category(Game *g, Character *p, CombatState *cs,
     return key - '1';
 }
 
+typedef struct ArenaCastChoice {
+    u8 category;
+    u8 index;
+} ArenaCastChoice;
+
+/* The Colosseum has no exploration spellbook to browse.  Its C command is a
+   combat decision, so build one dense list containing only learned,
+   battle-eligible spells the combatant can afford right now. */
+static int arena_collect_usable_magic(Game *g, Character *p, int source,
+                                     ArenaCastChoice *choices,
+                                     int capacity) {
+    int count = 0;
+    int catalog = mw_spell_catalog_count(p);
+    for (int category = SPELL_CAT_WIZARD;
+         category <= SPELL_CAT_PRIEST; category++) {
+        for (int index = 0; index < catalog; index++) {
+            int level = index / 3 + 1;
+            if (!combat_spell_arena_eligible(category, index) ||
+                !combat_spell_source_allowed(p, category, source) ||
+                !spell_is_available(p, category, index, source, 0) ||
+                (source == 0 && !g->cheat_god_mode &&
+                 p->sp_cur < (float)level))
+                continue;
+            if (choices && count < capacity) {
+                choices[count].category = (u8)category;
+                choices[count].index = (u8)index;
+            }
+            count++;
+        }
+    }
+    return count;
+}
+
+static int select_arena_magic(Game *g, Character *p, CombatState *cs,
+                              int source, int *category_out, int *index_out) {
+    enum { PER_PAGE = 30 };
+    ArenaCastChoice choices[SPELL_TYPES * MW_ENHANCED_SPELL_COUNT];
+    int count = arena_collect_usable_magic(
+        g, p, source, choices,
+        (int)(sizeof(choices) / sizeof(choices[0])));
+    if (!count) return 0;
+    int page = 0;
+    int page_count = (count + PER_PAGE - 1) / PER_PAGE;
+
+    for (;;) {
+        char line[128], title[128];
+        spell_draw_selector_backdrop(g, p, cs);
+        if (source == 0)
+            snprintf(title, sizeof(title),
+                     "CASTABLE BATTLE SPELLS ONLY - SP %.0f/%.0f:",
+                     p->sp_cur, p->sp_max);
+        else
+            snprintf(title, sizeof(title), "USABLE BATTLE %sS ONLY:",
+                     source == 1 ? "SCROLL" :
+                     source == 2 ? "WAND" : "PAPER");
+        spell_selector_text(g, 0, 0, title, 4);
+        if (page_count > 1)
+            draw_page_badge(&g->video, SPELL_PAGE_BADGE_X, 0,
+                            SPELL_PAGE_BADGE_W, page, page_count, 0);
+        spell_selector_text(g, LOGICAL_W - 90, 0, "ESCAPE", 3);
+
+        int first = page * PER_PAGE;
+        int shown = count - first;
+        if (shown > PER_PAGE) shown = PER_PAGE;
+        for (int position = 0; position < shown; position++) {
+            const ArenaCastChoice *choice = &choices[first + position];
+            int column = position / 10;
+            int row = position % 10;
+            int level = choice->index / 3 + 1;
+            char hotkey = spell_hotkey_for_index(position);
+            snprintf(line, sizeof(line), "%c)%c %s [%d]", hotkey,
+                     choice->category == SPELL_CAT_WIZARD ? 'W' : 'P',
+                     combat_spell_name(choice->category, choice->index),
+                     level);
+            spell_selector_text(g,
+                column == 0 ? 0 :
+                (column == 1 ? SPELL_SELECTOR_COL_2 : SPELL_SELECTOR_COL_3),
+                row + 1, line,
+                choice->category == SPELL_CAT_WIZARD ? 8 : 14);
+        }
+        video_present(&g->video);
+
+        int key = input_getch(&g->input);
+        if (key == 0x1B || input_poll_quit(&g->input)) return -1;
+        if (key == 0) {
+            int scan = input_getch(&g->input);
+            if (scan == 0x49 && page > 0) --page;
+            else if (scan == 0x51 && page + 1 < page_count) ++page;
+            continue;
+        }
+        int position = -1;
+        if (key == INPUT_MOUSE_CLICK) {
+            int x, y;
+            if (!game_mouse_click_logical(g, &x, &y)) continue;
+            if (y < SPELL_SELECTOR_ROW_H && x >= LOGICAL_W - 120)
+                return -1;
+            if (page_count > 1 && y < PAGE_BADGE_H &&
+                x >= SPELL_PAGE_BADGE_X &&
+                x < SPELL_PAGE_BADGE_X + SPELL_PAGE_BADGE_W) {
+                page = (page + 1) % page_count;
+                continue;
+            }
+            int row = y / SPELL_SELECTOR_ROW_H - 1;
+            int column = x < SPELL_SELECTOR_COL_2 ? 0 :
+                         (x < SPELL_SELECTOR_COL_3 ? 1 : 2);
+            if (row >= 0 && row < 10) position = column * 10 + row;
+        } else {
+            position = spell_index_from_hotkey(key);
+        }
+        if (position >= 0 && position < shown) {
+            *category_out = choices[first + position].category;
+            *index_out = choices[first + position].index;
+            return 1;
+        }
+    }
+}
+
 int cmd_cast_spell_menu(Game *g, Character *p, CombatState *cs) {
+    if (g->arena_active && cs) {
+        int category, index;
+        int selected = select_arena_magic(g, p, cs, 0, &category, &index);
+        if (selected <= 0) {
+            if (selected == 0)
+                spell_notice(g, p, cs, "NO BATTLE SPELLS CAN BE CAST.",
+                             "EARN MAGIC OR RECOVER SPELL POINTS.");
+            return 0;
+        }
+        char message[160];
+        int result = cast_selected_spell(g, p, cs, category, index, 0,
+                                         message, sizeof(message));
+        if (result == 0) spell_notice(g, p, cs, message, "");
+        return result;
+    }
     int choice = choose_cast_category(g, p, cs, 0, 1);
     if (choice < 0) return 0;
     int help = choice >= 4;
@@ -4254,6 +4527,43 @@ static int use_misc_item(Game *g, Character *p, CombatState *cs) {
 }
 
 int cmd_use_item(Game *g, Character *p, CombatState *cs) {
+    if (g->arena_active && cs) {
+        static const char *const arena_magic_menu[8] = {
+            "USE WHICH BATTLE MAGIC?",
+            "",
+            "1) SCROLL",
+            "2) WAND",
+            "3) MAGIC PAPER",
+            "",
+            "ONLY CURRENTLY USABLE ITEMS WILL BE LISTED.",
+            "ESCAPE RETURNS TO THE FIGHT"
+        };
+        item_draw_page(g, p, cs, arena_magic_menu);
+        int key = item_get_list_key(g, 2, 4, '1');
+        if (key < '1' || key > '3') return 0;
+        int source = key - '0';
+        int category, index;
+        int selected = select_arena_magic(g, p, cs, source,
+                                          &category, &index);
+        if (selected <= 0) {
+            if (selected == 0) {
+                char line[96];
+                snprintf(line, sizeof(line), "NO USABLE BATTLE %sS.",
+                         source == 1 ? "SCROLL" :
+                         source == 2 ? "WAND" : "PAPER");
+                spell_notice(g, p, cs, line,
+                    p->class_id == CLASS_FIGHTER && source != 3 ?
+                    "FIGHTERS CAN CAST ONLY FROM MAGIC PAPER." :
+                    "EARN ONE FROM A COLOSSEUM REWARD.");
+            }
+            return 0;
+        }
+        char message[160];
+        int result = cast_selected_spell(g, p, cs, category, index, source,
+                                         message, sizeof(message));
+        if (result == 0) spell_notice(g, p, cs, message, "");
+        return result;
+    }
     item_draw_page(g, p, cs, use_item_menu);
     int key = item_get_list_key(g, 2, 6, '1');
     if (key == '4') return use_vitamin_pill(g, p, cs);
@@ -4298,6 +4608,34 @@ int combat_self_test(void) {
 
 #define CHECK(expr, label) do { if (!(expr)) { \
     fprintf(stderr, "MAGIC TEST FAIL: %s\n", label); failures++; } } while (0)
+    {
+        ArenaCastChoice available[4];
+        memset(p.spells, 0, sizeof(p.spells));
+        p.spells[SPELL_CAT_WIZARD][0] = 1; /* level-one Sleep */
+        p.spells[SPELL_CAT_WIZARD][3] = 1; /* level-two Slow */
+        p.spells[SPELL_CAT_PREPARATION][0] = 1; /* never an arena cast */
+        p.sp_cur = 1.0f;
+        g.arena_active = 1;
+        int count = arena_collect_usable_magic(&g, &p, 0, available, 4);
+        CHECK(count == 1 && available[0].category == SPELL_CAT_WIZARD &&
+              available[0].index == 0,
+              "Colosseum cast menu contains only affordable battle spells");
+        p.sp_cur = 2.0f;
+        count = arena_collect_usable_magic(&g, &p, 0, available, 4);
+        CHECK(count == 2,
+              "Colosseum cast menu reveals newly affordable battle magic");
+        memset(p.wands, 0, sizeof(p.wands));
+        memset(p.papers, 0, sizeof(p.papers));
+        p.wands[SPELL_CAT_WIZARD][3] = 2;
+        p.papers[SPELL_CAT_WIZARD][3] = 1;
+        p.class_id = CLASS_FIGHTER;
+        CHECK(arena_collect_usable_magic(&g, &p, 2, available, 4) == 0 &&
+              arena_collect_usable_magic(&g, &p, 3, available, 4) == 1,
+              "Colosseum item menus preserve Fighter paper-only casting");
+        p.class_id = CLASS_WIZARD;
+        g.arena_active = 0;
+        p.sp_cur = p.sp_max = 100.0f;
+    }
     {
         const char *cursor =
             "ETERNAL SANCTUARY PROTECTS YOU FOR 1200 TURNS!";
@@ -4854,6 +5192,90 @@ int combat_self_test(void) {
           combat_monster_drain_amount(129) == 4 &&
           combat_monster_drain_amount(131) == 5,
           "exact original and deep level-drain table");
+
+    p.level = 20;
+    p.eff_resist_drain = 0;
+    memset(&cs, 0, sizeof(cs));
+    cs.active = 1;
+    cs.monster_type_idx = 35;
+    cs.monster_level = 100;
+    cs.monster_hp = 1000;
+    g.arena_active = 1;
+    combat_monster_special(&g, &cs, &p, 0);
+    CHECK(p.level == 19, "Colosseum caps enemy level drain at one");
+    g.arena_active = 0;
+
+    {
+        Character warded;
+        memset(&warded, 0, sizeof(warded));
+        mw_character_native_ensure(&warded);
+        mw_set_hp_max(&warded, 100);
+        mw_set_hp_cur(&warded, 100);
+        g.cheat_god_mode = 0;
+        g.arena_active = 1;
+        g.arena_difficulty = ARENA_DIFFICULTY_NORMAL;
+        g.arena_round = 1;
+        CHECK(combat_apply_player_damage(&g, &warded, 100, NULL) == 11 &&
+              mw_hp_cur(&warded) == 89,
+              "Colosseum round-one damage is scaled and capped");
+        mw_set_hp_cur(&warded, 100);
+        g.arena_round = 10;
+        CHECK(combat_apply_player_damage(&g, &warded, 100, NULL) == 20 &&
+              mw_hp_cur(&warded) == 80,
+              "Colosseum protection remains smooth through first champion");
+        mw_set_hp_cur(&warded, 100);
+        g.arena_round = 20;
+        CHECK(combat_apply_player_damage(&g, &warded, 100, NULL) == 30 &&
+              mw_hp_cur(&warded) == 70,
+              "Colosseum opening protection tapers through round twenty");
+        mw_set_hp_cur(&warded, 100);
+        g.arena_round = 21;
+        CHECK(combat_apply_player_damage(&g, &warded, 100, NULL) == 30 &&
+              mw_hp_cur(&warded) == 70,
+              "Colosseum damage cap has no post-champion cliff");
+        mw_set_hp_cur(&warded, 100);
+        g.arena_round = 200;
+        CHECK(combat_apply_player_damage(&g, &warded, 100, NULL) == 75 &&
+              mw_hp_cur(&warded) == 25,
+              "Colosseum late damage cap still prevents a one-hit loss");
+        g.arena_active = 0;
+        g.arena_round = 0;
+    }
+
+    {
+        Character caster;
+        memset(&caster, 0, sizeof(caster));
+        mw_character_native_ensure(&caster);
+        caster.level = 5;
+        caster.stat_int = caster.stat_wis = 20;
+        mw_set_hp_max(&caster, 100);
+        mw_set_hp_cur(&caster, 10);
+        memset(&cs, 0, sizeof(cs));
+        cs.monster_type_idx = 2;
+        cs.monster_level = 5;
+        cs.monster_hp = cs.monster_max_hp = 100;
+        g.arena_active = 1;
+        CHECK(arena_adjust_spell_damage(&g, &caster, 1, 12) >= 37,
+              "Colosseum novice damage magic beats its unscaled formula");
+        CHECK(apply_battle_spell(&g, &cs, &caster, &priest_spells[5], 2) == -3 &&
+              mw_hp_cur(&caster) >= 55,
+              "Colosseum Fast Cure restores enough HP to survive a response");
+        mw_set_hp_cur(&caster, 10);
+        g.arena_active = 0;
+        CHECK(apply_battle_spell(&g, &cs, &caster, &priest_spells[5], 2) == -3 &&
+              mw_hp_cur(&caster) == 30,
+              "Adventure Fast Cure retains WORLD's fixed twenty HP");
+    }
+
+    p.ring_regen = 20;
+    mw_set_hp_max(&p, 100);
+    mw_set_hp_cur(&p, 0);
+    character_tick_effects(&g, &p);
+    CHECK(mw_hp_cur(&p) == 0, "regeneration cannot resurrect a dead player");
+    p.ring_regen = 0;
+    p.poisoned_turns = 0;
+    p.diseased_turns = 0;
+    mw_set_hp_cur(&p, 100);
 
     memset(&cs, 0, sizeof(cs));
     cs.active = 1;

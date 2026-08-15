@@ -7,7 +7,7 @@ Enhanced mode.
 | Feature | Classic Experience | Enhanced Experience |
 |---|---|---|
 | Total floors | 251: town floor 0 plus dungeon floors 1-250 | 1001: town floor 0 plus dungeon floors 1-1000 |
-| Races | Original eight races | Original races plus Dragonkin and Celestial; Dragonkin favor STR/CON, while Celestials favor INT/WIS/LUCK |
+| Races | Original eight races | Original races plus two specialist choices: Dragonkin gain STR/CON but sacrifice INT/WIS/AGI/LUCK; Celestials gain INT/WIS but sacrifice STR/CON/AGI/LUCK |
 | Classes | Original seven classes | Original classes plus Spellblade and Paladin; both use late martial gear, with Spellblades learning wizard magic and Paladins learning priest magic |
 | Monster progression | Original monster roster through floor 250 | Original roster plus new variants and late-game monster tiers on floors 251-1000 |
 | Quest progression | Original eight quest bosses through floor 200 | Original quest chain plus bosses at floors 375, 500, 625, 750, 875, and 1000 |

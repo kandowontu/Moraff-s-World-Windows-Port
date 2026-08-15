@@ -1,7 +1,7 @@
-# Moraff's World Native Port 1.1
+# Moraff's World Native Port 1.1.1
 
-Version 1.1 is the largest fidelity and Enhanced-content update yet for the
-native 1024×768 Windows port.
+Version 1.1.1 is the consolidated fidelity and Colosseum-balance revision for
+the native Windows port.
 
 ## Highlights
 
@@ -18,6 +18,11 @@ native 1024×768 Windows port.
   10,000-trial result analysis
 - expands the trainer, Beastiary, model/palette viewer, mouse interaction,
   diagnostics, and in-package documentation
+- recreates all twelve original display-driver branches with their native
+  resolutions, palette restrictions, dungeon and door renderers, map scales,
+  wilderness projections, and title treatments; option A is the default
+- keeps the Colosseum opening approachable while accelerating enemy level and
+  endurance later in a run so strong builds do not flatten the long game
 
 Download and extract the Windows x64 ZIP, then supply the ten required files
 from your own legally obtained Moraff's World installation. Original
@@ -27,12 +32,12 @@ list and approved executable checksums are in `ORIGINAL_FILES_REQUIRED.md`.
 ## Release SHA-256
 
 ```text
-3e3d999b3e5b2c5b7231db86ace609388c0e165a96e462c8c47d1dd0007ed9f3  moraffs_world.exe
-077a09e9f1a029cbbc9c32c7f66f8166f080e6f4b8cfea5e508f574d3b793d12  Moraffs-World-Native-Port-1.1.0-win64.zip
+8891d226940cb44d49ce610f31ab23d403aae506edd43b6fe7dd82e5455e984b  moraffs_world.exe
+2ad0747ea159d69a9a12167ee5a7df33e0b8117269428a3420c3827ab8da05e6  Moraffs-World-Native-Port-1.1.1-win64.zip
 ```
 
 The same values are attached as
-`Moraffs-World-Native-Port-1.1.0-win64-SHA256.txt`.
+`Moraffs-World-Native-Port-1.1.1-win64-SHA256.txt`.
 
 Moraff's World and its original assets remain the work and property of Steve
 Moraff / MoraffWare. This independent fan preservation project is not

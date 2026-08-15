@@ -1267,6 +1267,7 @@ int trainer_self_test(void) {
     if (sizeof(effect_fields) / sizeof(effect_fields[0]) != 24) failures++;
     if (trainer_field_count(&p) != 50 || trainer_effect_count(&p) != 24)
         failures++;
+    if (input_sdl_to_dos(SDLK_F1, KMOD_CTRL) != INPUT_TURBO_TOGGLE) failures++;
     if (input_sdl_to_dos(SDLK_F12, KMOD_CTRL) != INPUT_TRAINER) failures++;
     if (input_sdl_to_dos(SDLK_F12, KMOD_NONE) != -0x86) failures++;
     if (input_sdl_to_dos(SDLK_F11, KMOD_CTRL) != INPUT_WILDERNESS_TEST)

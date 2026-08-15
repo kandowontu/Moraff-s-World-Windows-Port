@@ -44,11 +44,7 @@ static u32 terrain_hash(int x, int y) {
 
 enum {
     WILD_PAGE_W = 257,
-    WILD_PAGE_H = 129,
-    WILD_RENDER_X = 0,
-    WILD_RENDER_Y = 255,
-    WILD_RENDER_W = 768,
-    WILD_RENDER_H = 512
+    WILD_PAGE_H = 129
 };
 
 typedef struct WildernessPage {
@@ -181,6 +177,26 @@ static int wilderness_dungeon_number(int chunk_x, int chunk_y) {
 
 static void set_wilderness_palette(Video *v) {
     int rgb[256][3] = {{0}};
+    const MwDisplayModeInfo *mode = video_display_mode_info(v->display_mode);
+
+    if (mode && mode->palette_colors < MW_PALETTE_VGA256) {
+        /* func_1B169's literal 16-entry outdoor palette (DS:CDD8..CE07).
+         * Planar/CGA drivers select from these logical entries; feeding them
+         * the 256-colour ramp made foreground soil neon green. */
+        static const u8 outdoor16[16][3] = {
+            { 0, 0, 0}, { 5,53,63}, {63,23,63}, {63,23, 0},
+            {30, 0, 0}, {39, 0, 0}, {51, 0, 0}, {63,10,54},
+            { 0,17,47}, { 0,21,54}, { 0,18,46}, { 5,24,41},
+            {10,22,22}, {22,22,44}, {48,44,63}, {63,63,63}
+        };
+        for (int i = 0; i < 256; i++)
+            video_set_palette(v, i, 0, 0, 0);
+        for (int i = 0; i < 16; i++)
+            video_set_palette(v, i, (u8)(outdoor16[i][0] * 4),
+                              (u8)(outdoor16[i][1] * 4),
+                              (u8)(outdoor16[i][2] * 4));
+        return;
+    }
 
     /* Literal func_1B169 256-colour branch.  Components are six-bit VGA DAC
      * values; DOSBox's output uses the original value * 4 conversion. */
@@ -216,46 +232,81 @@ static void set_wilderness_palette(Video *v) {
 /* Bilinear form of func_1B5DB's four phase-specific interpolation blocks.
  * Horizontal thirds sum to 3 and depth quarters sum to 4.  Dividing their
  * product by two returns the original six-pixels-per-height projection. */
-static int projected_height6(const int page[WILD_PAGE_H][WILD_PAGE_W],
-                             int x, int y, int third, int phase) {
-    int wx0 = 3 - third, wx1 = third;
-    int wy0 = 4 - phase, wy1 = phase;
+static int projected_height_native(
+    const int page[WILD_PAGE_H][WILD_PAGE_W], int x, int y,
+    int x_phase, int x_steps, int y_phase, int y_steps,
+    int height_num, int height_den) {
+    int wx0 = x_steps - x_phase, wx1 = x_phase;
+    int wy0 = y_steps - y_phase, wy1 = y_phase;
     int value = page[y][x] * wx0 * wy0 +
                 page[y][x + 1] * wx1 * wy0 +
                 page[y + 1][x] * wx0 * wy1 +
                 page[y + 1][x + 1] * wx1 * wy1;
-    return value / 2;
+    int divisor = x_steps * y_steps * height_den;
+    return value * height_num / divisor;
 }
 
 static void draw_projected_height_page(
     Video *v, const int page[WILD_PAGE_H][WILD_PAGE_W]) {
+    const MwDisplayModeInfo *mode = video_display_mode_info(v->display_mode);
+    int raster_w = mode ? mode->raster_w : LOGICAL_W;
+    int raster_h = mode ? mode->raster_h : LOGICAL_H;
+    int x_steps = mode ? mode->wilderness_x_step : 3;
+    int y_steps = mode ? mode->wilderness_y_step : 4;
+    int height_num = mode ? mode->wilderness_height_num : 6;
+    int height_den = mode ? mode->wilderness_height_den : 1;
+    int baseline = mode ? mode->wilderness_baseline : 255;
+    int native_w = 256 * x_steps;
+    int native_h = 128 * y_steps;
+    int native_x = (raster_w - native_w) / 2;
+    int full_palette = mode && mode->palette_colors == MW_PALETTE_VGA256;
+    int height_divisor = full_palette ? 4 : 32;
+    u8 foreground = full_palette ? 255 : 13;
+
     video_clear(v, 0);
-    video_fill_rect(v, WILD_RENDER_X, WILD_RENDER_Y,
-                    WILD_RENDER_W, WILD_RENDER_H, 1);
+    int bg_x0 = native_x * LOGICAL_W / raster_w;
+    int bg_x1 = (native_x + native_w) * LOGICAL_W / raster_w;
+    int bg_y0 = baseline * LOGICAL_H / raster_h;
+    int bg_y1 = (baseline + native_h) * LOGICAL_H / raster_h;
+    video_fill_rect(v, bg_x0, bg_y0, bg_x1 - bg_x0, bg_y1 - bg_y0, 1);
 
     for (int x = 0; x < 256; x++) {
-        int skyline[3] = {511, 511, 511};
-        for (int depth = 511; depth >= 0; depth--) {
-            int y = depth >> 2;
-            int phase = depth & 3;
-            for (int third = 0; third < 3; third++) {
-                int height6 = projected_height6(page, x, y, third, phase);
-                int surface = depth - height6;
+        int skyline[3] = {native_h - 1, native_h - 1, native_h - 1};
+        for (int depth = native_h - 1; depth >= 0; depth--) {
+            int y = depth / y_steps;
+            int phase = depth % y_steps;
+            for (int third = 0; third < x_steps; third++) {
+                int height = projected_height_native(
+                    page, x, y, third, x_steps, phase, y_steps,
+                    height_num, height_den);
+                int surface = depth - height;
                 if (surface >= skyline[third]) continue;
 
-                int sx = WILD_RENDER_X + x * 3 + third;
-                int sy = WILD_RENDER_Y + surface;
-                if (depth == 511) {
+                int native_sx = native_x + x * x_steps + third;
+                int native_sy = baseline + surface;
+                int sx0 = native_sx * LOGICAL_W / raster_w;
+                int sx1 = (native_sx + 1) * LOGICAL_W / raster_w;
+                int sy0 = native_sy * LOGICAL_H / raster_h;
+                int sy1 = (native_sy + 1) * LOGICAL_H / raster_h;
+                if (sx1 <= sx0) sx1 = sx0 + 1;
+                if (sy1 <= sy0) sy1 = sy0 + 1;
+                if (depth == native_h - 1) {
                     /* The nearest ridge is extended to the bottom in colour
-                     * 255, producing the dark-grey foreground silhouette. */
-                    video_vline(v, sx, sy, 513 - surface, 255);
-                } else if (height6 > 0) {
-                    int colour = height6 / 4 + 2;
-                    if (colour > 254) colour = 254;
-                    video_put_pixel(v, sx, sy, (u8)colour);
+                     * 255 (13 on planar adapters), producing the foreground. */
+                    int bottom = (baseline + native_h + 1) * LOGICAL_H /
+                                 raster_h;
+                    video_fill_rect(v, sx0, sy0, sx1 - sx0,
+                                    bottom - sy0, foreground);
+                } else if (height > 0) {
+                    int colour = height / height_divisor + 2;
+                    int max_colour = full_palette ? 254 : 15;
+                    if (colour > max_colour) colour = max_colour;
+                    video_fill_rect(v, sx0, sy0, sx1 - sx0,
+                                    sy1 - sy0, (u8)colour);
                     if (skyline[third] - surface > 1)
-                        video_vline(v, sx, sy + 1,
-                                    skyline[third] - surface - 1, 0);
+                        video_fill_rect(v, sx0, sy1, sx1 - sx0,
+                            (baseline + skyline[third]) * LOGICAL_H /
+                            raster_h - sy1, 0);
                 }
                 skyline[third] = surface;
             }
@@ -268,9 +319,22 @@ static void draw_terrain_label(Video *v,
                                int local_x, int local_y, const char *label,
                                u8 colour, int boat) {
     if (local_x < 0 || local_x > 255 || local_y < 0 || local_y > 127) return;
-    int sx = local_x * 3 - 5;
-    int sy = WILD_RENDER_Y + local_y * 4 - 4;
-    if (!boat) sy -= page[local_y][local_x] * 6;
+    const MwDisplayModeInfo *mode = video_display_mode_info(v->display_mode);
+    int raster_w = mode ? mode->raster_w : LOGICAL_W;
+    int raster_h = mode ? mode->raster_h : LOGICAL_H;
+    int x_steps = mode ? mode->wilderness_x_step : 3;
+    int y_steps = mode ? mode->wilderness_y_step : 4;
+    int height_num = mode ? mode->wilderness_height_num : 6;
+    int height_den = mode ? mode->wilderness_height_den : 1;
+    int baseline = mode ? mode->wilderness_baseline : 255;
+    int native_w = 256 * x_steps;
+    int native_x = (raster_w - native_w) / 2;
+    int native_sx = native_x + local_x * x_steps - (x_steps > 1 ? 5 : 2);
+    int native_sy = baseline + local_y * y_steps - (y_steps > 1 ? 4 : 2);
+    if (!boat)
+        native_sy -= page[local_y][local_x] * height_num / height_den;
+    int sx = native_sx * LOGICAL_W / raster_w;
+    int sy = native_sy * LOGICAL_H / raster_h;
     video_draw_text(v, sx + 1, sy + 1, label, 0);
     video_draw_text(v, sx, sy, label, colour);
 }
@@ -306,8 +370,14 @@ static void draw_wilderness(Game *g, Character *p, int test_mode) {
 static int wilderness_click_direction(Game *g) {
     int x, y;
     if (!game_mouse_click_logical(g, &x, &y)) return -1;
-    int dx = x - WILD_RENDER_W / 2;
-    int dy = y - (WILD_RENDER_Y + WILD_RENDER_H / 2);
+    const MwDisplayModeInfo *mode =
+        video_display_mode_info(g->video.display_mode);
+    int baseline = mode ? mode->wilderness_baseline * LOGICAL_H /
+                          mode->raster_h : 255;
+    int render_h = mode ? 128 * mode->wilderness_y_step * LOGICAL_H /
+                          mode->raster_h : 512;
+    int dx = x - LOGICAL_W / 2;
+    int dy = y - (baseline + render_h / 2);
     if (abs(dx) > abs(dy)) return dx < 0 ? 2 : 3;
     if (dy < 0) return 0;
     if (dy > 0) return 1;
@@ -517,6 +587,22 @@ static void wilderness_test_entrance_notice(Game *g) {
     input_wait_any_key(&g->input);
 }
 
+static void wilderness_turbo_notice(Game *g) {
+    char line[96];
+    video_fill_rect(&g->video, 0, 0, LOGICAL_W, 112, 0);
+    video_draw_text_scaled_xy(&g->video, 8, 5,
+        g->turbo_enabled ? "TURBO MODE: ON" : "TURBO MODE: OFF",
+        g->turbo_enabled ? 4 : 8, 2, 3, 2, 3);
+    if (g->turbo_enabled)
+        snprintf(line, sizeof(line), "GAME SPEED: %d%%   USE + OR - TO ADJUST.",
+                 g->turbo_percent);
+    else
+        snprintf(line, sizeof(line), "NORMAL 100%% TIMING RESTORED.");
+    video_draw_text_scaled_xy(&g->video, 8, 48, line, 15, 2, 3, 2, 3);
+    video_present(&g->video);
+    SDL_Delay(700); /* Control feedback stays legible at every multiplier. */
+}
+
 static int wilderness_run_internal(Game *g, Character *p, int test_mode) {
     if (!g || !p || !g->worldmap_data || g->worldmap_data_size < 4096) return 0;
     if (!g->wilderness_initialized) {
@@ -531,7 +617,9 @@ static int wilderness_run_internal(Game *g, Character *p, int test_mode) {
         draw_wilderness(g, p, test_mode);
         int key = input_getch(&g->input);
         int dx = 0, dy = 0;
-        if (key == INPUT_MOUSE_CLICK) {
+        if (game_handle_turbo_key(g, key)) {
+            wilderness_turbo_notice(g);
+        } else if (key == INPUT_MOUSE_CLICK) {
             int dir = wilderness_click_direction(g);
             if (dir == 0) dy = -1;
             else if (dir == 1) dy = 1;

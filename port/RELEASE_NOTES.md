@@ -1,8 +1,8 @@
-# Release notes — Version 1.1
+# Release notes — Version 1.1.1
 
-Released August 1, 2026.
+Released August 15, 2026.
 
-## Moraff's World 1024×768 Native Edition
+## Moraff's World Native Windows Edition
 
 This release packages the native Windows port as a legally clean executable
 and documentation bundle. Users supply the required original MoraffWare files
@@ -10,6 +10,13 @@ from their own installation.
 
 Highlights include:
 
+- All twelve original `MW.EXE` display-driver choices now use their own native
+  framebuffer dimensions, palette limits, dungeon-wall path, map scale,
+  wilderness projection, title treatment, and door geometry; option A
+  (1024×768 chipset 256-color) is the clean-install default
+- Colosseum balance now preserves its opening rounds while accelerating enemy
+  level after round 10 and again after round 80, with additional late-run
+  endurance scaling and automatic migration of active version-8 encounters
 - Startup validation now recognizes both approved original `WORLD.EXE`
   distribution variants using their exact size, CRC-32, and SHA-256 values
 - A source-guided fidelity audit of original input, hold/repeat timing,
