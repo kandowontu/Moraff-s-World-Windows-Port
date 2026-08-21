@@ -650,10 +650,10 @@ static int run_test_magic(const char *data_dir) {
     game->input.keys[game->input.tail] = 'v';
     game->input.tail = (game->input.tail + 1) % KEY_QUEUE_SIZE;
     combat_run(game, &one_action, &dummy);
-    if (!input_kbhit(&game->input) ||
-        input_getch(&game->input) != 'v') {
+    if (input_kbhit(&game->input) ||
+        !game->combat_feedback_visible) {
         fprintf(stderr,
-                "COMBAT TEST FAIL: one-action combat consumed a main-loop key\n");
+                "COMBAT TEST FAIL: WORLD buffered-key/result retention mismatch\n");
         failures++;
     }
     for (int relic = 0; relic < MW_RELIC_COUNT; relic++)

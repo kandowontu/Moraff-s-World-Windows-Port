@@ -1,6 +1,6 @@
-# Release notes — Version 1.1.1
+# Release notes — Version 1.1.01
 
-Released August 15, 2026.
+Released August 20, 2026.
 
 ## Moraff's World Native Windows Edition
 
@@ -10,6 +10,10 @@ from their own installation.
 
 Highlights include:
 
+- Adventure and Colosseum damage/counterattack readouts now reproduce
+  `WORLD`'s original retained-pane behavior: an ordinary result stays visible
+  until the next deliberate command, already-buffered keys are drained, and
+  held-F attacks continue at the original DOS typematic cadence
 - All twelve original `MW.EXE` display-driver choices now use their own native
   framebuffer dimensions, palette limits, dungeon-wall path, map scale,
   wilderness projection, title treatment, and door geometry; option A

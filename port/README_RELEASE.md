@@ -1,6 +1,6 @@
 # Moraff's World — Native Windows Edition
 
-Version 1.1 for 64-bit Windows.
+Version 1.1.01 for 64-bit Windows.
 
 An unofficial native Windows preservation port and Enhanced Edition of
 **Moraff's World**, the DOS dungeon crawler created by **Steve Moraff** and

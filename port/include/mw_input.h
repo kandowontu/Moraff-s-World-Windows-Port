@@ -59,6 +59,7 @@ void input_pump(Input *inp);          /* call each frame — drains SDL events *
 int  input_kbhit(Input *inp);         /* returns nonzero if key available */
 int  input_getch(Input *inp);         /* blocks until key available, returns ASCII/scancode */
 int  input_wait_any_key(Input *inp);  /* consumes a complete key, including extended scancode */
+void input_drain_pending(Input *inp); /* consumes keys already buffered without waiting */
 int  input_poll_quit(Input *inp);     /* returns 1 if window close requested */
 void input_last_mouse_click(Input *inp, int *x, int *y);
 void input_mouse_position(Input *inp, int *x, int *y, unsigned *serial);
