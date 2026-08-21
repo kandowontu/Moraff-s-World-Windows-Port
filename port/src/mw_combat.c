@@ -2352,7 +2352,9 @@ int combat_take_turn(Game *g, CombatState *cs, Character *player, int action) {
     if (cs->monster_hp <= 0) {
         cs->active = 0;
         snprintf(msg2, sizeof(msg2), "THE %s IS DEAD!", mt->name);
-        snprintf(msg3, sizeof(msg3), "SEARCHING THE REMAINS...");
+        snprintf(msg3, sizeof(msg3), g->arena_active ?
+                 "HIT ANY KEY TO CLAIM YOUR REWARD..." :
+                 "SEARCHING THE REMAINS...");
     } else if (cs->fled) {
         cs->active = 0;
         snprintf(msg2, sizeof(msg2), "THE %s FLEES!", mt->name);

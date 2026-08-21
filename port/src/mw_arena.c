@@ -1602,6 +1602,20 @@ static void arena_victory(Game *g, int slot, ArenaSave *save) {
     arena_save_save(g, slot, save);
 }
 
+static void arena_wait_for_finishing_blow(Game *g) {
+    /* The attack which killed the opponent has already been removed from the
+       queue by WORLD's post-hit drain. If that physical key is still held,
+       discard its typematic repeats until key-up so a held F cannot erase the
+       finishing damage line. The acknowledgement must be a fresh input. */
+    while (g->input.repeat_held && !input_poll_quit(&g->input)) {
+        input_drain_pending(&g->input);
+        SDL_Delay(10);
+    }
+    if (!input_poll_quit(&g->input))
+        input_wait_any_key(&g->input);
+    g->combat_feedback_visible = 0;
+}
+
 void arena_run(Game *g, int slot, ArenaSave *save) {
     if (!g || !save || slot < 0 || slot >= MAX_PLAYERS) return;
     int outside_sound = g->sound_enabled;
@@ -1792,7 +1806,12 @@ void arena_run(Game *g, int slot, ArenaSave *save) {
             arena_save_save(g, slot, save);
             continue;
         }
-        if (cs.monster_hp <= 0 || cs.fled) {
+        if (cs.monster_hp <= 0) {
+            arena_wait_for_finishing_blow(g);
+            arena_victory(g, slot, save);
+            continue;
+        }
+        if (cs.fled) {
             arena_victory(g, slot, save);
             continue;
         }
