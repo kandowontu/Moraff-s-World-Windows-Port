@@ -9695,9 +9695,11 @@ title_screen:
     unsigned hover_serial = 0;
     input_mouse_position(&g->input, NULL, NULL, &hover_serial);
     while (!input_poll_quit(&g->input)) {
-        game_draw_exploration(g, player);
-
-        video_present(v);
+        int preserve_combat_feedback = g->combat_feedback_visible;
+        if (!preserve_combat_feedback) {
+            game_draw_exploration(g, player);
+            video_present(v);
+        }
 
         /* WORLD keeps polling while the exploration screen is idle.  Doing
          * the same here lets its square map cursor blink without requiring
@@ -9706,13 +9708,15 @@ title_screen:
             u32 now = SDL_GetTicks();
             unsigned current_hover = hover_serial;
             input_mouse_position(&g->input, NULL, NULL, &current_hover);
-            if (current_hover != hover_serial) {
+            if (!preserve_combat_feedback &&
+                current_hover != hover_serial) {
                 hover_serial = current_hover;
                 game_draw_exploration(g, player);
                 draw_mouse_hover(g);
                 video_present(v);
             }
-            if (SDL_TICKS_PASSED(now, next_map_blink)) {
+            if (!preserve_combat_feedback &&
+                SDL_TICKS_PASSED(now, next_map_blink)) {
                 g->map_player_visible = !g->map_player_visible;
                 next_map_blink = now + 350;
                 {
@@ -9726,6 +9730,9 @@ title_screen:
         }
         if (input_poll_quit(&g->input)) break;
         int key = input_getch(&g->input);
+        /* The command being read is the original game's implicit dismissal
+           of the retained combat text; it must still execute normally. */
+        g->combat_feedback_visible = 0;
 
         if (key == INPUT_MOUSE_CLICK) {
             int mouse_x, mouse_y;

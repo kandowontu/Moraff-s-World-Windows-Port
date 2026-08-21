@@ -2290,6 +2290,11 @@ int combat_take_turn(Game *g, CombatState *cs, Character *player, int action) {
     int direction = combat_direction(g, cs);
     int result = 0;
 
+    /* Callers clear this when reading the next command, but reset it here as
+       well so cancelled menus and synthetic/test callers cannot retain an
+       older exchange accidentally. */
+    g->combat_feedback_visible = 0;
+
     if (action == COMBAT_ACTION_FIGHT) {
         mw_audio_play(&g->audio, MW_SFX_ATTACK);
         int damage = combat_player_attack(g, cs, player);
@@ -2358,12 +2363,14 @@ int combat_take_turn(Game *g, CombatState *cs, Character *player, int action) {
 
     if (result) character_tick_effects(g, player);
     draw_combat_screen(g, cs, player, msg1, msg2, msg3);
-    /* A tapped attack keeps the native port's readable result pause.  Once
-       the BIOS-style held-F stream begins, do not let that pause throttle
-       WORLD's verified 92 ms typematic cadence. */
-    game_delay(g, mw_hp_cur(player) && cs->monster_hp > 0 ?
-               (action == COMBAT_ACTION_FIGHT &&
-                g->input.fight_repeating ? 92 : 450) : 700);
+    /* WORLD func_0A7FF has no timed result pause. After drawing the damage
+       line it drains keys which were already in the BIOS buffer, then leaves
+       that pane untouched until the next command. Preserve the same pixels
+       in both exploration and Colosseum loops. A held F therefore resumes at
+       the verified DOS typematic cadence instead of being throttled here. */
+    input_drain_pending(&g->input);
+    g->combat_feedback_visible = result && mw_hp_cur(player) > 0 &&
+        cs->monster_hp > 0 && !cs->fled && !cs->player_fled;
     return result;
 }
 

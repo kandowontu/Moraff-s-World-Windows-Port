@@ -192,6 +192,17 @@ int input_wait_any_key(Input *inp) {
     return key;
 }
 
+void input_drain_pending(Input *inp) {
+    if (!inp) return;
+    /* WORLD func_0A7FF calls kbhit()/getch() until the BIOS keyboard buffer
+       is empty after drawing a hit result. Pump once so SDL events which
+       have already arrived are included, then consume without waiting.
+       A physically held key remains held and may generate its next normal
+       typematic repeat after this snapshot has been drained. */
+    input_pump(inp);
+    inp->head = inp->tail;
+}
+
 int input_poll_quit(Input *inp) {
     return inp->quit_requested;
 }
@@ -392,6 +403,13 @@ int input_self_test(void) {
     inp.tail = KEY_QUEUE_SIZE - 2; /* one usable slot remains */
     if (input_push_dos_key(&inp, -0x50, KMOD_NONE) ||
         inp.tail != KEY_QUEUE_SIZE - 2)
+        failures++;
+
+    memset(&inp, 0, sizeof(inp));
+    input_push_dos_key(&inp, 'f', KMOD_NONE);
+    input_push_dos_key(&inp, -0x50, KMOD_NONE);
+    input_drain_pending(&inp);
+    if (inp.head != inp.tail)
         failures++;
     return failures;
 }

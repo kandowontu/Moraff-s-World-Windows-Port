@@ -1605,6 +1605,7 @@ static void arena_victory(Game *g, int slot, ArenaSave *save) {
 void arena_run(Game *g, int slot, ArenaSave *save) {
     if (!g || !save || slot < 0 || slot >= MAX_PLAYERS) return;
     int outside_sound = g->sound_enabled;
+    g->combat_feedback_visible = 0;
     g->active_save_slot = -1;
     if (!save->sound_mode)
         save->sound_mode = g->sound_enabled ? 1 : 2;
@@ -1668,17 +1669,20 @@ void arena_run(Game *g, int slot, ArenaSave *save) {
         }
         arena_sync_game(g, save);
         CombatState cs = arena_combat_from_state(save);
-        game_draw_combat_overlay(g, &save->character, -1,
-            cs.monster_type_idx, cs.monster_level, cs.monster_hp,
-            save->enemy_champion ? "A CHAMPION ENTERS THE SAND!" :
-                                   "A NEW CHALLENGER ENTERS!",
-            g->sound_enabled ?
-                "F FIGHT  C CAST  I ITEM  K SKIP  O SOUND OFF  H HELP" :
-                "F FIGHT  C CAST  I ITEM  K SKIP  O SOUND ON   H HELP",
-            "");
-        video_present(&g->video);
+        if (!g->combat_feedback_visible) {
+            game_draw_combat_overlay(g, &save->character, -1,
+                cs.monster_type_idx, cs.monster_level, cs.monster_hp,
+                save->enemy_champion ? "A CHAMPION ENTERS THE SAND!" :
+                                       "A NEW CHALLENGER ENTERS!",
+                g->sound_enabled ?
+                    "F FIGHT  C CAST  I ITEM  K SKIP  O SOUND OFF  H HELP" :
+                    "F FIGHT  C CAST  I ITEM  K SKIP  O SOUND ON   H HELP",
+                "");
+            video_present(&g->video);
+        }
 
         int key = input_getch(&g->input);
+        g->combat_feedback_visible = 0;
         if (key == 0) {
             (void)input_getch(&g->input);
             continue;
@@ -1797,6 +1801,7 @@ void arena_run(Game *g, int slot, ArenaSave *save) {
     g->arena_active = 0;
     g->arena_champion = 0;
     g->arena_difficulty = ARENA_DIFFICULTY_NORMAL;
+    g->combat_feedback_visible = 0;
     g->active_save_slot = -1;
     g->sound_enabled = outside_sound;
     mw_audio_set_enabled(&g->audio, outside_sound);

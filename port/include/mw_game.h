@@ -89,6 +89,9 @@ typedef struct Game {
     u32   arena_best;
     int   arena_champion;
     int   arena_difficulty;
+    /* WORLD func_0A7FF leaves the most recent non-terminal combat text in
+       the upper-left pane until the player's next command redraws it. */
+    int   combat_feedback_visible;
     u8   *dungeon_data;         /* loaded from dung.bin */
     int   dungeon_data_size;
     u8   *worldmap_data;        /* loaded from worldmap.bin */

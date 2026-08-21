@@ -1,6 +1,6 @@
 # Moraff's World — Native Windows Edition
 
-Version 1.1 is an unofficial native Windows preservation port and optional
+Version 1.1.01 is an unofficial native Windows preservation port and optional
 Enhanced Edition of **Moraff's World**, the DOS dungeon crawler created by
 **Steve Moraff** and published by **MoraffWare**.
 
@@ -32,12 +32,16 @@ before starting. See
 [`ORIGINAL_FILES_REQUIRED.md`](port/ORIGINAL_FILES_REQUIRED.md) for the
 approved executable variants and tested checksums.
 
-## Version 1.1 highlights
+## Version 1.1.01 highlights
 
 - A substantially expanded fidelity pass based on `WORLD.ASM`/`WORLD.C`,
   including original-style input repeat timing, keypad behavior, combat flow,
   item dialogs, spell selectors, title presentation, death handling, dungeon
   traversal, wilderness movement, doors, ladders, traps, loot, and shops.
+- Combat damage and counterattack readouts now follow `WORLD`'s original
+  retained-pane behavior in both Adventure and Colosseum play: the result
+  remains visible until the player's next command, while held-F attacks keep
+  the original DOS typematic cadence.
 - Classic Experience preserves the original 251-floor scale and catalog.
 - Enhanced Experience extends the dungeon to 1,000 floors and player
   progression to level 3,000, with new monsters, quest bosses, equipment,
@@ -54,7 +58,7 @@ approved executable variants and tested checksums.
 See the packaged guides for complete details:
 
 - [`README_RELEASE.md`](port/README_RELEASE.md) — installation and operation
-- [`RELEASE_NOTES.md`](port/RELEASE_NOTES.md) — Version 1.1 changes
+- [`RELEASE_NOTES.md`](port/RELEASE_NOTES.md) — Version 1.1.01 changes
 - [`EXPERIENCE_MODES.md`](port/EXPERIENCE_MODES.md) — Classic versus Enhanced
 - [`DEEP_DUNGEON.md`](port/DEEP_DUNGEON.md) — Enhanced progression and rewards
 - [`DEEP_SPELLS.md`](port/DEEP_SPELLS.md) — Enhanced spell catalog
@@ -78,7 +82,7 @@ For a distributable package that intentionally excludes copyrighted original
 files:
 
 ```powershell
-.\package_release.ps1 -Version 1.1.1
+.\package_release.ps1 -Version 1.1.01
 ```
 
 The port source is covered by [`LICENSE_PORT.txt`](port/LICENSE_PORT.txt).
