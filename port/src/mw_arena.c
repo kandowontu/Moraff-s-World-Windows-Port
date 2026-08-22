@@ -1602,11 +1602,14 @@ static void arena_victory(Game *g, int slot, ArenaSave *save) {
     arena_save_save(g, slot, save);
 }
 
-static void arena_wait_for_finishing_blow(Game *g) {
-    /* The attack which killed the opponent has already been removed from the
+static void arena_wait_for_terminal_exchange(Game *g) {
+    /* The action which ended the fight has already been removed from the
        queue by WORLD's post-hit drain. If that physical key is still held,
-       discard its typematic repeats until key-up so a held F cannot erase the
-       finishing damage line. The acknowledgement must be a fresh input. */
+       discard its typematic repeats until key-up so held F (or another combat
+       command) cannot erase the final damage line. The acknowledgement must
+       be a fresh input. This applies to both combatants: previously only the
+       player's finishing blow paused, while a lethal monster counterattack
+       was immediately covered by the restart screen. */
     while (g->input.repeat_held && !input_poll_quit(&g->input)) {
         input_drain_pending(&g->input);
         SDL_Delay(10);
@@ -1790,6 +1793,7 @@ void arena_run(Game *g, int slot, ArenaSave *save) {
         if (!combat_take_turn(g, &cs, &save->character, action)) continue;
         arena_state_from_combat(save, &cs);
         if (!mw_hp_cur(&save->character)) {
+            arena_wait_for_terminal_exchange(g);
             mw_set_hp_cur(&save->character, 0);
             arena_increment(&save->total_deaths);
             save->in_run = 0;
@@ -1802,16 +1806,18 @@ void arena_run(Game *g, int slot, ArenaSave *save) {
             break;
         }
         if (cs.player_fled) {
+            arena_wait_for_terminal_exchange(g);
             arena_apply_skip_penalty(save);
             arena_save_save(g, slot, save);
             continue;
         }
         if (cs.monster_hp <= 0) {
-            arena_wait_for_finishing_blow(g);
+            arena_wait_for_terminal_exchange(g);
             arena_victory(g, slot, save);
             continue;
         }
         if (cs.fled) {
+            arena_wait_for_terminal_exchange(g);
             arena_victory(g, slot, save);
             continue;
         }

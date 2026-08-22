@@ -13,9 +13,10 @@ Highlights include:
 - Adventure and Colosseum damage/counterattack readouts now reproduce
   `WORLD`'s original retained-pane behavior: an ordinary result stays visible
   until the next deliberate command, already-buffered keys are drained, and
-  held-F attacks continue at the original DOS typematic cadence; a Colosseum
-  finishing blow now requires a fresh acknowledgement after the attack key is
-  released, preventing held-F repetition from skipping the final damage line
+  held-F attacks continue at the original DOS typematic cadence; every terminal
+  Colosseum exchange now requires a fresh acknowledgement after the command
+  key is released, preventing finishing blows, lethal enemy counterattacks,
+  escape, or fleeing results from being replaced by the next screen
 - All twelve original `MW.EXE` display-driver choices now use their own native
   framebuffer dimensions, palette limits, dungeon-wall path, map scale,
   wilderness projection, title treatment, and door geometry; option A

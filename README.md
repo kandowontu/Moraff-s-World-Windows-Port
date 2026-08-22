@@ -41,8 +41,9 @@ approved executable variants and tested checksums.
 - Combat damage and counterattack readouts now follow `WORLD`'s original
   retained-pane behavior in both Adventure and Colosseum play: the result
   remains visible until the player's next command, while held-F attacks keep
-  the original DOS typematic cadence. A Colosseum finishing blow waits for a
-  fresh acknowledgement before opening its reward draft.
+  the original DOS typematic cadence. Every terminal Colosseum exchange waits
+  for a fresh acknowledgement before victory, defeat, escape, or reward UI can
+  replace its final damage/result readout.
 - Classic Experience preserves the original 251-floor scale and catalog.
 - Enhanced Experience extends the dungeon to 1,000 floors and player
   progression to level 3,000, with new monsters, quest bosses, equipment,
