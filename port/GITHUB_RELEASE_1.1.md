@@ -8,8 +8,9 @@ retains the complete fidelity and Colosseum work from 1.1.1.
 - keeps damage and counterattack results visible until the next deliberate
   command in both Adventure and Colosseum play, matching `WORLD`'s original
   retained-pane and buffered-key behavior
-- holds the Colosseum finishing-blow readout until a fresh acknowledgement;
-  holding F can no longer auto-dismiss the final damage before reward drafting
+- holds every terminal Colosseum exchange until a fresh acknowledgement;
+  finishing blows, lethal counterattacks, and escape/flee results can no longer
+  be auto-dismissed by held input before the next screen
 - preserves original held-F attacking through the DOS-compatible 500 ms
   initial delay and 92 ms typematic repeat cadence
 - completes another `WORLD.ASM`/`WORLD.C` behavior audit, including original
@@ -39,8 +40,8 @@ list and approved executable checksums are in `ORIGINAL_FILES_REQUIRED.md`.
 ## Release SHA-256
 
 ```text
-59776195106b476f7194ed2fc5840be19f6bbee634913d5b6f3adc96c18c5761  moraffs_world.exe
-d1dfac7fe7d3260eb74be47e32f13ae450e0e01b5efdb7cc1c0ce93182666bf4  Moraffs-World-Native-Port-1.1.01-win64.zip
+be1491d4c04315b349025b43165cd761cdf10cb1af5093a9a6accadcbf11f6ee  moraffs_world.exe
+9eaf494fbf7678a5f9a3d07906c3593dbbce74495aea006f58ba06ddc7fa8ba8  Moraffs-World-Native-Port-1.1.01-win64.zip
 ```
 
 The same values are attached as
