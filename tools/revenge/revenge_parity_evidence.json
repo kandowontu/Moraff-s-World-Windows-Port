@@ -1,0 +1,569 @@
+{
+  "schema": "Moraff's Revenge explicit routine evidence v1",
+  "status_definitions": {
+    "verified": "Static branches, state/RNG boundaries, and native implementation were individually reviewed and have an original-derived regression contract where practical.",
+    "adapted": "The native behavior intentionally differs because the original platform facility cannot or should not be reproduced literally.",
+    "unresolved": "No current 1:1 claim. An address reference or broad subsystem test is not sufficient evidence."
+  },
+  "routines": {
+    "BEGIN:0040": {
+      "status": "adapted",
+      "evidence": ["The setup sentinel, two introduction pages, 15-second Ctrl-X-only bypass, five-choice menu, roster selector, hall display, and NAME handoff writes were audited from 0040-0A6A."],
+      "tests": ["mr_game_self_test setup/color/roster presentation contracts", "mr_frontend_self_test menu, roster, and hall resource contracts"],
+      "notes": "The native host deliberately replaces DOS CHAIN/program termination with in-process dispatch and return to Moraff's World, so the complete launcher routine is not eligible for literal verification."
+    },
+    "BEGIN:0760": {
+      "status": "verified",
+      "evidence": ["Static audit proves LOCATE 25,35, the exact HIT ANY KEY text, and fall-through into 0778."],
+      "tests": ["native copyright and hall presenters use the recovered row/column and shared wait"]
+    },
+    "BEGIN:0778": {
+      "status": "verified",
+      "evidence": ["Static audit proves a nonempty INKEY$ loop followed by subtraction of 20h from every first byte greater than 60h, with no upper ASCII bound."],
+      "tests": ["mr_game_self_test and mr_frontend_self_test uppercase/menu boundaries"]
+    },
+    "BEGIN:07AA": {
+      "status": "adapted",
+      "evidence": ["The quoted F5.COM read-through-END loop, count return, selected-name handoff, and numbered save-path construction were audited through 0898."],
+      "tests": ["mr_frontend_self_test original roster parse, wrap, selection, and numbered paths"],
+      "notes": "The final CHAIN to DUNSMALL is intentionally replaced by an in-process native session transition."
+    },
+    "BEGIN:09AE": {
+      "status": "verified",
+      "evidence": ["Static audit proves monochrome no-op and COLOR(8+cycle) without increment or RNG."],
+      "tests": ["mr_game_self_test current/advanced color separation"]
+    },
+    "BEGIN:09CA": {
+      "status": "verified",
+      "evidence": ["Static audit proves color-only increment, greater-than-six wrap to zero, and COLOR(8+cycle), with no RNG call."],
+      "tests": ["mr_game_self_test seven-state color cycle and monochrome no-op"]
+    },
+    "CHCHAR:0040": {
+      "status": "unresolved",
+      "evidence": ["The two-page explanation, race wrap and selection, reroll loop, one-key class selection, name normalization, ten-slot refusal, ninth-slot warning, duplicate replacement, roster ordering, and paired character/maze writes were reviewed against 0040-155F."],
+      "tests": ["mr_character_self_test race/class/roll contracts", "mr_frontend_self_test roster capacity, duplicate replacement, and paired save paths", "mr_game_self_test character-creation presentation and input flow"],
+      "notes": "The QuickBASIC-shaped numeric writer and nearest/even TIMER-to-MBF seed conversion are now recovered and tested. The enclosing creation controller remains deliberately uncertified until every presentation/input boundary, roster failure path, and complete generated-save byte stream has independent original-derived evidence; broad flow coverage is not whole-routine proof."
+    },
+    "CHCHAR:1560": {
+      "status": "verified",
+      "evidence": ["Static audit proves quoted sequential F5.COM reads until the literal END record and returns the preceding name count."],
+      "tests": ["mr_frontend_self_test original F5.COM parse and duplicate lookup"]
+    },
+    "CHCHAR:15CB": {
+      "status": "verified",
+      "evidence": ["Static audit proves output rewrite in roster order, omission of the replaced duplicate slot, append of the accepted name, and final quoted END record."],
+      "tests": ["mr_frontend_self_test roster write/reload and replacement ordering"]
+    },
+    "CHCHAR:1676": {
+      "status": "verified",
+      "evidence": ["Static audit proves LOCATE 25,15, exact HIT ANY KEY text, and fall-through into 168E."],
+      "tests": ["native creator capacity presenters use the recovered position and shared wait"]
+    },
+    "CHCHAR:168E": {
+      "status": "verified",
+      "evidence": ["Static audit proves nonempty INKEY$ polling and the same unbounded greater-than-60h uppercase transform as BEGIN."],
+      "tests": ["native creator modal waits and name/choice input boundary tests"]
+    },
+    "CHCHAR:16E8": {
+      "status": "verified",
+      "evidence": ["Static audit proves increment-before-use, wrap above six, seven-entry initialized color-table lookup, and no RNG consumption."],
+      "tests": ["mr_character_self_test deterministic RNG remains independent of page color cycling", "native explanation section color sequence"]
+    },
+    "DUNSMALL:05A0": {
+      "status": "verified",
+      "evidence": ["Static audit proves assignment of the complete temple score to the shared PLAY string and unconditional tail entry at 05CB; the disabled-sound branch therefore returns without a delay."],
+      "tests": ["shared native temple music call uses the recovered score and 05CB drain boundary"]
+    },
+    "DUNSMALL:05AC": {
+      "status": "verified",
+      "evidence": ["Static audit proves assignment of the complete death score to the shared PLAY string and unconditional tail entry at 05CB; the disabled-sound branch therefore returns without a delay."],
+      "tests": ["shared native death music call uses the recovered score and 05CB drain boundary"]
+    },
+    "DUNSMALL:05B8": {
+      "status": "verified",
+      "evidence": ["Static audit proves that disabled sound tail-calls the four-second TIMER wait, while enabled sound assigns the complete inn score and falls through to 05CB."],
+      "tests": ["all three native inn call sites separate the exact disabled four-second wait from the enabled shared PLAY/drain path"]
+    },
+    "DUNSMALL:05CB": {
+      "status": "verified",
+      "evidence": ["Static audit of sound-disabled return, PLAY MBX scheduling, shared-string clear, and mandatory 05EE keyboard drain."],
+      "tests": ["shared native music wrapper used by loading, inns, temple, and death"]
+    },
+    "DUNSMALL:09E8": {
+      "status": "verified",
+      "evidence": ["Static audit of 09E8-0C0A, including pre-command combat-depth ownership and successful escape."],
+      "tests": ["mr_session_self_test combat escape RNG/monster boundary"]
+    },
+    "DUNSMALL:0C0B": {
+      "status": "verified",
+      "evidence": ["Static audit proves the exploration-depth and nonzero-floor gates, both-coordinate change gate, saved-coordinate update, unconditional primary 70A1 call, and odd-index-only secondary 70A1 call. The helper deliberately does not enter combat when a monster reaches the player; 08F6/49B1 owns that later transfer."],
+      "tests": ["mr_session_self_test deterministic tracked-monster movement, odd secondary gate, and deferred combat ownership"]
+    },
+    "DUNSMALL:0CC0": {
+      "status": "verified",
+      "evidence": ["Static audit proves that every completed vertical transition first calls initialize_floor_and_redraw at 4C28, then calls the town-entry factor routine only when the clamped resulting level is exactly zero. The native transition preserves the 0..70 clamp, floor rebuild, reveal, and level-zero recomputation order."],
+      "tests": ["mr_session_self_test original-resource surface entrance, inert surface chute, false-floor rejection, endpoint clamp, and paired up/down traversal fixtures"]
+    },
+    "DUNSMALL:1055": {
+      "status": "verified",
+      "evidence": ["Static audit proves uppercase-O-only dispatch, increment/modulo-two sound state, exact SOUND ON/OFF text, two-second hold, and nine-character erase."],
+      "tests": ["live main controller uses the recovered modulo-two state and two-second indicator"]
+    },
+    "DUNSMALL:10BE": {
+      "status": "verified",
+      "evidence": ["Static audit proves Escape-first-byte detection, increment of the movement-mode single, and exact 0-to-1-to-0 wrap with no message or delay."],
+      "tests": ["mr_input_self_test relative/cardinal toggle and arrow semantics"]
+    },
+    "DUNSMALL:10FD": {
+      "status": "verified",
+      "evidence": ["All ten coordinate comparisons were audited in assignment order, including the duplicate temple and store destinations and the final Wizard Guild value; the routine writes zero when no coordinate matches."],
+      "tests": ["mr_town_self_test all seven destination classes and a non-rope coordinate"]
+    },
+    "DUNSMALL:1340": {
+      "status": "verified",
+      "evidence": ["Static audit of ordinary preparation-item and Wizard Guild information-mode return/retry branches."],
+      "tests": ["mr_game_self_test item-menu mode and case matrix"]
+    },
+    "DUNSMALL:1918": {
+      "status": "verified",
+      "evidence": ["Static audit of Y/y, N/n, invalid-repeat, 7DC9 input, weight adjustment, and statistics tail."],
+      "tests": ["mr_items_self_test treasure drop state", "live 7DC9 modal controller mapping"]
+    },
+    "DUNSMALL:2F71": {
+      "status": "verified",
+      "evidence": ["All direct call sites inventoried; helper returns one raw nonempty QuickBASIC key string without case folding, then unconditionally calls the six-attribute minimum-one clamp at 2F43."],
+      "tests": ["mr_input_self_test raw modal case behavior", "native town/pause/guild/spell/loot call sites use the shared clamp-aware reader"]
+    },
+    "DUNSMALL:2F1A": {
+      "status": "adapted",
+      "evidence": ["Static audit proves a two-QuickBASIC-TIMER-second busy wait and no input polling or state mutation inside the loop."],
+      "tests": ["native presentation paths request a 2000 millisecond event-aware host hold"],
+      "notes": "The native build preserves the requested wall-clock duration but deliberately pumps the host event loop instead of spinning on DOS TIMER, so keyboard buffering and CPU consumption are host adaptations."
+    },
+    "DUNSMALL:2F35": {
+      "status": "adapted",
+      "evidence": ["Static audit proves the four-second wrapper is exactly two consecutive calls to 2F1A."],
+      "tests": ["native presentation paths request a 4000 millisecond event-aware host hold"],
+      "notes": "This inherits the intentional host-timing adaptation of 2F1A."
+    },
+    "DUNSMALL:2F87": {
+      "status": "verified",
+      "evidence": ["Only 0CD2 and 8704 call this a-through-y ASCII uppercase helper."],
+      "tests": ["mr_input_self_test original uppercase boundaries"]
+    },
+    "DUNSMALL:2FCB": {
+      "status": "verified",
+      "evidence": ["All call sites inventoried; routine is exactly eighteen nonblocking INKEY$ polls, not wait-for-release."],
+      "tests": ["mw_input fixed-poll drain tests"]
+    },
+    "DUNSMALL:2F3C": {
+      "status": "verified",
+      "evidence": ["Static audit proves this wrapper has exactly two operations: the shared row-25 Hit any key presenter/reader at C5B0 followed by SCREEN 1/palette restoration at 2FF7. It adds no drain, delay, case conversion, or extra key read."],
+      "tests": ["native statistics, inventory, guild, reward, death, and floor-slosher acknowledgement paths use the shared clamp-aware read followed by palette restoration"]
+    },
+    "DUNSMALL:2FF7": {
+      "status": "verified",
+      "evidence": ["Static audit proves SCREEN 1 is restored unconditionally and apply_color_palette is reached only when the original color flag equals one. Monochrome returns immediately after SCREEN 1."],
+      "tests": ["mr_game_self_test SCREEN 1 palette selection and color/monochrome separation"]
+    },
+    "DUNSMALL:300C": {
+      "status": "verified",
+      "evidence": ["Static audit proves two identical COLOR(background,palette) submissions assembled through the preserved DX/BX shuffle. The duplicate hardware write has no additional state change; the native palette mapper retains the exact low-four-bit background, intensity-bit, and low-bit palette semantics."],
+      "tests": ["mr_game_self_test all recovered SCREEN 1 background, intensity, and palette selector cases"]
+    },
+    "DUNSMALL:30C7": {
+      "status": "verified",
+      "evidence": ["Static audit proves the movement dispatcher reads the current facing and selects the north/east/south/west arm in the original 1/2/3/4 order. The native arrow translator produces the same facing before entering the shared directional movement path."],
+      "tests": ["mr_input_self_test relative/cardinal facing and movement dispatch", "mr_session_self_test turn, wall, boundary, monster-block and successful-step ownership"]
+    },
+    "DUNSMALL:30D9": {
+      "status": "verified",
+      "evidence": ["Static audit of the north arm proves combat-depth-only destination occupancy blocking, facing assignment to one, procedural wall sampling, wall-versus-boundary status-cycle ownership, y decrement only above row one, and movement-turn increment only after a successful step."],
+      "tests": ["mr_session_self_test original-resource north wall/boundary/step fixtures and status-cycle gates", "mr_world_self_test exact wall sampler and greater-than-seven blocking threshold"]
+    },
+    "DUNSMALL:3192": {
+      "status": "verified",
+      "evidence": ["Static audit of the east arm proves combat-depth-only destination occupancy blocking, facing assignment to two, procedural wall sampling, wall-versus-boundary status-cycle ownership, x increment only below column twenty, and movement-turn increment only after a successful step."],
+      "tests": ["mr_session_self_test original-resource east wall/boundary/step fixtures and status-cycle gates", "mr_world_self_test exact wall sampler and greater-than-seven blocking threshold"]
+    },
+    "DUNSMALL:3254": {
+      "status": "verified",
+      "evidence": ["Static audit of the south arm proves combat-depth-only destination occupancy blocking, facing assignment to three, procedural wall sampling, wall-versus-boundary status-cycle ownership, y increment only below row nineteen, and movement-turn increment only after a successful step."],
+      "tests": ["mr_session_self_test original-resource south wall/boundary/step fixtures and status-cycle gates", "mr_world_self_test exact wall sampler and greater-than-seven blocking threshold"]
+    },
+    "DUNSMALL:3316": {
+      "status": "verified",
+      "evidence": ["Static audit of the west arm proves combat-depth-only destination occupancy blocking, facing assignment to four, procedural wall sampling, wall-versus-boundary status-cycle ownership, x decrement only above column one, and movement-turn increment only after a successful step."],
+      "tests": ["mr_session_self_test original-resource west wall/boundary/step fixtures and status-cycle gates", "mr_world_self_test exact wall sampler and greater-than-seven blocking threshold"]
+    },
+    "DUNSMALL:3428": {
+      "status": "verified",
+      "evidence": ["Static audit proves floor zero returns immediately; an exact x/y/level landing triple suppresses a repeated fall; the notice has no wait; SAVE occurs before the level increment; reachable positive coordinates make the apparent relocation branch dead; and the unchanged x/y plus incremented level become the new landing triple before redraw. The native transition preserves those boundaries and its combat-return flag."],
+      "tests": ["mr_session_self_test searches the original 7.NUM for a reachable chute, steps onto it, checks the pre-increment save snapshot and unchanged coordinates, rejects the surface false-floor marker, and verifies landing suppression"]
+    },
+    "DUNSMALL:3F5A": {
+      "status": "adapted",
+      "evidence": ["Static audit proves the exact explored-row index and `2^(20-x)` mask. The original additionally raises B5F0 only when the bit was previously clear; the native full-frame compositor does not expose that DOS selective-capture scratch flag and instead redraws the final frame."],
+      "tests": ["mr_session_self_test idempotent current-cell reveal and adjacent-cell bit isolation"],
+      "notes": "The persisted map mutation is exact, but the original selective-redraw scratch side effect is replaced by a final-pixel-oriented native redraw and is therefore not literal verification."
+    },
+    "DUNSMALL:49B8": {
+      "status": "verified",
+      "evidence": ["Static audit proves BASIC LOCATE row 25, column 22 and the initialized padded `       BACK        ` string, placing the visible label at native zero-based column 28, row 24."],
+      "tests": ["mr_game_self_test recovered fixed dungeon label layout"]
+    },
+    "DUNSMALL:49D1": {
+      "status": "verified",
+      "evidence": ["Static audit proves that only player levels strictly below two draw `H=HELP`, at BASIC row 18 column 28 (native zero-based 27,17)."],
+      "tests": ["mr_game_self_test level-one versus level-two help-label boundary"]
+    },
+    "DUNSMALL:4A52": {
+      "status": "verified",
+      "evidence": ["Static audit proves player map pixel coordinates `x*8-7` and `y*8+38`, including QuickBASIC integer conversion before storage."],
+      "tests": ["mr_render_self_test `(10,10) -> (73,118)` address-derived fixture"]
+    },
+    "DUNSMALL:4B5F": {
+      "status": "verified",
+      "evidence": ["Static audit of 4B5F-4BC5 proves the exact factor-C, factor-B, factor-A multiplication order, `(level+2)/integer_seed`, plus-ten offset, BRUN30 SIN, absolute-value, and integer truncation used for each map wall sample."],
+      "tests": ["mr_world_self_test original-derived wall samples, including the level-39 BRUN30-SIN boundary where host sinf returns the wrong wall class", "mr_render_self_test map walls and door cuts use the shared recovered sample"]
+    },
+    "DUNSMALL:4BC6": {
+      "status": "verified",
+      "evidence": ["Static audit of 4BC6-4C27 proves FRONT at row 7/column 28, LEFT and RIGHT at row 20/columns 22 and 36, and BACK at row 25/column 29 in QuickBASIC's one-based text grid."],
+      "tests": ["mr_game_self_test fixed SCREEN 1 direction-label placement"]
+    },
+    "DUNSMALL:5417": {
+      "status": "verified",
+      "evidence": ["Static audit proves the explored-row address `(level*21 + y)*4 + 9B06h` and publication of the integer player X used by the following bit reader."],
+      "tests": ["mr_world_self_test 7.NUM/explored row order", "mr_render_self_test isolated and neighboring revealed-cell seams"]
+    },
+    "DUNSMALL:5449": {
+      "status": "verified",
+      "evidence": ["Static audit proves mask `2^(20-x)`, integer division of the four-byte row value by that mask, `FIX`, fractional-half removal, and final one-bit AND."],
+      "tests": ["mr_world_self_test exact 7.NUM bit order at the first and final levels", "mr_render_self_test revealed/special-cell coordinates use the same `1U << (20-x)` contract"]
+    },
+    "DUNSMALL:54CB": {
+      "status": "verified",
+      "evidence": ["Static audit proves current level/row table selection, the shared 5449 bit test, value 50 for an unmarked cell, and current level/X/Y publication before tailing into 552B for a marked cell."],
+      "tests": ["mr_world_self_test marked and unmarked vertical-feature cells across floors 0, 1, 2, 19, and 70"]
+    },
+    "DUNSMALL:552B": {
+      "status": "verified",
+      "evidence": ["Static audit of 552B-5648 proves the direct negative/zero/1..9 arms, floor-70 chute suppression, optional chute trigger, signed upward ladders, three-floor reciprocal endpoint search, floor-zero overshoot-to-zero quirk, and value-50 no-feature fallback."],
+      "tests": ["mr_world_self_test original 7.NUM fixtures for chute, up-one/up-two/up-three, down-one/down-two/down-three, inert floor-zero endpoint, no feature, and floor-70 suppression", "mr_render_self_test every map feature class"]
+    },
+    "DUNSMALL:5649": {
+      "status": "verified",
+      "evidence": ["Static audit proves two independent greater-than-three tests and subtractions by three, not a general modulo operator."],
+      "tests": ["mr_world_self_test resolved ladder lengths one through three from all original 1..9 source values"]
+    },
+    "DUNSMALL:567C": {
+      "status": "verified",
+      "evidence": ["Static audit proves the used-floor flag plus exact `   False floor.   `, `D-GO`, and `DOWN` strings at rows/columns 25:22, 15:29, and 16:29."],
+      "tests": ["mr_game_self_test exact BIOS-glyph raster and SCREEN 1 cell placement plus the recovered landing-level/next-level gate"]
+    },
+    "DUNSMALL:56CC": {
+      "status": "verified",
+      "evidence": ["Static audit proves the current-cell monster suppression, exact ` Ladder going up.  /down.` text, and U-GO/UP versus D-GO/DOWN labels and cells."],
+      "tests": ["mr_game_self_test exact upward/downward BIOS-glyph rasters and SCREEN 1 cell placement", "mr_world_self_test signed feature fixtures"]
+    },
+    "DUNSMALL:1DB7": {
+      "status": "verified",
+      "evidence": ["Static audit proves concatenation of `You are at the ` with the caller-supplied inn description, the explicit 40-column wrap/padding, and the `Do you want to stay (Y or N)?` prompt."],
+      "tests": ["all three native inn presenters use the recovered two-line descriptions and fourth-row prompt"]
+    },
+    "DUNSMALL:1E0A": {
+      "status": "verified",
+      "evidence": ["Flea Bag drain, raw uppercase-only Y/N loop, 10-JP comparison/deduction, one-HP healing/full-heal flag, 3B02 preparation cleanup, sleep, robbery, independent sickness roll, Health loss/clamp, eight-second notice, disease assignment, and experience tail were audited through 1EDF."],
+      "tests": ["mr_town_self_test Flea Bag sickness/no-robbery seed and state mutation", "mr_progression_self_test shared preparation cleanup and spell-point settlement"]
+    },
+    "DUNSMALL:1EE2": {
+      "status": "verified",
+      "evidence": ["Static audit proves INT(RND*caller_denominator)=1, four-second robbery notice, and clearing only pocket money, ordinary weapon ownership, magic sword bonus, and magic mace bonus."],
+      "tests": ["mr_town_self_test seeded robbery/no-robbery state contracts"]
+    },
+    "DUNSMALL:1F3D": {
+      "status": "verified",
+      "evidence": ["Yuppydom drain, raw Y/N loop, 200-JP gate/deduction, three-HP healing/full-heal flag, 3B02 cleanup, sleep, denominator-20 robbery, and experience tail were audited through 1FBA."],
+      "tests": ["mr_town_self_test Yuppydom preparation-effect cleanup and price/healing path"]
+    },
+    "DUNSMALL:1FBD": {
+      "status": "verified",
+      "evidence": ["Static audit proves the exact `You are sleeping...` print followed by the inn-music selector; disabled sound reaches the selector's four-second substitute while enabled sound reaches PLAY/drain."],
+      "tests": ["live inn presenter separates enabled music/drain and disabled four-second path"]
+    },
+    "DUNSMALL:1FCD": {
+      "status": "verified",
+      "evidence": ["King's drain, raw Y/N loop, 6000-JP gate/deduction, full heal, cleric notice, sleep, additional four-second wait, deliberate absence of 3B02 cleanup, and experience tail were audited through 2041."],
+      "tests": ["mr_town_self_test King's full heal, price, and preparation-effect preservation"]
+    },
+    "DUNSMALL:2044": {
+      "status": "verified",
+      "evidence": ["Static audit proves level increment, INT(RND*15)+INT(health_factor)+1 shared HP increase, and final 1C93 preparation cleanup."],
+      "tests": ["mr_progression_self_test seeded two-level HP rolls and cleanup", "mr_town_self_test Temple level path"]
+    },
+    "DUNSMALL:2094": {
+      "status": "verified",
+      "evidence": ["Pending-plus-stored experience comparison, nested MBF `1.2^((level^1.1)^1.1)*900 + level^2.4*180 - 650` threshold, repeated 2044 awards, spell recomputation, total commit, pending clear, and 1C93 tail were audited."],
+      "tests": ["mr_progression_self_test original-derived thresholds at levels 0, 1, and 5 plus seeded multilevel settlement"]
+    },
+    "DUNSMALL:2115": {
+      "status": "verified",
+      "evidence": ["Static re-audit recovered the attribute aptitude, class divisors, Fighter `level-4` base, Wizard `3*level/2` base, final addition, and `<1 -> 0` clamp; it invalidated and replaced the former `3*level+2` transcription."],
+      "tests": ["mr_progression_self_test level-five Wizard/Fighter values and positive-fraction clamp boundary"]
+    },
+    "DUNSMALL:21F3": {
+      "status": "verified",
+      "evidence": ["Static audit proves raw 2F71 on every edit iteration, digit-only append, nonempty Backspace truncation, Return completion, cursor restoration/reprint, and a 15-character numeric buffer."],
+      "tests": ["native bank amount editor uses the shared clamp-aware reader and the recovered digit/backspace/return bounds"]
+    },
+    "DUNSMALL:27BD": {
+      "status": "verified",
+      "evidence": ["Static audit proves the `Jewel pieces with character: #########` PRINT USING template and pocket-money double argument."],
+      "tests": ["Temple/store native presenters share the recovered nine-column money line"]
+    },
+    "DUNSMALL:2F43": {
+      "status": "verified",
+      "evidence": ["Static audit proves the one-based loop over all six QuickBASIC attribute elements and replacement of every value below one with exactly one."],
+      "tests": ["mr_progression_self_test negative, zero, and positive attribute clamp", "live 2F71-equivalent reader applies the clamp after acknowledged session screens"]
+    },
+    "DUNSMALL:3B02": {
+      "status": "verified",
+      "evidence": ["Static audit proves a single comparison and assignment: current health is replaced by maximum health only when current exceeds maximum. Values below maximum, including negative values, are left untouched."],
+      "tests": ["mr_items_self_test and mr_town_self_test healing, poison, and inn paths retain the recovered one-sided clamp"]
+    },
+    "DUNSMALL:B9B3": {
+      "status": "verified",
+      "evidence": ["Static audit proves one RND consumption, INT(RND*6), and direct lookup in the seven-entry dungeon text-color table; index six is never selected by this routine."],
+      "tests": ["mr_game_self_test seeded random color and exact RNG-state boundary"]
+    },
+    "DUNSMALL:B9D6": {
+      "status": "verified",
+      "evidence": ["Static audit proves increment-before-use, wrap above six to zero, and lookup in the same seven-entry color table."],
+      "tests": ["mr_game_self_test help text-color increment and monochrome table behavior"]
+    },
+    "DUNSMALL:C5B0": {
+      "status": "verified",
+      "evidence": ["Static audit proves BASIC row 25, column 10 plus the help offset, the initialized mixed-case Hit any key string, and tail call to raw 2F71 with its attribute clamp."],
+      "tests": ["native reward/statistics/inventory/store/death/floor-slosher presenters use column 10", "native help presenter uses column 35", "all direct 2F3C call sites use the shared clamp-aware reader"]
+    },
+    "DUNSMALL:35AC": {
+      "status": "verified",
+      "evidence": ["Preparation level prompt, spell-point gates, row placement, 7DC9 input, and shared C5D0 dispatch audited."],
+      "tests": ["mr_spells_self_test dispatch and cost contracts", "live 7DC9 modal controller mapping"]
+    },
+    "DUNSMALL:3FFC": {
+      "status": "verified",
+      "evidence": ["Health-ring and disease work separated from ambient advice; final pre-combat invocation and no per-combat-prompt invocation recovered."],
+      "tests": ["mr_session_self_test command-cycle and combat-entry status boundaries"]
+    },
+    "DUNSMALL:6BAF": {
+      "status": "verified",
+      "evidence": ["Static audit of 6BAF-6CC4 proves player-cell occupancy lookup, original type 19/20 remapping, large-art table lookup, selector-one sprite choice, absolute (225,112) PUT/XOR, and current-monster index publication."],
+      "tests": ["mr_monsters_self_test original type remapping contracts", "mr_assets_self_test original-resource selector-one dimensions and logical-pixel hash", "live combat and reward redraws share selector one and the recovered absolute origin"]
+    },
+    "DUNSMALL:6EEE": {
+      "status": "verified",
+      "evidence": ["Static audit proves compact slot selection as art_group*3+distance_variant in fixed 45-word records, with the 0..2 selector loop and destination-array copy."],
+      "tests": ["mr_assets_self_test original-resource compact variants, dimensions, packed colors, and logical-pixel hashes", "mr_render_self_test projected depth-to-variant placement"]
+    },
+    "DUNSMALL:6F52": {
+      "status": "verified",
+      "evidence": ["Static audit proves large slot selection as art_group*2+size_variant in fixed 125-word records, with the 0..1 selector loop and destination-array copy."],
+      "tests": ["mr_assets_self_test original-resource large variants, dimensions, packed colors, and logical-pixel hashes", "mr_render_self_test projected depth-to-variant placement and combat selector-one constant"]
+    },
+    "DUNSMALL:7001": {
+      "status": "verified",
+      "evidence": ["Level-zero return, increment/wrap cursor, even-record return, and odd-record 70A1 entry audited."],
+      "tests": ["mr_session_self_test deterministic idle cursor/parity sequence"]
+    },
+    "DUNSMALL:70A1": {
+      "status": "verified",
+      "evidence": ["Weight gate, tracking slots, RND ordering, facing-axis pursuit, collision, and combat-view distinctions audited."],
+      "tests": ["mr_session_self_test deterministic movement/RNG sequence"]
+    },
+    "DUNSMALL:7DC9": {
+      "status": "adapted",
+      "evidence": ["All ten direct call sites are inventoried; INKEY$-then-7EEC ordering and the active-combat 2F71 tail, including discarded sampled input and the 2F43 attribute clamp, are mapped caller-by-caller."],
+      "tests": ["live modal controller used by spells, items, wands, pills, drop, defeat, and coin prompts"],
+      "notes": "The native controller preserves the recovered key-discard, occupancy-interruption, RNG, and attribute-clamp boundaries, but replaces the original CPU-speed-dependent empty INKEY$ polling cadence with a fixed normalized host cadence. That deliberate timing substitution is not eligible for literal verification."
+    },
+    "DUNSMALL:7FC8": {
+      "status": "verified",
+      "evidence": ["Static audit of 7FC8-8039 proves row-one A LEVEL text assembly, positive-number spacing, resource-set name-table selection, IS ATTACKING suffix, and trailing COLOR reset."],
+      "tests": ["live combat frame uses recovered resource set/type name and row-one composition"]
+    },
+    "DUNSMALL:7EEC": {
+      "status": "verified",
+      "evidence": ["Interval formula, minimum eight, one-RND-per-call, town post-RND early return, and combat invocation audited."],
+      "tests": ["mr_session_self_test exploration, town, and combat RNG boundaries"]
+    },
+    "DUNSMALL:BF60": {
+      "status": "adapted",
+      "evidence": ["Static audit proves the fresh-TIMER-tick calibration, one-second tight-loop count, division by 326, and storage used by the 7EEC interval formula."],
+      "tests": ["mr_session_self_test normalized exploration, town, combat, and modal idle-monster polling boundaries"],
+      "notes": "A native GUI cannot reproduce the DOS CPU-loop count meaningfully. The port normalizes the recovered algebra to 326 host polls per second while preserving 7EEC's interval, minimum-eight gate, and RND ownership."
+    },
+    "DUNSMALL:548B": {
+      "status": "verified",
+      "evidence": ["Static audit of 548B-54C7 proves the MBF-single operation order and wall threshold. BRUN30 BF0C-BF67 was independently recovered: reduction uses DS:03CA 1/(2*pi), folds the cycle around .25/.75, and B5E1 evaluates the five original MBF coefficients at DS:06AA-06BD. BRUN30 B46B-B483 confirms round-to-nearest/even, matching normal IEEE single operations used by the native transcription."],
+      "tests": ["mr_world_self_test original SIN polynomial fixtures, including level 39/seed 5 where host sinf incorrectly produces solid wall 8 instead of passable door value 7", "mr_render_self_test recovered map door aperture"]
+    },
+    "DUNSMALL:5793": {
+      "status": "verified",
+      "evidence": ["Static audit of 5793-580D proves the three $FEXC calls, constants 1.3/1.2/1.1, MBF-single store order, divide-by-300 fractional extraction, minus-three bias, and INT result. BRUN30 B5B5-B89D was independently recovered as a LOG2 rational approximation followed by the seven-coefficient EXP2 polynomial and binary scaling; the native path no longer delegates to host powf."],
+      "tests": ["mr_world_self_test exact hash fixtures including marked level-70 cell (1,11), where host powf yields 30 and BRUN30 yields 31", "exhaustive offline comparison over all valid level/cell/search-offset inputs found 1,800 host-pow hash divergences"]
+    },
+    "DUNSMALL:580F": {
+      "status": "verified",
+      "evidence": ["Static audit of 580F-5836 proves rendered-direction minus current-facing, add four only for a negative result, and storage through DS:52FC before entering the shared four-pane restore. The native cache restore now reproduces both the 0..3 rotation and that observable shared-scratch write."],
+      "tests": ["mr_game_self_test all four cached-facing rotation values", "mr_render_self_test rotated cache placement"]
+    },
+    "DUNSMALL:5837": {
+      "status": "verified",
+      "evidence": ["Static audit of 5837-58F6 proves the one-through-four source offsets into the seven-entry wraparound origin table, pane restore order, XOR modes for DS:52F2/5300, and PSET modes for DS:530A/58D4. Native capture dimensions preserve the original 54/55-row asymmetry and restore in the recovered order."],
+      "tests": ["mr_render_self_test zero/quarter-turn cache restores, pane dimensions, wraparound destinations, XOR panes, and PSET panes"]
+    },
+    "DUNSMALL:7FFB": {
+      "status": "verified",
+      "evidence": ["Raw 2F71 response, its six-attribute minimum-one side effect, and uppercase-Q-only DOS exit branch audited."],
+      "tests": ["mr_input_self_test pause response case"]
+    },
+    "DUNSMALL:803A": {
+      "status": "unresolved",
+      "evidence": [],
+      "notes": "Major sub-branches are implemented, but full loop ownership, every idle-poll transition, and raster sequencing remain under audit."
+    },
+    "DUNSMALL:89B4": {
+      "status": "verified",
+      "evidence": ["Static audit proves the exact two-line YOU DO NOT HAVE THAT / WEAPON message and immediate return without an attack or monster turn."],
+      "tests": ["mr_game_self_test combat ownership checks and live missing-weapon presenter"]
+    },
+    "DUNSMALL:89D9": {
+      "status": "verified",
+      "evidence": ["Static audit of 89D9-8E75 proves exploding d20 accumulation, magic sword/mace bonuses, defense construction, Fighter reduction, all three damage bands, behavior/weapon modifiers, one-shot bonus retention on a miss, phrase RND, one-second hold, defeat branch, and initiative comparison against DS:1FA6. DS:1F92 is the BASIC array's unused element zero, so 1FA6 is gameplay attribute five, Agility."],
+      "tests": ["mr_combat_self_test original-derived hit, resistance, exploding-d20, miss/bonus-retention, RNG-count, and Agility-not-Luck initiative fixtures", "live combat controller maps S/M/K/F to the recovered weapon codes"]
+    },
+    "DUNSMALL:90B4": {
+      "status": "verified",
+      "evidence": ["Battle level prompt, spell-point gates, row placement, 7DC9 input, and shared selector handoff audited."],
+      "tests": ["mr_spells_self_test battle dispatch/cost contracts", "live 7DC9 modal controller mapping"]
+    },
+    "DUNSMALL:95BA": {
+      "status": "verified",
+      "evidence": ["Ordinary battle-item single-read return and Wizard Guild retry/case branches audited through 98E6."],
+      "tests": ["mr_game_self_test item-menu mode and case matrix"]
+    },
+    "DUNSMALL:B308": {
+      "status": "unresolved",
+      "evidence": ["All five direct calls, fixed input drain, serialization order, paired BSAVE boundary, and BRUN30-shaped seven/sixteen-digit numeric record forms are mapped."],
+      "tests": ["mr_save_self_test fixed/scientific, leading-zero, sign, E/D-exponent numeric cases plus supplied-record and MBF/BSAVE round trips", "live pending-snapshot and quit-save boundaries"],
+      "notes": "Literal certification remains withheld because representative formatter fixtures and supplied saves do not exhaust every MBF single/double decimal rounding boundary, disk-error path, and enclosing resource-reload transition in B308-B5C7."
+    },
+    "DUNSMALL:C5D0": {
+      "status": "verified",
+      "evidence": ["Mask selection, blank entries, 1/2/3/escape behavior, 7DC9 polling, and occupancy/view-depth guard audited."],
+      "tests": ["mr_spells_self_test spellbook masks and dispatch"]
+    },
+    "DUNSMALL:1C93": {
+      "status": "verified",
+      "evidence": ["Static audit of 1C93-1CF4 proves unconditional invisibility clear, exact-one preparation Strength and Speed marker gates, and the corresponding minus-six Strength/minus-seven Agility removals."],
+      "tests": ["mr_progression_self_test independent and level-award cleanup fixtures", "fountain transition fixture verifies cleanup before its save boundary"]
+    },
+    "DUNSMALL:1CF5": {
+      "status": "verified",
+      "evidence": ["Static audit of 1CF5-1D92 proves level-zero assignment and the Health, attack, and Agility derived-factor formulas, including FIX and below-one branches."],
+      "tests": ["mr_progression_self_test ordinary, zero-Health raise, and fountain town-entry factors", "mr_town_self_test shared service return factors"]
+    },
+    "DUNSMALL:B0E3": {
+      "status": "verified",
+      "evidence": ["Static audit proves one independent INT(RND*6)+1 color selection, one increment of the matching persistent pill slot, exact color announcement, and the 2F3C acknowledgement tail."],
+      "tests": ["mr_loot_self_test scripted white-pill award, persistent count, and exact RND position", "live staged reward presenter owns the recovered acknowledgement"]
+    },
+    "DUNSMALL:B156": {
+      "status": "verified",
+      "evidence": ["Static audit proves independent INT(RND*9)+1 color and INT(RND*2)+1 charge rolls, addition to the selected persistent wand slot, exact announcement, and 2F3C acknowledgement."],
+      "tests": ["mr_loot_self_test scripted brown-wand two-charge award and exact RND position", "live staged reward presenter owns the recovered acknowledgement"]
+    },
+    "DUNSMALL:B1DF": {
+      "status": "verified",
+      "evidence": ["Static audit proves Wizard return before RND, INT(RND*5)+1, rolls one through three as one-step armor upgrades capped at three, roll-four sword acquisition, and duplicate-sword fallthrough to the mace arm."],
+      "tests": ["mr_loot_self_test independent Wizard/no-RND, armor-cap, sword, and duplicate-sword-to-mace branch fixtures"]
+    },
+    "DUNSMALL:B2CF": {
+      "status": "verified",
+      "evidence": ["Static audit proves two independent INT(RND*15)+2 assignments to fountain x then y with no shared roll or relocation transform."],
+      "tests": ["mr_progression_self_test seeded fountain fixture pins x=12, y=10 and the following health-roll RNG boundary"]
+    },
+    "DUNSMALL:A15D": {
+      "status": "verified",
+      "evidence": ["Static audit of A15D-A22A proves health restoration, level/experience reset, six independent INT(RND*13)+3 attributes, one independent favored-attribute INT(RND*6)+10 bonus, acknowledgement-before-town-coordinate order, and 1CF5 tail."],
+      "tests": ["mr_session_self_test seeded complete reincarnation resumes the same session in town", "mr_progression_self_test death branch/RNG fixtures"]
+    },
+    "DUNSMALL:C102": {
+      "status": "verified",
+      "evidence": ["Static audit proves the helper's +2/+1 placement offsets, all ten exact town coordinates, S/B/T/I/W buffer selection, XOR for S/B/T/W, and PSET for the three inn markers. The native compositor uses the same cropped BIOS glyph rows and PUT modes."],
+      "tests": ["mr_render_self_test all ten recovered town marker coordinates, empty non-marker cells, glyph crops, placement offsets and inn PSET behavior"]
+    },
+    "F8:0030": {
+      "status": "adapted",
+      "evidence": ["The qualification, update, draw-before-save order, and return destination are transcribed, but the native integration receives the death summary in process and returns to the embedded BEGIN controller instead of using DOS NAME and CHAIN."],
+      "notes": "The two DOS inter-module transitions are deliberate host adaptations, so the complete program routine is not eligible for literal verification."
+    },
+    "F8:00E9": {
+      "status": "verified",
+      "evidence": ["Static audit of the repeated adjacent compare/swap pass proves comparison of complete fixed 80-byte QuickBASIC strings, including subsequent-field tie ordering."],
+      "tests": ["mr_frontend_self_test fixed-level records with different class/name suffix order"]
+    },
+    "F8:01CC": {
+      "status": "verified",
+      "evidence": ["Static audit of the explicit DS:1856 BLOAD destination and the one-based 10 by 80 word-array reconstruction; BSAVE address words are preserved but no longer falsely validated."],
+      "tests": ["mr_frontend_self_test original F9 load and synthetic non-1856 header round trip"]
+    },
+    "F8:0230": {
+      "status": "verified",
+      "evidence": ["Static audit of 80-character padding, one-byte-to-word array writes, preserved payload, and BSAVE boundary."],
+      "tests": ["mr_frontend_self_test synthetic address-header write/reload and row equality"]
+    },
+    "F8:045C": {
+      "status": "verified",
+      "evidence": ["Static audit proves decimal conversion, left-space padding to the caller's width, and rightmost-character retention when the numeric string exceeds that width."],
+      "tests": ["mr_frontend_self_test ordinary and overflow level, wealth, and dungeon-depth fields"]
+    },
+    "F8:02DB": {
+      "status": "adapted",
+      "evidence": ["All eight typed handoff fields and their native summary sources are mapped, but the embedded port intentionally passes them in process instead of reading the transient DOS NAME file."],
+      "notes": "Formatting remains separately audited; this inter-module I/O routine is an intentional native adaptation."
+    },
+    "F8:0498": {
+      "status": "verified",
+      "evidence": ["Heading, divider, ten complete rows, five-character prefix overlay, LOCATE positions, row-color call boundaries, and nonempty-key wait were audited independently from BEGIN's different table viewer."],
+      "tests": ["live death path owns the F8 presenter rather than BEGIN choice three"]
+    },
+    "F8:0570": {
+      "status": "verified",
+      "evidence": ["Monochrome no-op and color-mode increment/wrap/apply sequence recovered as 10,11,12,13,14,9."],
+      "tests": ["dedicated native F8 color helper used at every recovered call boundary"]
+    },
+    "NCD:0040": {
+      "status": "adapted",
+      "evidence": ["Ordering screen/control flow is transcribed; printer output is intentionally written to a local text spool instead of a DOS printer device."],
+      "notes": "Not eligible for literal 1:1 certification while the printer path is adapted."
+    },
+    "NCD:04ED": {
+      "status": "verified",
+      "evidence": ["Static audit proves LOCATE row 25 column 35, the initialized mixed-case Hit any key string, and fall-through to the NCD-specific nonempty-key reader."],
+      "tests": ["native NCD ordering screen renders the recovered prompt and uses one blocking raw key read"]
+    },
+    "NCD:0505": {
+      "status": "verified",
+      "evidence": ["Static audit proves a raw INKEY$ loop until the NCD key string is nonempty, followed by return with no case conversion or DUNSMALL attribute side effect."],
+      "tests": ["native NCD printer choice compares both P and p after one complete raw key read"]
+    },
+    "NCD:0521": {
+      "status": "verified",
+      "evidence": ["Static audit proves monochrome no-op and color-mode apply-current, increment, wrap-at-15-to-9 order."],
+      "tests": ["mr_game_self_test 9-through-14 sequence, wrap to 9, and monochrome color"]
+    }
+  }
+}

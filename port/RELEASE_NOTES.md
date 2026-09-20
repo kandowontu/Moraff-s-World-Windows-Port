@@ -1,6 +1,6 @@
-# Release notes — Version 1.1.01
+# Release notes — Version 1.1.2
 
-Released August 20, 2026.
+Released September 19, 2026.
 
 ## Moraff's World Native Windows Edition
 
@@ -9,6 +9,24 @@ and documentation bundle. Users supply the required original MoraffWare files
 from their own installation.
 
 Highlights include:
+
+- The optional native Moraff's Revenge Advanced 3.3 reconstruction is now
+  integrated into the character-selection flow. It uses a separate local
+  `revenge` data directory and never reads or modifies World or Colosseum
+  saves.
+- A new source-backed parity gate inventories all 167 recovered Revenge
+  routines. Version 1.1.2 has 97 verified routines, 10 documented native
+  adaptations, and 60 unresolved routines, so the bonus game is explicitly
+  shipped as an audited work in progress rather than described as fully 1:1
+  certified.
+- The latest Revenge fixes correct combat-contact ownership, modal combat
+  input, exploration/combat random polling order, incremental viewport
+  presentation, central-monster XOR handling, ladder and false-floor notices,
+  and the exact two-level false-floor predicate.
+- Seventeen native Revenge regression suites cover data, world resources,
+  saves, character formulas, spells, items, monsters, combat, loot,
+  progression, town, input, session flow, frontend flow, assets, rendering,
+  and the native game bridge.
 
 - Adventure and Colosseum damage/counterattack readouts now reproduce
   `WORLD`'s original retained-pane behavior: an ordinary result stays visible

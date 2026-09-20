@@ -1,0 +1,119 @@
+{
+  "format": "Moraff's Revenge Advanced 3.3 dungeon-resource schema v1",
+  "method": "Static DUNSMALL.EXE control-flow and BLOAD/BSAVE data-flow analysis; no original executable was run.",
+  "resources": {
+    "1.NUM": {
+      "format": "QuickBASIC BSAVE",
+      "header_bytes": 7,
+      "header_marker": "FD",
+      "saved_offset": "2242",
+      "payload_bytes": 5601,
+      "dos_eof_bytes": 1,
+      "loaded_address": "DS:2242",
+      "element_type": "signed 16-bit integer",
+      "indexing": "BASIC indices 0..2800; payload has 2800 complete words and the low byte of index 2800",
+      "dimensions": "70 dungeon levels * 40 monster slots, addressed as 40*level-39 through 40*level",
+      "meaning": "packed monster position",
+      "confidence": "high",
+      "evidence": [
+        "DUNSMALL:79C3 computes 40*dungeon_level and loops the floor's 40 indices",
+        "DUNSMALL:79D4 reads DS:2242[index*2], derives two coordinates, collision-checks DS:4E90, and regenerates the stored value until unoccupied",
+        "DUNSMALL:7A6B writes the monster slot index into the 22-wide current-floor occupancy grid",
+        "DUNSMALL:A408-A4A6 regenerates and writes both a packed position and its occupancy-grid entry",
+        "DUNSMALL:B5FA-B670 BSAVEs the original memory range back to 1.NUM"
+      ]
+    },
+    "2.NUM": {
+      "format": "QuickBASIC BSAVE",
+      "header_bytes": 7,
+      "header_marker": "FD",
+      "saved_offset": "3824",
+      "payload_bytes": 5601,
+      "dos_eof_bytes": 1,
+      "loaded_address": "DS:3824",
+      "element_type": "signed 16-bit integer",
+      "indexing": "BASIC indices 0..2800; payload has 2800 complete words and the low byte of index 2800",
+      "dimensions": "70 dungeon levels * 40 monster slots",
+      "meaning": "persistent current monster health points",
+      "confidence": "high",
+      "evidence": [
+        "DUNSMALL:6C40 and 6D86 read the absolute value to modify the selected monster graphic/type band",
+        "DUNSMALL:8223-8278 loads ABS(table[slot]) into DS:B6E4",
+        "DUNSMALL:85AB prints DS:B6E4 directly below the literal ITS HEALTH POINTS:",
+        "DUNSMALL:8FA3-8FB2 writes surviving current health back to the same slot",
+        "DUNSMALL:A3D1-A404 generates and stores replacement monster health",
+        "DUNSMALL:B5FA-B670 BSAVEs the original memory range back to 2.NUM"
+      ]
+    },
+    "7.NUM": {
+      "format": "QuickBASIC BSAVE",
+      "header_bytes": 7,
+      "header_marker": "FD",
+      "saved_offset": "1856",
+      "payload_bytes": 6045,
+      "dos_eof_bytes": 1,
+      "bload_override_address": "DS:8366",
+      "element_type": "MBF single-precision integer bit mask",
+      "dimensions": "71 levels * 21 rows",
+      "grid_bytes": 5964,
+      "trailing_workspace_bytes": 81,
+      "meaning": "sparse special-cell mask layer used by the vertical feature resolver; ordinary walls are generated procedurally and do not come from this file",
+      "confidence": "high",
+      "evidence": [
+        "DUNSMALL:BA10 loader names 7.NUM and passes explicit address 8366 to BLOAD",
+        "DUNSMALL:5275-527B and 54E2-54E8 compute 4*(level*21+row)+8366",
+        "DUNSMALL:5449 extracts bit (20-x) from the selected row mask",
+        "DUNSMALL:54CB dispatches the vertical-feature resolver only when that bit is set at the player's current cell",
+        "DUNSMALL:5793 hashes marked cells as INT(frac(((x+7)^1.3*(y+6)^1.2*(level+search_offset+1)^1.1)/300)*300-3) with MBF single operations",
+        "DUNSMALL:552B maps direct hashes 1..9 to negative/up ladders of length 1..3 and searches offsets 1..3 to reconstruct their positive/down endpoints",
+        "DUNSMALL:548B computes ordinary movement blocking from floor, direction, coordinates, and a trigonometric runtime call without reading 7.NUM",
+        "all 1491 decoded MBF values are nonnegative integer masks no larger than 20 bits",
+        "only 10 to 31 cells are set on each level, far too few to encode the maze's wall topology",
+        "the final 81 payload bytes are zero in the Advanced 3.3 resource"
+      ]
+    }
+  },
+  "current_floor_occupancy": {
+    "address": "DS:4E90",
+    "element_type": "signed 16-bit integer",
+    "row_stride": 22,
+    "meaning": "zero for empty or the positive monster slot index occupying that cell",
+    "confidence": "high"
+  },
+  "monster_derivation": {
+    "global_index": "40 * (dungeon_level - 1) + floor_slot, for levels 1..70 and slots 1..40",
+    "base_type": "global_index - INT(global_index / 20) * 20 + 1",
+    "base_type_range": "1..20",
+    "display_type_adjustment": "base types 19 and 20 become 11 and 12 below floor 7; on floor 7 or deeper they become variants 21 and 22 when ABS(persistent_health) > 140",
+    "monster_level": "INT(global_index / 40 + 1), plus one for each divisor in 2,4,8,16 that divides global_index exactly",
+    "experience_reward": "INT(5 * 1.5^(monster_level^0.96) + 30 * (monster_level - 1)^1.4 + 15); behavior class 2 then multiplies the reward by zero",
+    "replacement_health": "INT(RND * dungeon_level * 8) + dungeon_level * 2 + 1",
+    "replacement_position": "x = INT(RND * 18) + 2; y = INT(RND * 17) + 1; packed position = y * 32 + x; x and y reroll together while the current-floor occupancy cell is nonempty, but health is not rerolled",
+    "coin_loot_gate": "all even global monster indices guarantee a coin roll; odd indices receive one when INT(RND * 5) <> 1",
+    "confidence": "high",
+    "evidence": [
+      "DUNSMALL:6BE3-6C0C and 80B0-80DB perform the modulo-20 type expression",
+      "DUNSMALL:6C0F-6C5D applies the floor-7 and health-140 type variants",
+      "DUNSMALL:80DE-81A3 derives level and tests exact halves, quarters, eighths, and sixteenths",
+      "DUNSMALL:839E-84BE computes the experience reward and zeroes it for behavior class 2",
+      "DUNSMALL:A3C8-A404 creates replacement health and writes it to 2.NUM's in-memory table",
+      "DUNSMALL:A408-A4A6 rerolls replacement coordinates until unoccupied and stores y*32+x in 1.NUM's in-memory table",
+      "DUNSMALL:8296-82C7 identifies even global indices; A522-A55E combines that flag with the one-in-five random coin gate"
+    ]
+  },
+  "monster_resource_sets": {
+    "shallow": {
+      "floors": "1..34",
+      "names": "F6.COM",
+      "graphics": ["3.NUM", "4.NUM", "5.NUM", "6.NUM"]
+    },
+    "deep": {
+      "floors": "35..70",
+      "names": "F7.COM",
+      "graphics": ["3A.NUM", "4A.NUM", "5A.NUM", "6A.NUM"]
+    },
+    "switch_evidence": "DUNSMALL:B941-B964 selects set 1 below floor 35 and set 2 otherwise; 4C6B-4CC0 hot-swaps when level-changing across that boundary",
+    "loader": "DUNSMALL:C7A5-C8AC",
+    "confidence": "high"
+  }
+}

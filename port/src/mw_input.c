@@ -203,6 +203,21 @@ void input_drain_pending(Input *inp) {
     inp->head = inp->tail;
 }
 
+void input_drain_pending_polls(Input *inp, int polls) {
+    if (!inp || polls <= 0) return;
+    /* DUNSMALL 2FCB-2FF6 executes exactly eighteen nonblocking INKEY$
+       calls at many modal boundaries.  QuickBASIC returns an extended key as
+       one two-byte string, while this backend stores its zero prefix and scan
+       code separately, so discard the pair atomically and count it once. */
+    input_pump(inp);
+    while (polls-- > 0 && inp->head != inp->tail) {
+        int key = inp->keys[inp->head];
+        inp->head = (inp->head + 1) % KEY_QUEUE_SIZE;
+        if (key == 0 && inp->head != inp->tail)
+            inp->head = (inp->head + 1) % KEY_QUEUE_SIZE;
+    }
+}
+
 int input_poll_quit(Input *inp) {
     return inp->quit_requested;
 }
@@ -410,6 +425,21 @@ int input_self_test(void) {
     input_push_dos_key(&inp, -0x50, KMOD_NONE);
     input_drain_pending(&inp);
     if (inp.head != inp.tail)
+        failures++;
+
+    memset(&inp, 0, sizeof(inp));
+    for (int i = 0; i < 20; ++i)
+        input_push_dos_key(&inp, 'a' + (i % 26), KMOD_NONE);
+    input_drain_pending_polls(&inp, 18);
+    if (input_getch(&inp) != 's' || input_getch(&inp) != 't' ||
+        inp.head != inp.tail)
+        failures++;
+
+    memset(&inp, 0, sizeof(inp));
+    input_push_dos_key(&inp, -0x50, KMOD_NONE);
+    input_push_dos_key(&inp, 'x', KMOD_NONE);
+    input_drain_pending_polls(&inp, 1);
+    if (input_getch(&inp) != 'x' || inp.head != inp.tail)
         failures++;
     return failures;
 }

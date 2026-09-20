@@ -31,6 +31,14 @@ freely, subject to the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 ```
 
+## IBM BIOS 8x8 font data
+
+The Moraff's Revenge native renderer includes the printable portion of the
+IBM BIOS/VGA 8x8 character generator. The table is credited to Marcel Sondaar
+and International Business Machines and is identified by its source as public
+domain. It is used because static BRUN30 disassembly proves that the original
+game prints through BIOS `INT 10h/AH=09h`.
+
 ## Build-tool acknowledgements
 
 The following open-source tools were used to produce the Windows executable.

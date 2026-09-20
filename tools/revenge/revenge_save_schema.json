@@ -1,0 +1,247 @@
+{
+  "format": "Moraff's Revenge Advanced 3.3 sequential character save",
+  "evidence": {
+    "save_procedure": "DUNSMALL.EXE:B308",
+    "load_procedure": "DUNSMALL.EXE:B674",
+    "runtime_input_types": {
+      "02": "QuickBASIC single precision",
+      "03": "QuickBASIC double precision"
+    },
+    "record_count": 311,
+    "binary_sidecar_payload_bytes": 6045,
+    "binary_sidecar_explicit_bload_destination": "9B06",
+    "binary_sidecar_data_last_inclusive": "B2A2",
+    "binary_sidecar_header_address": "informational and preserved; ignored by the explicit-destination BLOAD"
+  },
+  "records": [
+    {
+      "first": 1,
+      "last": 6,
+      "name": "attributes",
+      "element_names": [
+        "strength",
+        "intelligence",
+        "wisdom",
+        "health_attribute",
+        "agility",
+        "laziness"
+      ],
+      "type": "single",
+      "data_base": "1F92",
+      "element_transform": {
+        "decode": "(stored - 237) / 3",
+        "encode": "gameplay * 3 + 237",
+        "multiplier": 3,
+        "offset": 237,
+        "evidence": "CHCHAR.EXE:0D72 and DUNSMALL.EXE:B6A1-B6D5; DUNSMALL DS:D744 contains MBF single -237"
+      }
+    },
+    {
+      "first": 7,
+      "last": 7,
+      "name": "derived_combat_class_and_armor",
+      "fields": [
+        "combat_attack_factor",
+        "health_growth_factor",
+        "agility_defense_factor",
+        "player_class",
+        "equipped_armor"
+      ],
+      "types": ["single", "single", "single", "single", "single"]
+    },
+    {
+      "first": 8,
+      "last": 8,
+      "name": "advancement_and_health",
+      "fields": [
+        "experience",
+        "player_level",
+        "health_max",
+        "health_current",
+        "status_flags"
+      ],
+      "types": ["double", "single", "single", "single", "single"],
+      "field_transforms": {
+        "experience": {
+          "decode": "stored - 12316",
+          "encode": "gameplay + 12316",
+          "offset": 12316,
+          "evidence": "DUNSMALL.EXE:B748-B752; DS:D748 contains MBF double -12316"
+        },
+        "player_level": {
+          "decode": "stored - 476",
+          "encode": "gameplay + 476",
+          "offset": 476,
+          "evidence": "DUNSMALL.EXE:B755-B75F; DS:D750 contains MBF single -476"
+        },
+        "health_max": {
+          "decode": "stored - 376",
+          "encode": "gameplay + 376",
+          "offset": 376,
+          "evidence": "DUNSMALL.EXE:B762-B76C; DS:D754 contains MBF single -376"
+        },
+        "health_current": {
+          "decode": "stored - 176",
+          "encode": "gameplay + 176",
+          "offset": 176,
+          "evidence": "DUNSMALL.EXE:B76F-B77A; DS:D758 contains MBF single -176"
+        }
+      }
+    },
+    {
+      "first": 9,
+      "last": 9,
+      "name": "wealth_magic_and_position",
+      "fields": [
+        "carried_weight",
+        "carried_treasure",
+        "pocket_money",
+        "bank_money",
+        "pending_experience",
+        "spell_points",
+        "player_x",
+        "player_y",
+        "dungeon_level",
+        "dungeon_generation_seed"
+      ],
+      "types": [
+        "single",
+        "single",
+        "double",
+        "double",
+        "single",
+        "single",
+        "single",
+        "single",
+        "single",
+        "single"
+      ],
+      "field_transforms": {
+        "carried_weight": {
+          "decode": "stored - 71",
+          "encode": "gameplay + 71",
+          "offset": 71,
+          "evidence": "DUNSMALL.EXE:B7D3-B7DD; DS:D75C contains MBF single -71"
+        },
+        "carried_treasure": {
+          "decode": "stored - 4434",
+          "encode": "gameplay + 4434",
+          "offset": 4434,
+          "evidence": "DUNSMALL.EXE:B7E0-B7EA; DS:D760 contains MBF single -4434"
+        },
+        "pocket_money": {
+          "decode": "stored - 223",
+          "encode": "gameplay + 223",
+          "offset": 223,
+          "evidence": "DUNSMALL.EXE:B7ED-B7F7; DS:D764 contains MBF double -223"
+        }
+      }
+    },
+    {
+      "first": 10,
+      "last": 39,
+      "name": "active_effect_table",
+      "count": 30,
+      "type": "single",
+      "data_base": "6020",
+      "saved_element_first_address": "6024",
+      "known_elements": {
+        "1": "battle_speed_modifier",
+        "2": "battle_strength_modifier",
+        "3": "preparation_strength_modifier",
+        "4": "preparation_speed_modifier",
+        "5": "invisibility_effect_state"
+      },
+      "evidence": "DUNSMALL.EXE:0A65-0AB0, 36F4, 3729, 38FA, 7342, 8F35, 9257-9303, and A065-A09B. The physical element zero at 6020 is not saved."
+    },
+    {
+      "first": 40,
+      "last": 69,
+      "name": "magic_item_value_table",
+      "count": 30,
+      "type": "single",
+      "data_base": "B41E",
+      "saved_element_first_address": "B422",
+      "confidence": "high",
+      "known_elements": {
+        "1": "bag_of_holding_coin_contents",
+        "2": "rings_of_health_count",
+        "3": "magic_sword_bonus",
+        "4": "magic_mace_bonus",
+        "5": "magic_ring_bonus",
+        "6": "magic_armor_bonus",
+        "7": "holy_hand_grenade_count"
+      },
+      "evidence": "DUNSMALL.EXE:3B3C-3C7E displays these values by name; B496-B4CA and B846-B87C prove the complete 1..30 persistence loop. The array's physical element zero at B41E is not part of the save stream."
+    },
+    {
+      "first": 70,
+      "last": 99,
+      "name": "carried_item_counts",
+      "count": 30,
+      "type": "single",
+      "data_base": "B2D2"
+    },
+    {
+      "first": 100,
+      "last": 111,
+      "name": "spellbook_masks",
+      "count": 12,
+      "fields": ["battle_spellbook_mask", "preparation_spellbook_mask"],
+      "types": ["single", "single"],
+      "data_bases": ["5EE0", "5EAC"],
+      "evidence": "DUNSMALL.EXE:B516-B53C writes 5EE0 then 5EAC. Battle casting sets selector type 2 and reads 5EE0; preparation casting sets type 1 and reads 5EAC at C5D0-C609."
+    },
+    {
+      "first": 112,
+      "last": 311,
+      "name": "persistent_value_table",
+      "count": 200,
+      "type": "single",
+      "data_base": "1B92",
+      "saved_element_first_address": "1B96",
+      "known_elements": {
+        "1": "knife_owned",
+        "2": "sword_owned",
+        "3": "mace_owned",
+        "4": "disease_state",
+        "5": "poison_state",
+        "10": "fountain_x",
+        "11": "fountain_y",
+        "12": "breathe_fire_effect_expiry",
+        "13": "shielding_effect_expiry",
+        "14": "agility_effect_expiry",
+        "17": "owns_the_town",
+        "21": "race",
+        "22-27": "blue_red_green_yellow_orange_white_pill_counts",
+        "28-36": "purple_brown_black_white_orange_yellow_green_red_blue_wand_charges"
+      },
+      "reserved_elements": ["6-9", "15-16", "18-20", "37-200"],
+      "note": "DUNSMALL:B99D resets values 12..14 on load, so those three are persisted by the generic writer but deliberately transient after loading. A complete DS:1B92 reference audit finds twelve computed pill/wand selectors bounded to values 22..36 plus only the generic B55E-B57B save loop and B914-B939 load loop over 1..200. Every direct reference names one of the listed fields; the reserved ranges have no gameplay use sites and are zero in all five supplied saves, but import/export preserves them."
+    }
+  ],
+  "binary_sidecar": {
+    "name": "explored_cells",
+    "file_extension": ".BIN",
+    "format": "QuickBASIC BSAVE",
+    "payload_bytes": 6045,
+    "payload_data_range": "9B06-B2A2 inclusive",
+    "load_destination": "DUNSMALL B964-B97B explicitly passes DS:9B06",
+    "observed_header_offsets": ["9B06", "4020", "4050"],
+    "grid": {
+      "levels": 71,
+      "level_first": 0,
+      "level_last": 70,
+      "rows_per_level": 21,
+      "columns_per_row": 21,
+      "element_bytes": 4,
+      "element_type": "QuickBASIC single precision used as an integer bit mask",
+      "index_expression": "level * 21 + y",
+      "bit_expression": "1 << (20 - x)"
+    },
+    "mapped_grid_bytes": 5964,
+    "trailing_padding_bytes": 81,
+    "padding_initial_value": 0,
+    "note": "DUNSMALL computes 9B06 + 4 * (level * 21 + y), then extracts or sets bit 20-x. Its save routine at B57D-B5C4 uses the fixed inclusive endpoint B2A2, extending 81 bytes beyond the grid. On load, B964-B97B passes DS:9B06 to BLOAD, so the BSAVE header's stored segment/offset is ignored by the original runtime. The five supplied sidecars confirm multiple header addresses while retaining the same 6045-byte logical payload. The trailing range is zero-initialized, has no static read/write use sites, and is zero in all five supplied sidecars. Import/export preserves both it and the original header words verbatim for byte-exact round trips."
+  }
+}

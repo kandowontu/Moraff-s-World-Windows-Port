@@ -4,6 +4,23 @@
 #include "mw_wilderness.h"
 #include "mw_model_viewer.h"
 #include "mw_integrity.h"
+#include "mr_data.h"
+#include "mr_world.h"
+#include "mr_save.h"
+#include "mr_character.h"
+#include "mr_spells.h"
+#include "mr_items.h"
+#include "mr_monsters.h"
+#include "mr_combat.h"
+#include "mr_loot.h"
+#include "mr_progression.h"
+#include "mr_town.h"
+#include "mr_input.h"
+#include "mr_session.h"
+#include "mr_frontend.h"
+#include "mr_assets.h"
+#include "mr_render.h"
+#include "mr_game.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1019,6 +1036,23 @@ int main(int argc, char *argv[]) {
     int test_wilderness_mode = 0;
     int test_model_viewer_mode = 0;
     int test_title_mode = 0;
+    int test_revenge_data_mode = 0;
+    int test_revenge_world_mode = 0;
+    int test_revenge_save_mode = 0;
+    int test_revenge_character_mode = 0;
+    int test_revenge_spells_mode = 0;
+    int test_revenge_items_mode = 0;
+    int test_revenge_monsters_mode = 0;
+    int test_revenge_combat_mode = 0;
+    int test_revenge_loot_mode = 0;
+    int test_revenge_progression_mode = 0;
+    int test_revenge_town_mode = 0;
+    int test_revenge_input_mode = 0;
+    int test_revenge_session_mode = 0;
+    int test_revenge_frontend_mode = 0;
+    int test_revenge_assets_mode = 0;
+    int test_revenge_render_mode = 0;
+    int test_revenge_game_mode = 0;
     int test_x = 19, test_y = 20, test_floor = 787;
     int test_monster_type = 57; /* default: ball */
 
@@ -1075,6 +1109,40 @@ int main(int argc, char *argv[]) {
             test_model_viewer_mode = 1;
         } else if (strcmp(argv[i], "--test-title") == 0) {
             test_title_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-data") == 0) {
+            test_revenge_data_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-world") == 0) {
+            test_revenge_world_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-save") == 0) {
+            test_revenge_save_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-character") == 0) {
+            test_revenge_character_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-spells") == 0) {
+            test_revenge_spells_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-items") == 0) {
+            test_revenge_items_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-monsters") == 0) {
+            test_revenge_monsters_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-combat") == 0) {
+            test_revenge_combat_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-loot") == 0) {
+            test_revenge_loot_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-progression") == 0) {
+            test_revenge_progression_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-town") == 0) {
+            test_revenge_town_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-input") == 0) {
+            test_revenge_input_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-session") == 0) {
+            test_revenge_session_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-frontend") == 0) {
+            test_revenge_frontend_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-assets") == 0) {
+            test_revenge_assets_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-render") == 0) {
+            test_revenge_render_mode = 1;
+        } else if (strcmp(argv[i], "--test-revenge-game") == 0) {
+            test_revenge_game_mode = 1;
         }
     }
 
@@ -1082,6 +1150,185 @@ int main(int argc, char *argv[]) {
 
     printf("Moraff's World - Native Port\n");
     printf("Data directory: %s\n", data_dir);
+
+    if (test_revenge_data_mode) {
+        char revenge_error[512];
+        int ok = mr_data_self_test("revenge", revenge_error,
+                                   sizeof(revenge_error));
+        printf("Moraff's Revenge static-data loader: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_world_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_world_self_test("revenge", revenge_error,
+                                   sizeof(revenge_error));
+        printf("Moraff's Revenge dungeon-resource loader: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_save_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_save_self_test("revenge", revenge_error,
+                                  sizeof(revenge_error));
+        printf("Moraff's Revenge save decoder/round-trip: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_character_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_character_self_test(revenge_error, sizeof(revenge_error));
+        printf("Moraff's Revenge character formulas/RNG: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_spells_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_spells_self_test(revenge_error, sizeof(revenge_error));
+        printf("Moraff's Revenge spell formulas: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_items_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_items_self_test(revenge_error, sizeof(revenge_error));
+        printf("Moraff's Revenge item/wand/pill formulas: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_monsters_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_monsters_self_test(revenge_error, sizeof(revenge_error));
+        printf("Moraff's Revenge monster formulas: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_combat_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_combat_self_test(revenge_error, sizeof(revenge_error));
+        printf("Moraff's Revenge monster-turn formulas: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_loot_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_loot_self_test(revenge_error, sizeof(revenge_error));
+        printf("Moraff's Revenge post-combat reward formulas: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_progression_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_progression_self_test(revenge_error,
+                                          sizeof(revenge_error));
+        printf("Moraff's Revenge progression/death formulas: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_town_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_town_self_test(revenge_error, sizeof(revenge_error));
+        printf("Moraff's Revenge town/economy formulas: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_input_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_input_self_test(revenge_error, sizeof(revenge_error));
+        printf("Moraff's Revenge input/movement dispatch: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_session_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_session_self_test("revenge", revenge_error,
+                                      sizeof(revenge_error));
+        printf("Moraff's Revenge session state machine: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_frontend_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_frontend_self_test("revenge", revenge_error,
+                                       sizeof(revenge_error));
+        printf("Moraff's Revenge BEGIN/F8 frontend data flow: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_assets_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_assets_self_test("revenge", revenge_error,
+                                     sizeof(revenge_error));
+        printf("Moraff's Revenge original monster graphics: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_render_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_render_self_test("revenge", revenge_error,
+                                    sizeof(revenge_error));
+        printf("Moraff's Revenge disassembled renderer layout: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
+
+    if (test_revenge_game_mode) {
+        char revenge_error[512] = {0};
+        int ok = mr_game_self_test("revenge", revenge_error,
+                                  sizeof(revenge_error));
+        printf("Moraff's Revenge native BEGIN/session bridge: %s\n",
+               ok ? "PASS" : "FAIL");
+        if (!ok) printf("%s\n", revenge_error);
+        SDL_Quit();
+        return ok ? 0 : 2;
+    }
 
     if (!has_game_data(data_dir)) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,

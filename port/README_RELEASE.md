@@ -1,6 +1,6 @@
 # Moraff's World — Native Windows Edition
 
-Version 1.1.01 for 64-bit Windows.
+Version 1.1.2 for 64-bit Windows.
 
 An unofficial native Windows preservation port and Enhanced Edition of
 **Moraff's World**, the DOS dungeon crawler created by **Steve Moraff** and
@@ -31,6 +31,38 @@ original game files.
 3. The files must sit directly beside `moraffs_world.exe`, not in a
    subdirectory.
 4. Run `moraffs_world.exe`.
+
+To enable the statically reconstructed Moraff's Revenge bonus game, copy its
+original 3.3 data into a local `revenge` subdirectory. The exact list is in
+`REVENGE_FILES_REQUIRED.md`; no DOSBox or DOS executable is launched.
+
+The highlighted **Moraff's Revenge Advanced 3.3** panel on either character
+selection page launches Steve Moraff's 1989 predecessor to Moraff's
+World. It is a separate 70-floor dungeon RPG with its own five-character
+roster, saves, town, monsters, equipment, and magic. Press `R` or click the
+panel; Revenge never reads or modifies World or Colosseum saves.
+
+The Revenge reconstruction is undergoing a strict routine-by-routine static
+disassembly audit. In Version 1.1.2, 97 recovered routines are verified, 10
+are documented native adaptations, and 60 remain unresolved. It is playable
+but is not yet represented as fully 1:1 certified. See
+`REVENGE_PORT_AUDIT.md` for the exact evidence and remaining work.
+
+In Revenge, `I` opens the preparation-item selector outside battle and the
+battle-item selector during a fight. The DOS original could trap the player
+in this selector when no listed item was owned; the native port fixes that
+soft lock, and `Esc` or `L` always returns to play. On dungeon floors 1-69,
+true chutes are circular marks and work automatically rather than with `U` or
+`D`: walk onto one and the character falls one floor while remaining at the
+same map coordinates. To enter the dungeon from town, find a filled-square
+down-ladder mark, stand on it, and press `D`; hollow squares are up ladders and
+use `U`. Lettered town-service marks (`I`, `B`, `T`, `S`, or `W`) announce a
+rope when occupied and are entered with `U`.
+
+During a Revenge fight, press `S` for a sword, `M` for a mace, `K` for a
+knife, or `F` for fists. The selected weapon must be owned; every new
+character starts with a knife, and fists are always available. `H` opens the
+original complete fighting-options help chapter.
 
 The port verifies the size, CRC-32, and SHA-256 checksum of `MW.EXE` and
 `WORLD.EXE` before it starts. See
@@ -108,6 +140,10 @@ only the selected Colosseum record.
 - `COLOSSEUM.md` — separate-save roguelike arena mode
 - `HOTKEYS.md` — controls and optional diagnostic shortcuts
 - `CREDITS.md` — original-game, port, and preservation credits
+- `REVENGE_FILES_REQUIRED.md` — original Revenge 3.3 data needed by its
+  native static reconstruction
+- `REVENGE_PORT_AUDIT.md` — strict Revenge parity status and routine-level
+  evidence
 - `THIRD_PARTY_NOTICES.md` — SDL and build-tool acknowledgements
 - `LICENSE_PORT.txt` — license for the port code only
 

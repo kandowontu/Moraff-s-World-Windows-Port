@@ -1,0 +1,322 @@
+{
+  "schema": "moraffs-revenge-advanced-3.3-renderer-v3",
+  "method": "Static reconstruction from DUNSMALL.EXE, BRUN30.EXE, Microsoft QuickBASIC 3 runtime symbols, and the original F2.COM sequential data file. DOSBox is not used.",
+  "static_graphics_ir": {
+    "input": "DUNSMALL.qb3.instructions.json",
+    "output": "DUNSMALL.qb3.graphics.json",
+    "extractor": "extract_qb3_graphics.py",
+    "method": "Groups the exact QuickBASIC 3 runtime handler sequences for LINE, LINE-from-current, CIRCLE, PAINT, GET, PUT, and VIEW while retaining their complete static coordinate setup instruction slices.",
+    "dunsmall_counts": {
+      "line": 40,
+      "line_from_current": 6,
+      "circle": 1,
+      "paint": 2,
+      "get": 20,
+      "put": 24,
+      "view": 11
+    },
+    "runtime_handler_evidence": {
+      "line": ["$LI4 BRUN30:EB23", "$LI5 BRUN30:EA22", "$LI6 BRUN30:EA39"],
+      "circle": ["$PCO BRUN30:EB1E", "$CIR BRUN30:E346"],
+      "paint": ["$PCO BRUN30:EB1E", "$PA1 BRUN30:E243"],
+      "get": ["$GE3 BRUN30:E6CB", "$GE4 BRUN30:E6DC", "$GE2 BRUN30:E6F6"],
+      "put": ["$PU2 BRUN30:E7FA", "$PU1 BRUN30:E808"],
+      "view": ["BRUN30:3CC3", "BRUN30:3CD9", "BRUN30:3D11", "BRUN30:3DA2"]
+    }
+  },
+  "display": {
+    "basic_statement": "SCREEN 1",
+    "address": "DUNSMALL:01ED-01F0",
+    "width": 320,
+    "height": 200,
+    "bits_per_pixel": 2,
+    "adapter": "CGA four-color graphics mode",
+    "text_grid": {
+      "columns": 40,
+      "rows": 25,
+      "cell_width": 8,
+      "cell_height": 8
+    }
+  },
+  "f2_com": {
+    "format": "QuickBASIC sequential ASCII records",
+    "load_address": "DUNSMALL:BCE8-BE3F",
+    "records": 64,
+    "numeric_records": {
+      "depth_geometry": {
+        "records": "1-6",
+        "basic_indices": "1-6",
+        "pairs": [[0, 0], [9, 9], [15, 15], [19, 19], [22, 22], [24, 24]],
+        "destinations": ["DS:1EB6", "DS:1EC6"],
+        "evidence": "DUNSMALL:BD00-BD2F"
+      },
+      "viewport_origins": {
+        "records": "7-13",
+        "basic_indices": "1-7",
+        "pairs": [[214, 57], [267, 95], [214, 137], [161, 95], [214, 57], [267, 95], [214, 137]],
+        "destinations": ["DS:1A06", "DS:1A26"],
+        "evidence": "DUNSMALL:BD38-BD69"
+      },
+      "projection_rows": {
+        "records": "14-18",
+        "basic_indices": "1-5",
+        "values": [
+          [0, 0, 0, 0, 0, 0, 0, 0],
+          [9, 9, 3, 6, 16.25, 18.25, 3, 6],
+          [15, 15, 11, 13, 19.75, 21.35, 11, 13],
+          [19, 19, 16.33333, 16.66667, 22.08333, 23.41667, 16.33333, 17.66667],
+          [22, 22, 20, 20, 23.75, 25.08333, 20, 21]
+        ],
+        "destinations": ["DS:1EB6", "DS:1EC6", "DS:21AA", "DS:21BA", "DS:216A", "DS:217A", "DS:218A", "DS:219A"],
+        "evidence": "DUNSMALL:BD72-BDE9"
+      }
+    },
+    "string_records": {
+      "records": "19-64",
+      "groups": [
+        {"records": "19-27", "meaning": "inventory headings"},
+        {"records": "28-36", "meaning": "loot item names"},
+        {"records": "37-49", "meaning": "item help descriptions"},
+        {"records": "50-59", "meaning": "combat hit/miss messages"},
+        {"records": "60-64", "meaning": "monster special-attack messages"}
+      ],
+      "evidence": "DUNSMALL:BDF2-BF4D"
+    }
+  },
+  "viewports": {
+    "front": {"x": 214, "y": 57, "width": 53, "height": 54},
+    "right": {"x": 267, "y": 95, "width": 53, "height": 55},
+    "back": {"x": 214, "y": 137, "width": 53, "height": 54},
+    "left": {"x": 161, "y": 95, "width": 53, "height": 55},
+    "labels": {
+      "front": "LOCATE 7,28",
+      "left": "LOCATE 20,22",
+      "right": "LOCATE 20,36",
+      "back": "LOCATE 25,29",
+      "evidence": "DUNSMALL:4BC6-4C24"
+    },
+    "direction_order": "1=north, 2=east, 3=south, 4=west",
+    "view_direction": "The first pass uses player facing. Subsequent passes rotate through all four cardinal directions.",
+    "evidence": "DUNSMALL:59DA-5A19, 61AF-6296"
+  },
+  "cached_viewport_rotation": {
+    "rotation_index": "(previous rendered cardinal direction - current player facing) modulo 4",
+    "compute": "DUNSMALL:580F-5836",
+    "restore": "DUNSMALL:5837-58F6",
+    "origin_tables": {
+      "x": "DS:1A06",
+      "y": "DS:1A26",
+      "basic_indices": "1..7",
+      "pairs": [[214, 57], [267, 95], [214, 137], [161, 95], [214, 57], [267, 95], [214, 137]]
+    },
+    "bitmap_buffers": ["DS:52F2", "DS:530A", "DS:58D4", "DS:5300"],
+    "put_order": "front, right, back, left buffers use table indices rotation+1 through rotation+4",
+    "put_modes": ["XOR", "PSET", "PSET", "XOR"],
+    "native_equivalence": "The native compositor redraws all four cardinal rays directly in the rotated final pane order instead of replaying the original GET/PUT cache optimization."
+  },
+  "combat_monster_redraw": {
+    "entry": "DUNSMALL:78FF",
+    "background_direction": "(player facing - 2) wrapped to 1..4",
+    "single_view_flag": "sets DS:B66E to one and tail-jumps to DUNSMALL:5A00",
+    "result": "redraws the opposite/back pane once, resets VIEW, then falls through DUNSMALL:6BAF to PUT the current-cell large monster at absolute (225,112)",
+    "native_equivalence": "The native combat frame redraws all four panes before making the same absolute monster PUT; this preserves the final pixels while replacing the original partial-redraw optimization."
+  },
+  "renderer_state": {
+    "DS:B65E": "rendered cardinal direction as integer",
+    "DS:B666": "same render direction as MBF single",
+    "DS:B66E": "single-view redraw flag; zero renders and captures all four cardinal views, one redraws the current facing view",
+    "DS:B674": "active viewport: 1 front, 2 right, 3 back, 4 left",
+    "DS:B67A": "visible depth limit for the active direction",
+    "DS:B67E": "current monster-sprite render depth",
+    "DS:195E": "projected monster code by depth",
+    "DS:198A": "eight-byte visible-depth limit by cardinal direction",
+    "evidence": "DUNSMALL:59DA-5A19, 6144-6296, 69BC-6BAF, 6DE7-6EED, 78D8-792F"
+  },
+  "first_person_compositor": {
+    "viewport_local_bounds": [0, 0, 52, 53],
+    "depth_range": "1..6, stopping after a center value >= 6",
+    "wall_colors": {
+      "color_mode": 1,
+      "monochrome_mode": 3,
+      "address": "DS:19C8"
+    },
+    "door_color": {
+      "value": 2,
+      "address": "DS:19C6"
+    },
+    "brun30_line_modes": {
+      "-1": "ordinary LINE",
+      "0": "LINE B outline rectangle",
+      "1": "LINE BF filled rectangle",
+      "evidence": "BRUN30:$LI6"
+    },
+    "edge_rules": {
+      "vertical": "draw when current side >= 6, next-depth side >= 6, or center >= 6",
+      "ceiling": "draw when dungeon level > 0 or center >= 6",
+      "open_side_0_through_5": "depths 2..6 emit the recovered inset outline box",
+      "wall_side_8_through_9": "emit upper and lower perspective connectors",
+      "door_side_6_through_7": "emit connectors and a four-edge polygon through depth 5; PAINT its interior at depths 2 and 3"
+    },
+    "side_door_projection": {
+      "columns": ["a=row[2]", "b=row[3]", "c=row[4]", "d=row[5]", "e=row[6]", "f=row[7]"],
+      "right_polygon": [["a", "53-e"], ["a", "c"], ["b", "d"], ["b", "53-f"]],
+      "left_polygon": "mirror right polygon x coordinates around x=52",
+      "rounding": "QB3 $CINFAC; positive halves round upward",
+      "evidence": "DUNSMALL:64B3-6855; BRUN30:A942-A947"
+    },
+    "center_face": {
+      "solid_8_through_9": "draw bottom crossbar and stop",
+      "door_6_through_7": "draw bottom crossbar, filled door slab, and stop",
+      "door_inner_x": "x + (52 - 2*x) / 3",
+      "door_inner_y": "y + (53 - 2*y) / 3",
+      "depth_6_offset": "add one pixel to both slab x coordinates",
+      "evidence": "DUNSMALL:6858-699D"
+    },
+    "native_entry_point": "mr_render_draw_first_person",
+    "evidence": "DUNSMALL:62E2-699D"
+  },
+  "map": {
+    "cell_size": 8,
+    "full_redraw": {
+      "iteration_order": "x outer, y inner",
+      "x": "1..20",
+      "y": "1..19",
+      "cell_boundary_origin": ["(x - 1) * 8", "y * 8 + 37"],
+      "evidence": "DUNSMALL:4CC3-53ED"
+    },
+    "player_cell_origin": {
+      "x": "INT(player_x * 8 - 7)",
+      "y": "INT(player_y * 8 + 38)",
+      "evidence": "DUNSMALL:4A52-4A79"
+    },
+    "captured_player_background": {
+      "width": 7,
+      "height": 7,
+      "evidence": "DUNSMALL:4A7C-4A9A"
+    },
+    "reveal": {
+      "row_index": "dungeon_level * 21 + player_y",
+      "column_bit": "20 - player_x",
+      "north_edge_gate": "row 1 or northern neighbor unrevealed; a revealed northern neighbor owns the shared seam as its south edge",
+      "west_edge_gate": "column 1 or western neighbor unrevealed; a revealed western neighbor owns the shared seam as its east edge",
+      "east_and_south": "considered for every revealed cell",
+      "evidence": "DUNSMALL:3F5A-3FA8, 5417-548A"
+    },
+    "wall_raster": {
+      "values_0_through_5": "no internal line",
+      "values_6_through_7": "passable line with black door opening",
+      "values_8_through_9": "solid line",
+      "horizontal_door_gap": "x0+3 through x0+5",
+      "vertical_door_gap": "y0+2 through y0+6",
+      "solid_boundaries": "row 1, row 19, column 1, column 20",
+      "evidence": "DUNSMALL:4D52-52A1"
+    },
+    "vertical_feature_raster": {
+      "chute_0": "radius-3 circle centered at x0+4,y0+4",
+      "up_ladder_negative": "outline box x0+2,y0+2 through x0+6,y0+6",
+      "down_ladder_1_through_3": "filled box x0+2,y0+2 through x0+6,y0+6",
+      "false_floor_25": "suppressed because values above 3 are not drawn",
+      "evidence": "DUNSMALL:52A2-5393"
+    },
+    "player_glyphs": {
+      "descriptor": "DS:BA1E",
+      "payload": "DS:BA22 = 18 19 1A 1B (CP437 up, down, right, left)",
+      "capture": "print each glyph and GET columns 0..6, rows 0..6",
+      "facing_mapping": "1=up, 2=right, 3=down, 4=left",
+      "put_mode": "XOR",
+      "evidence": "DUNSMALL:049D-050C, 486D-48F4"
+    },
+    "colors": {
+      "color_mode": {
+        "walls": 2,
+        "ladders": 1,
+        "chute_town_and_player": 3
+      },
+      "monochrome_mode": {
+        "walls": 3,
+        "ladders": 3,
+        "chute_town_and_player": 3
+      },
+      "evidence": "DUNSMALL initializes DS:19C8=1 and DS:19BC=2 in color mode, both to 3 in monochrome; chute and captured glyph paths retain default logical color 3"
+    }
+  },
+  "background_buffers": [
+    {
+      "rectangle": [0, 32, 160, 199],
+      "capture": "DUNSMALL:49F8-4A13",
+      "restore": "DUNSMALL:3FA9-3FBE"
+    },
+    {
+      "rectangle": [161, 32, 319, 56],
+      "capture": "DUNSMALL:4A17-4A33",
+      "restore": "DUNSMALL:3FB5-3FD0"
+    },
+    {
+      "rectangle": [266, 57, 319, 94],
+      "capture": "DUNSMALL:4A36-4A4E",
+      "restore": "DUNSMALL:3FD0-3FE2"
+    }
+  ],
+  "monster_bitmaps": {
+    "visibility": {
+      "center_values_6_through_9": "stop before the occupancy lookup, so doors hide monsters behind them",
+      "center_values_0_through_5": "read occupancy one cell beyond the current center edge",
+      "depth_1": "the adjacent cell, not the player cell",
+      "evidence": "DUNSMALL:5AC0-6144"
+    },
+    "projected_puts": [
+      {"depth": 1, "family": "large", "variant": 0, "local_xy": [11, 25]},
+      {"depth": 2, "family": "large", "variant": 1, "local_xy": [13, 26]},
+      {"depth": 3, "family": "compact", "variant": 0, "local_xy": [15, 25]},
+      {"depth": 4, "family": "compact", "variant": 1, "local_xy": [17, 24]},
+      {"depth": 5, "family": "compact", "variant": 2, "local_xy": [18, 24]}
+    ],
+    "projected_put_evidence": "DUNSMALL:69FA-6B3B",
+    "combat_put": {
+      "family": "large",
+      "variant": 1,
+      "absolute_xy": [225, 112],
+      "evidence": "DUNSMALL:6C62-6C93; 6C62 stores BASIC selector one before 6F52"
+    },
+    "large": {
+      "resource_pairs": [["3.NUM", "4.NUM"], ["3A.NUM", "4A.NUM"]],
+      "art_groups": 15,
+      "variants_per_group": 2,
+      "slot_stride_words": 125,
+      "selection_routine": "DUNSMALL:6F52-6FBC"
+    },
+    "compact": {
+      "resource_pairs": [["5.NUM", "6.NUM"], ["5A.NUM", "6A.NUM"]],
+      "art_groups": 18,
+      "variants_per_group": 3,
+      "slot_stride_words": 45,
+      "selection_routine": "DUNSMALL:6EEE-6F51"
+    },
+    "bitmap_format": "QuickBASIC SCREEN 1 GET image: little-endian horizontal-width-in-bits and height words followed by byte-aligned packed two-bit CGA scanlines; unused fixed-slot bytes follow the complete image rather than padding each row",
+    "pixel_width": "header_width_bits / 2",
+    "put_operation": "unqualified BASIC PUT defaults to XOR; zero source pixels preserve the destination",
+    "floor_resource_switch": "floors 1-34 use the unlettered set; floors 35-70 use the A set",
+    "evidence": "DUNSMALL:4C6B-4CC0, 69D6-6B5A, 6BAF-6CC4"
+  },
+  "corrected_routine_boundaries": [
+    {"address": "3F5A", "name": "reveal_player_map_cell"},
+    {"address": "3FA9", "name": "restore_main_screen_backgrounds"},
+    {"address": "3FE3", "name": "restore_player_map_cell_background"},
+    {"address": "49F8", "name": "capture_upper_left_background"},
+    {"address": "4A17", "name": "capture_upper_right_backgrounds"},
+    {"address": "4A52", "name": "compute_player_map_pixel"},
+    {"address": "4A7C", "name": "capture_player_map_cell_background"},
+    {"address": "4CC3", "name": "redraw_main_dungeon_screen"},
+    {"address": "5417", "name": "load_current_explored_row"},
+    {"address": "580F", "name": "compute_cached_viewport_rotation"},
+    {"address": "5837", "name": "restore_rotated_cached_viewports"},
+    {"address": "593C", "name": "render_first_person_dungeon"},
+    {"address": "6BAF", "name": "draw_combat_monster_at_player_cell"},
+    {"address": "6CC5", "name": "record_projected_monster"},
+    {"address": "6DE7", "name": "capture_active_viewport_background"},
+    {"address": "6EEE", "name": "select_compact_monster_bitmap"},
+    {"address": "6F52", "name": "select_large_monster_bitmap"},
+    {"address": "78FF", "name": "redraw_opposite_view_and_combat_monster"},
+    {"address": "7932", "name": "rebuild_current_floor_monster_occupancy"}
+  ]
+}

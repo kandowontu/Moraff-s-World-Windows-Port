@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.1.01"
+    [string]$Version = "1.1.2"
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,6 +40,8 @@ $files = [ordered]@{
     (Join-Path $buildRoot "moraffs_world.exe") = "moraffs_world.exe"
     (Join-Path $sourceRoot "README_RELEASE.md") = "README.md"
     (Join-Path $sourceRoot "ORIGINAL_FILES_REQUIRED.md") = "ORIGINAL_FILES_REQUIRED.md"
+    (Join-Path $sourceRoot "REVENGE_FILES_REQUIRED.md") = "REVENGE_FILES_REQUIRED.md"
+    (Join-Path $sourceRoot "REVENGE_PORT_AUDIT.md") = "REVENGE_PORT_AUDIT.md"
     (Join-Path $sourceRoot "CREDITS.md") = "CREDITS.md"
     (Join-Path $sourceRoot "THIRD_PARTY_NOTICES.md") = "THIRD_PARTY_NOTICES.md"
     (Join-Path $sourceRoot "LICENSE_PORT.txt") = "LICENSE_PORT.txt"
@@ -67,6 +69,9 @@ foreach ($name in $originalFiles) {
     if (Test-Path -LiteralPath (Join-Path $packageRoot $name)) {
         throw "Refusing to package copyrighted original file: $name"
     }
+}
+if (Test-Path -LiteralPath (Join-Path $packageRoot "revenge")) {
+    throw "Refusing to package copyrighted original Revenge resources."
 }
 
 Compress-Archive -LiteralPath $packageRoot -DestinationPath $archivePath

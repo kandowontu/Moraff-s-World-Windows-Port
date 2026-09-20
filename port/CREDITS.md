@@ -39,6 +39,10 @@ presentation, keyboard, mouse, timers, and audio device access.
 See `THIRD_PARTY_NOTICES.md` for SDL's complete license notice and build-tool
 acknowledgements.
 
+The Moraff's Revenge text path uses public-domain IBM BIOS/VGA 8x8 font data
+credited to Marcel Sondaar and International Business Machines, matching the
+BIOS service selected by the original executable.
+
 ## Build tools
 
 This Windows build was produced with:

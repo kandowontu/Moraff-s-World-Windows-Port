@@ -32,5 +32,10 @@ int  mw_audio_init(MwAudio *audio);
 void mw_audio_shutdown(MwAudio *audio);
 void mw_audio_set_enabled(MwAudio *audio, int enabled);
 void mw_audio_play(MwAudio *audio, MwSoundEffect effect);
+/* QuickBASIC 3 PLAY/MML subset used by Moraff's Revenge's disassembled
+ * 05A0-05EE music routine. Playback is queued asynchronously, matching the
+ * original MB (music background) mode. */
+void mw_audio_play_qbasic_mml(MwAudio *audio, const char *mml);
+int  mw_audio_qbasic_mml_self_test(void);
 
 #endif

@@ -1,0 +1,46 @@
+{
+  "format": "Moraff's Revenge Advanced 3.3 progression/death schema v1",
+  "method": "Static DUNSMALL.EXE and BRUN30.EXE control/data-flow reconstruction; neither executable was run.",
+  "experience": {
+    "settlement_location": "Flea Bag Inn and Yuppydom Inn stay flow",
+    "threshold": "900 * 1.2^((player_level^1.1)^1.1) + 180 * player_level^2.4 - 650",
+    "comparison": "experience + pending_experience must be strictly greater than the current threshold",
+    "consumption": "thresholds are not subtracted; after all level gains, pending experience is added to stored experience and reset to zero",
+    "level_health_gain": "INT(RND * 15) + health_growth_factor + 1, added identically to current and maximum health",
+    "evidence": ["DUNSMALL:2044-2112"]
+  },
+  "spell_points": {
+    "aptitude": "INT((Intelligence - 12) / 3 + Wisdom * 0.25 - 3)",
+    "scaled_aptitude": "INT(aptitude * player_level / 3) for Wizards; divisor 6 for Fighters",
+    "class_base": "3 * player_level + 2 for Wizards; player_level - 4 for Fighters",
+    "minimum": 0,
+    "evidence": ["DUNSMALL:2115-21F2"]
+  },
+  "fountain_of_youth": {
+    "command_gate": "dungeon_level = 70 and player x/y equal persistent values 10/11; D drinks",
+    "delay": "prints YOU FEEL STRANGE... and waits four seconds before mutation",
+    "map_reset": "clear explored[level][row] for levels 1..70 and rows 1..20; preserve level 0 and row 0",
+    "next_fountain": "x = INT(RND*15)+2; y = INT(RND*15)+2",
+    "advancement_reset": "player level, experience, and pending experience become zero; position becomes (10,10)",
+    "wealth": "pocket_money = CDBL(carried_treasure), replacing its old value; carried_treasure = 0",
+    "health": "pre-attribute-boost health factor is INT(Health*2-26), or FIX(factor*.5) below one; max/current HP = INT(RND*10)+factor+5",
+    "dungeon": "dungeon generation seed += 2 and dungeon level becomes zero",
+    "attributes": "all six attributes gain five; spell points are recomputed; invisibility and exact-one preparation markers are cleared with their bonuses removed",
+    "save_boundary": "SAVE occurs after the reset but before the post-death derived combat/health/agility factors are recomputed",
+    "evidence": ["DUNSMALL:0844-087C", "DUNSMALL:0CE0-0D2B", "DUNSMALL:3D83-3F57", "DUNSMALL:B2CF-B307"]
+  },
+  "death": {
+    "trigger": "player level below zero or current health below zero",
+    "first_roll": "INT(RND * 4) + 1; values 3..4 permanently remove the character",
+    "second_roll": "INT(RND * 2) + 1; value 1 reincarnates, value 2 attempts a raise",
+    "raise_check": "INT(RND * 23) + 1 <= Health (BASIC attribute 4 at DS:1FA2)",
+    "successful_raise": "restore current health, move to town (14,12), reduce Health by one; the following 2F3C acknowledgement reaches 2F71 and clamps all attributes to at least one before derived factors are recomputed",
+    "reincarnation": "restore current health, set level/experience to zero, reroll all attributes as INT(RND*13)+3, add 10 to one random attribute, move to town, recompute derived factors",
+    "survivor_input": "the generic Hit any key helper reads one nonempty key, then the same DUNSMALL session resumes in town",
+    "permanent_files": "rewrite F5.COM without the selected name; delete selected N.EXE/N.BIN; rename every later numbered pair down one slot",
+    "permanent_world_state": "B5C8 prints Better luck next time! and BSAVEs 1.NUM/2.NUM; it is not a character SAVE",
+    "hall_summary": "color flag, nonnegative player level, class, selected name, pocket money, bank money, last rendered dungeon level, and current shallow/deep monster name",
+    "permanent_input": "fixed 18-poll drain, then generic Hit any key; F8 inserts/sorts the summary and returns to BEGIN",
+    "evidence": ["DUNSMALL:A013-A334", "DUNSMALL:B5C8-B673", "F8:00E9-056F"]
+  }
+}

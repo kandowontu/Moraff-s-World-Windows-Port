@@ -1,0 +1,335 @@
+{
+  "format": "Moraff's Revenge statically recovered input and timing schema v1",
+  "module": "DUNSMALL.EXE",
+  "evidence": "Recovered solely from 16-bit QuickBASIC 3 code and BRUN30 runtime handlers; DOSBox was not used.",
+  "key_representation": {
+    "quickbasic_source": "INKEY$",
+    "storage": "DS:B49C",
+    "arrow_strings": {
+      "up": {"bytes": [0, 72], "storage": "DS:B4A0"},
+      "right": {"bytes": [0, 77], "storage": "DS:B4A4"},
+      "down": {"bytes": [0, 80], "storage": "DS:B4A8"},
+      "left": {"bytes": [0, 75], "storage": "DS:B4AC"}
+    },
+    "first_byte_helper": {
+      "selector": "INT 3Fh selector BBh",
+      "runtime_public_name": "$LENB",
+      "actual_operation": "return first byte of nonempty string descriptor in BL",
+      "evidence": "BRUN30 9BC2-9BD5 dereferences descriptor data twice and loads one byte; call sites compare with ASCII 13, 27, 96 and 122"
+    },
+    "uppercase_range": {
+      "routine": "2F87-2FC7",
+      "converted": "ASCII 97 through 121 (a-y)",
+      "not_converted_original_quirk": "ASCII 122 (lowercase z)"
+    }
+  },
+  "startup_boundary": {
+    "sound_prompt": {
+      "routine": "0514-0545",
+      "text": "Sound (Y or N)?",
+      "initial_state": "disabled",
+      "enabled_only_by": "Y",
+      "rng_boundary": "0514 calls B9B3 first: one RND selects INT(RND*6) from the startup text-color table"
+    },
+    "loading_review": {
+      "routine": "BA10-BB9E",
+      "screen": "SCREEN 0, width 80",
+      "selection": "INT(RND*6)+1 chooses REVIEW.1 through REVIEW.6",
+      "rng_boundary": "BA15 consumes one RND for the default text color, then BA1E consumes another for INT(RND*6)+1 review selection",
+      "maximum_records": 24,
+      "leading_color_digit": "1 through 7 is removed and sets text color",
+      "marker_rewrite": "vertical bar becomes comma",
+      "loading_notice": "SCREEN 0 row 25 prints Please read this... and starts T135MNO3L4CD+F.L8D+DCD.D+16C4L4G>C while resources/character load",
+      "acknowledgement": "after character load, SCREEN 1 prints HIT ANY KEY and waits for one nonempty key",
+      "final_boundary": "restore SCREEN 1 and drain 18 INKEY$ polls at 059A"
+    }
+  },
+  "movement": {
+    "initial_facing": {"value": 4, "meaning": "west", "evidence": "01DA-01EA"},
+    "direction_codes": {"1": "north", "2": "east", "3": "south", "4": "west"},
+    "mode_toggle": {
+      "key": "Escape (ASCII 27)",
+      "state": "DS:B524",
+      "operation": "increment; when value becomes 2, replace with 0",
+      "routine": "10BE-10FC"
+    },
+    "relative_mode_zero": {
+      "up": "move one cell in current facing",
+      "right": "facing += 1, wrapped to 1..4",
+      "down": "facing += 2, wrapped to 1..4",
+      "left": "facing -= 1, wrapped to 1..4"
+    },
+    "cardinal_mode_one": {
+      "up": "face and move north",
+      "right": "face and move east",
+      "down": "face and move south",
+      "left": "face and move west"
+    },
+    "successful_step": {
+      "turn_counter": "DS:B474",
+      "initial": 1,
+      "increment": 1,
+      "condition": "only after destination monster and wall tests allow movement",
+      "routines": ["30D9", "3192", "3254", "3316"]
+    }
+  },
+  "main_command_dispatch": {
+    "routine": "0CD2-1052",
+    "case_normalization": "2F87 uppercase conversion (a-y only)",
+    "commands": {
+      "D": "descend through a positive vertical feature; at the level-70 fountain cell, drink from the fountain instead",
+      "V": "view player statistics",
+      "Q": "save and chain to BEGIN character selection",
+      "U": "show/use rope when applicable; ascend through a negative vertical feature",
+      "C": "cast a preparation spell",
+      "M": "show magic-item inventory",
+      "I": "use a preparation item",
+      "A": "offer to drop all carried treasure",
+      "H or ;": "open help at chapter H1",
+      "P": "pause; Q from the pause prompt saves and exits to DOS",
+      "E": "set the configurable 0..3000 action delay",
+      "T": "choose and take a pill",
+      "W": "choose and use a wand",
+      "O": "toggle sound and show SOUND ON/OFF for two seconds",
+      "#": "advance the primary color selector",
+      "@": "advance the secondary color selector",
+      "Escape": "toggle relative/cardinal arrow movement mode"
+    },
+    "not_a_main_command": {
+      "F": "F is handled inside combat at 8864; it is not dispatched by the exploration command table"
+    },
+    "pause_response_case": "the P command itself is normalized by the main/combat dispatcher, but 8019 reads the response through raw 2F71 and accepts uppercase Q only"
+  },
+  "combat_command_dispatch": {
+    "routine": "86E2-89B3 within combat_loop 803A",
+    "commands": {
+      "H or ;": "open help chapter H8",
+      "S": "attack with sword when owned",
+      "M": "attack with mace when owned",
+      "K": "attack with knife when owned",
+      "P": "pause using the shared 7FFB pause/Q-for-DOS routine",
+      "F": "attack with fists",
+      "C": "cast a battle spell",
+      "I": "use a battle magic item",
+      "T": "choose and take a pill",
+      "W": "choose and use a wand",
+      "B": "breathe fire while the persisted effect-expiry timer at DS:1BC2 remains active"
+    },
+    "movement": "combat first calls the ordinary exploration command/movement path at 871F. If movement separates player and monster, combat exits through 8E76; combat therefore does not lock out movement.",
+    "weapon_selector_values": {"sword": 1, "mace": 2, "knife": 3, "fists": 4}
+  },
+  "selection_subroutines": {
+    "spells": {
+      "preparation_entry": "35AC",
+      "battle_entry": "90D3",
+      "shared_selector": "C5D0-C7A4",
+      "level_input": "one INKEY$ character converted by VAL; valid range 1..6",
+      "point_gate": "selected level must not exceed current spell points",
+      "learned_masks": {
+        "preparation": "DS:5EAC + 4*level",
+        "battle": "DS:5EE0 + 4*level",
+        "first_spell_bit": 1,
+        "second_spell_bit": 2
+      },
+      "choice_input": "1 or 2 selects a nonblank learned name; 3 cancels; Escape is rewritten to 3; selecting a blank entry also cancels",
+      "zero_based_dispatch": "2*(level-1)+(choice-1)",
+      "preparation_entry_drain": "3590 performs the fixed 18-poll drain; the battle entry has no corresponding drain",
+      "preparation_presentation": {
+        "statistics_redirects": ["Cure", "Strength", "Speed", "Feather when it does not fall through"],
+        "sense_level": "prints YOU ARE ON LEVEL <n> and reads one nonempty raw key",
+        "sense_location": "prints X/Y and level on two lines and waits four TIMER seconds",
+        "ascend_transition": "prints POOF without a deliberate result wait",
+        "mocciolo_text": {"1": "WOW! (four seconds)", "5": "UH OH... (no deliberate wait)", "6": "Oh my God! (four seconds)"},
+        "silent_results": "duplicate effects plus Descend, Change Level, Invisibility, Heal, and Mocciolo outcomes 2 through 4 have no invented result message"
+      }
+    },
+    "preparation_items": {
+      "routine": "1340-1917",
+      "choices": {
+        "1": "teleport scroll",
+        "2": "scroll of seeing",
+        "3": "scroll of healing",
+        "4": "spell point scroll",
+        "5": "bag of holding when status bit 2 is set",
+        "6": "floor slosher when status bit 64 is set"
+      },
+      "unavailable_display": "the number remains visible but the item name is blank",
+      "ordinary_return": "one raw key is read; nonnumeric, out-of-range, and unavailable choices return immediately to the main loop, so Escape/L also leave through VAL(key)=0 without a displayed leave line",
+      "guild_information_mode": "invalid or unavailable choices repeat; uppercase L leaves",
+      "floor_slosher": {
+        "too_deep": "prints DOESN'T WORK THIS DEEP",
+        "success": "clears, prints YOU ARE SLIPPING THROUGH THE FLOOR., waits for one nonempty raw key, then changes floors"
+      }
+    },
+    "battle_items": {
+      "routine": "95BA-9A2C",
+      "choices": {
+        "1": "speed potion (carried item 5)",
+        "2": "fire potion (carried item 6)",
+        "3": "shielding potion (carried item 7)",
+        "4": "health potion (carried item 8)",
+        "5": "relocation potion (carried item 9)",
+        "6": "holy hand grenade (magic-item value 7)"
+      },
+      "unavailable_display": "the number remains visible but the item name is blank",
+      "ordinary_return": "one raw key is read; nonnumeric, out-of-range, and unavailable choices return immediately to the combat loop",
+      "guild_information_mode": "invalid or unavailable choices repeat; L or l leaves"
+    },
+    "wands": {
+      "routine": "7AA1-7C48",
+      "choices": "1..9",
+      "colors": ["purple", "brown", "black", "white", "orange", "yellow", "green", "red", "blue"],
+      "charge_storage": "persistent values 28..36 / DS:1C02..1C22",
+      "color_order_evidence": "7AE9-7B12 prints color_strings[10-choice] and reads persistent_values[27+choice]",
+      "unavailable_display": "---------------"
+    },
+    "pills": {
+      "routine": "7C49-7DC8",
+      "choices": "1..6",
+      "colors": ["blue", "red", "green", "yellow", "orange", "white"],
+      "count_storage": "persistent values 22..27 / DS:1BEA..1BFE",
+      "unavailable_display": "---------------"
+    },
+    "help": {
+      "routine": "C332-C5AF",
+      "files": "H1.OVL through H8.OVL opened as sequential text",
+      "page_size_records": 25,
+      "record_marker": "a leading tilde is removed and routes the record through the colored help renderer",
+      "chapter_dispatch": "H1 is the index; numeric choices chain to the matching chapter; H8 is combat help"
+    }
+  },
+  "repeat_and_delays": {
+    "held_key_repeat": {
+      "software_repeat_machine": false,
+      "behavior": "main loop polls INKEY$ once per pass; repeated held input is supplied by DOS BIOS keyboard typematic events",
+      "main_poll": "087F-0885",
+      "empty_key_loop": "0921-092C",
+      "configured_delay_acceleration": "draw_status_and_map applies the configured busy-loop delay only when the current explored bit is nonzero and DS:B5FA is at most 3; an arrow string increments B5FA and other input resets it, so the fifth consecutive typematic arrow and later repeats bypass that delay"
+    },
+    "idle_monster_update": {
+      "calibration_routine": "BF60-BFB9",
+      "calibration": "wait for a fresh TIMER tick, count tight-loop iterations for one second, then divide the count by 326",
+      "calibration_storage": "DS:B6D0",
+      "poll_routine": "7EEC-7F42",
+      "interval_formula": "MAX(INT((165-current_monster_level+player_level)*speed_calibration/20),8)",
+      "trigger": "INT(RND*interval)=1 calls 7001, which advances and wraps the floor-global monster cursor and calls the pursuit routine only for an odd global record",
+      "important_boundary": "runs in all three recovered polling controllers: exploration 08F3, combat 86E2, and shared modal reader 7DC9. The modal reader is used by spell levels/choices, wands, pills, battle items, drop treasure, defeat Return, and coin loot. Each 7DC9 entry calls 7EEC even if INKEY$ already returned a key. Level zero returns inside 7001 only after the 7EEC gate RND was consumed.",
+      "native_mapping": "mr_session_idle_monster_poll plus mr_read_dos_key_with_idle_monsters and mr_read_modal_key_with_idle_monsters; 326 normalized polls/second with speed_calibration=1 is algebraically equivalent to BF60's loops_per_second/326 calibration"
+    },
+    "keyboard_drain": {
+      "routine": "2FCB-2FF6",
+      "polls": 18,
+      "behavior": "fixed-count INKEY$ drain/debounce, not a wait-until-release loop",
+      "complete_key_semantics": "a zero-prefixed extended key is one two-byte INKEY$ string and therefore consumes one poll",
+      "call_sites": ["059A", "05EE", "19F7", "1E0A", "1F3D", "1FCD", "22F7", "2522", "281E", "2BBE", "3590", "3D73", "3D83", "8077", "8457", "9F91", "A23A", "A511", "A97C", "A997", "AC8D", "B0DA", "B308"]
+    },
+    "message_delay": {
+      "routine": "2F1A-2F34",
+      "seconds": 2,
+      "clock": "QuickBASIC TIMER",
+      "four_second_wrapper": "2F35-2F3B calls the two-second routine twice"
+    },
+    "menu_reentry_drains": {
+      "store": "281E is traversed on every recoverable store-menu restart",
+      "wizard_guild": "2BB8-2BBE clears and drains on every outer guild-menu restart"
+    },
+    "command_cycle_status": {
+      "routine": "4028-40F4",
+      "rings_of_health": "restore the stored ring count up to maximum HP on each status/redraw cycle",
+      "disease": "increment a positive counter; each exact multiple of 100 consumes INT(RND*6), drains that attribute by one, waits four seconds, and clamps all six attributes to at least one",
+      "warning": "You feel sick. You need a cure disease. "
+    },
+    "fountain": {
+      "prompt": "3D83 drains 18 polls, then overlays the two-line fountain prompt every command pass",
+      "drink": "3DAE clears and prints YOU FEEL STRANGE...; 3DC0 waits four seconds before the restart transition"
+    },
+    "music": {
+      "routine": "05A0-05EE",
+      "scheduler": "QuickBASIC PLAY MB background mode",
+      "scores": {
+        "temple": "DS:BA5E, selected at 2543",
+        "sleep": "DS:BA7C, selected at 1FC9",
+        "death": "DS:BAB8, selected at A013"
+      },
+      "sound_disabled_sleep_substitute": "four-second TIMER wait",
+      "kings_inn_additional_wait": "one unconditional four-second TIMER wait"
+    },
+    "combat_result_timing": {
+      "player_weapon_result": {
+        "routine": "8E12-8E34",
+        "seconds": 1,
+        "applies_when_damage_is_zero": true
+      },
+      "monster_extended_notice": {
+        "flag": "DS:B730",
+        "flag_setters": ["9DBB SQUASH", "9EE3 health drain", "9F14 strength drain", "9F40 disease/agility drain"],
+        "wait_and_drain": "9F8E-9F94",
+        "seconds": 2
+      },
+      "monster_final_result": {
+        "routine": "9FEC-A00E",
+        "seconds": 1
+      },
+      "battle_spell_result": {
+        "two_second_paths": [
+          "9529 no effect",
+          "9555 Speed, Strength, Heal, or God outcome 5",
+          "9569 damage"
+        ],
+        "bypass_paths": [
+          "successful Go Away",
+          "Rise",
+          "successful Auto Kill",
+          "God town warp",
+          "God full heal"
+        ],
+        "gas_success_prefix": "IT FALLS ASLEEP AND YOU KILL IT",
+        "damage_text": "YOU DO <amount> POINTS",
+        "wand_reentry": "yellow, green, and red wands enter Strength, Lightning, and Explosion respectively at 8926-896A and inherit the same result timing"
+      }
+    },
+    "defeat_and_loot_boundaries": {
+      "defeat": {
+        "text": ["YOU KILLED IT!!", "HIT RETURN"],
+        "drain": "A511",
+        "accepted_key": "ASCII 13 only",
+        "read_loop": "A514-A520"
+      },
+      "coin_take_leave": {
+        "drain": "A997",
+        "accepted_keys": ["T", "L"],
+        "too_heavy_branch": {
+          "predicate": "carried_weight + DS:52FC >= 350",
+          "text": "IT'S TOO HEAVY FOR YOU TO CARRY",
+          "drain": "A97C",
+          "input": "one nonempty key",
+          "take_leave_prompt_shown": false
+        }
+      },
+      "generic_drop_teaser": {
+        "drain": "AC8D",
+        "text": "YOU FIND...",
+        "delay": "ACA2 calls four-second wrapper 2F35"
+      },
+      "post_combat_sequence": {
+        "order": ["spellbook", "shallow weapon or armor", "wand", "pill", "generic drop"],
+        "spellbook_weapon_wand_pill_acknowledgement": "2F3C prints Hit any key and reads one nonempty key",
+        "generic_final_boundary": "B0DA drains 18 polls then calls 2F3C",
+        "attribute_book": {
+          "first_text": "Press any key to read it.",
+          "first_read": "B09F one nonempty key",
+          "result_text": "You feel very good.",
+          "final_read": "common B0DA/2F3C boundary"
+        }
+      }
+    },
+    "configured_delay": {
+      "storage": "DS:B542",
+      "prompt": "Try delays between 0 (Default) and 3000.",
+      "minimum": 0,
+      "maximum": 3000,
+      "upper_clamp": "0F53-0F63",
+      "consumer": "4127-4169 empty floating-point-counted loop in the monster/view update path"
+    }
+  }
+}

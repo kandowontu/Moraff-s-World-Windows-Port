@@ -1,0 +1,91 @@
+{
+  "format": "Moraff's Revenge 3.3 town mechanics recovered from DUNSMALL.EXE",
+  "method": "Static QB3 machine-code and initialized-MBF data-flow analysis; no DOS execution",
+  "entry_dispatch": {
+    "prompt": "There's a rope above. Hit U to climb it.",
+    "trigger": "U at a listed floor-zero coordinate",
+    "evidence": "DUNSMALL 10FD-132E",
+    "locations": [
+      {"id": 1, "coordinates": [[7, 3]], "service": "Flea Bag Inn", "destination": "1E0A"},
+      {"id": 2, "coordinates": [[3, 2]], "service": "Yuppydom Inn", "destination": "1F3D"},
+      {"id": 3, "coordinates": [[18, 17]], "service": "Kings Inn", "destination": "1FCD"},
+      {"id": 4, "coordinates": [[13, 3]], "service": "Bank", "destination": "22F7"},
+      {"id": 5, "coordinates": [[7, 15], [14, 12]], "service": "Temple", "destination": "2522"},
+      {"id": 6, "coordinates": [[18, 3], [13, 18], [2, 8]], "service": "Store", "destination": "281E"},
+      {"id": 7, "coordinates": [[6, 14]], "service": "Wizard's Guild", "destination": "2BB8"}
+    ]
+  },
+  "inns": [
+    {
+      "name": "Flea Bag Inn",
+      "price_jp": 10,
+      "healing": "health_current += 1, clamped to health_max; DS:B558 bit 0 instead heals fully",
+      "robbery": "INT(RND*10)=1 (10%)",
+      "disease": "after robbery, independently INT(RND*10)=1 (10%) sets disease to 1",
+      "evidence": "DUNSMALL 1E0A-1EDF; MBF doubles C156=10 and C15E=-10"
+    },
+    {
+      "name": "Yuppydom Inn",
+      "price_jp": 200,
+      "healing": "health_current += 3, clamped to health_max; DS:B558 bit 0 instead heals fully",
+      "robbery": "INT(RND*20)=1 (5%)",
+      "disease": "none",
+      "evidence": "DUNSMALL 1F3D-1FBA; MBF doubles C228=200 and C230=-200"
+    },
+    {
+      "name": "Kings Inn",
+      "price_jp": 6000,
+      "healing": "health_current = health_max",
+      "robbery": "none",
+      "disease": "none",
+      "evidence": "DUNSMALL 1FCD-2041; MBF doubles C28C=6000 and C294=-6000"
+    }
+  ],
+  "robbery_effects": {
+    "cleared": [
+      "pocket_money",
+      "knife_owned",
+      "sword_owned",
+      "mace_owned",
+      "magic_sword_bonus",
+      "magic_mace_bonus"
+    ],
+    "evidence": "DUNSMALL 1EE2-1F3C"
+  },
+  "bank": {
+    "on_entry": "all carried_treasure is added to pocket_money, carried_treasure becomes zero, bag coin-content value becomes 0.5",
+    "weight_after_exchange": "150 + equipped_armor*25, except DS:B558 bit 5 magic armor contributes zero armor weight",
+    "transfer": "digits only; withdrawal/deposit transfers MIN(requested, source balance), so an excessive request transfers the entire source balance",
+    "evidence": "DUNSMALL 21F3-251F"
+  },
+  "temple": [
+    {"choice": 1, "service": "Cure wounds", "price_jp": 75, "effect": "health += INT(RND*8)+4, clamped to maximum"},
+    {"choice": 2, "service": "Heal all wounds", "price_jp": 1000, "effect": "health = maximum"},
+    {"choice": 3, "service": "Cure disease", "price_jp": 400, "effect": "disease = 0"},
+    {"choice": 4, "service": "Remove poison", "price_jp": 20000, "effect": "poison = 0"},
+    {"choice": 5, "service": "Gain level", "price_jp": 500000, "effect": "calls the one-level award routine"}
+  ],
+  "temple_charge_order": "The fee is deducted before checking whether disease or poison is present; a no-effect cure is still charged.",
+  "store": {
+    "wizard_restriction": "class 2 may buy choice 1 (Knife), but cannot buy choices 2 through 7; the compiled test is selection > 1 AND class = 2 at 2974-29B6",
+    "items": [
+      {"choice": 1, "name": "Knife", "price_jp": 10},
+      {"choice": 2, "name": "Mace", "price_jp": 200},
+      {"choice": 3, "name": "Sword", "price_jp": 200},
+      {"choice": 4, "name": "Leather armor", "price_jp": 200, "armor_code": 1},
+      {"choice": 5, "name": "Chain armor", "price_jp": 500, "armor_code": 2},
+      {"choice": 6, "name": "Plate armor", "price_jp": 3000, "armor_code": 3},
+      {"choice": 7, "name": "Field plate armor", "price_jp": 10000, "armor_code": 4},
+      {"choice": 8, "name": "The Town", "price_jp": 1000000}
+    ],
+    "town_offer": "shown only when not already owned and pocket+bank > 99999, but purchase requires the full 1000000 in pocket",
+    "evidence": "DUNSMALL 281E-2BB5"
+  },
+  "wizard_guild": {
+    "magic_item_information_price_jp": 800,
+    "spell_information_price": "INT(220 * selected_level^1.75), selected_level 1..6",
+    "spell_information_prices_jp": [220, 739, 1504, 2489, 3678, 5060],
+    "charge_order": "funds are checked before opening the nested P/B picker, but the applicable fee is deducted only after a nonzero selection",
+    "evidence": "DUNSMALL 2BB8-2EF2"
+  }
+}

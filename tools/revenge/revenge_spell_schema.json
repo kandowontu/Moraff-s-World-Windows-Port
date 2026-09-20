@@ -1,0 +1,233 @@
+{
+  "format": "Moraff's Revenge statically recovered spell schema v1",
+  "source": {
+    "executable": "DUNSMALL.EXE",
+    "preparation_dispatch": "35AC-3B01",
+    "battle_dispatch": "90B4-9568",
+    "names_and_descriptions": "F1.COM",
+    "runtime": "Microsoft QuickBASIC 3 / BRUN30"
+  },
+  "selection": {
+    "spell_count_per_family": 12,
+    "spells_per_level": 2,
+    "level_count": 6,
+    "dispatch_index_zero_based": "2 * (selected_level - 1) + (selected_spell - 1)",
+    "spell_point_cost": "selected_level = floor(dispatch_index / 2) + 1",
+    "notes": [
+      "The executable asks for a level from 1 through 6, then one of the two spells in that level.",
+      "Several branches deliberately deduct their cost later than the common selection check; their exact no-cost and fall-through cases are recorded below."
+    ]
+  },
+  "preparation": [
+    {
+      "index": 1,
+      "name": "CURE",
+      "address": "36AA",
+      "cost": 1,
+      "effect": "health_current = min(health_max, health_current + wisdom)"
+    },
+    {
+      "index": 2,
+      "name": "SENSE LEVEL",
+      "address": "36D0",
+      "cost": 1,
+      "effect": "print dungeon_level"
+    },
+    {
+      "index": 3,
+      "name": "STRENGTH",
+      "address": "36F4",
+      "cost": 2,
+      "precondition": "preparation_strength_modifier == 0",
+      "effect": "strength += 6; preparation_strength_modifier = 1",
+      "failure": "returns without deducting spell points"
+    },
+    {
+      "index": 4,
+      "name": "SPEED",
+      "address": "3729",
+      "cost": 2,
+      "precondition": "preparation_speed_modifier == 0",
+      "effect": "agility += 7; preparation_speed_modifier = 1",
+      "failure": "returns without deducting spell points"
+    },
+    {
+      "index": 5,
+      "name": "SENSE LOCATION",
+      "address": "3779",
+      "cost": 3,
+      "effect": "print player_x, player_y, and dungeon_level"
+    },
+    {
+      "index": 6,
+      "name": "DESCEND",
+      "address": "37CA",
+      "cost": 3,
+      "effect": "dungeon_level += 1; initialize_view_state()"
+    },
+    {
+      "index": 7,
+      "name": "FEATHER",
+      "address": "37EA",
+      "cost": 4,
+      "effect": "carried_weight -= 250",
+      "quirks": [
+        "If the result is below zero, it is clamped to zero, four spell points are deducted, and the spell returns normally.",
+        "If the result is zero or greater, execution falls through into ASCEND at 3819.",
+        "At dungeon level zero that fall-through reaches ASCEND's zero-level return without deducting spell points."
+      ]
+    },
+    {
+      "index": 8,
+      "name": "ASCEND",
+      "address": "3819",
+      "cost": 4,
+      "precondition": "dungeon_level != 0",
+      "effect": "print POOF; dungeon_level -= 1; enter town if the result is zero, otherwise initialize the dungeon view",
+      "failure": "at dungeon level zero it returns without deducting spell points"
+    },
+    {
+      "index": 9,
+      "name": "CHANGE LEVEL",
+      "address": "386F",
+      "cost": 5,
+      "effect": "delta = floor(RND * 10) - 5; if delta == 0 then delta = -1; dungeon_level = clamp(dungeon_level + delta, 0.5, 70)",
+      "distribution": "-5,-4,-3,-2,+1,+2,+3,+4 each have probability 1/10; -1 has probability 2/10",
+      "quirk": "clamping occurs after the executable's unchanged-level retry test, so an edge-level cast can consume points yet leave the level unchanged"
+    },
+    {
+      "index": 10,
+      "name": "INVISIBILITY",
+      "address": "38FA",
+      "cost": 5,
+      "effect": "invisibility_effect_state = 1; visibility_state = 32"
+    },
+    {
+      "index": 11,
+      "name": "HEAL",
+      "address": "392D",
+      "cost": 6,
+      "effect": "health_current = health_max + floor(wisdom * 0.5)"
+    },
+    {
+      "index": 12,
+      "name": "MOCCIOLO",
+      "address": "3957",
+      "cost": 6,
+      "effect": "roll = floor(RND * 6) + 1 and apply the selected outcome",
+      "outcomes": [
+        "1: add 1 to all six attributes and print WOW",
+        "2: set dungeon_level=0 and player_x=player_y=10, then enter town",
+        "3: set health_current=health_max and add 30 spell points",
+        "4: set dungeon_level=50",
+        "5: subtract 1 from all six attributes and print UH OH",
+        "6: subtract 2 from player_level, multiply experience by 0.25, then set health_max = max(1, health_max - floor(RND*10) - floor(RND*10) - 2*health_growth_factor + 2); health_current is later clamped to health_max"
+      ]
+    }
+  ],
+  "battle": [
+    {
+      "index": 1,
+      "name": "GAS",
+      "address": "91C2",
+      "cost": 1,
+      "effect": "if floor(RND*2)+1 != 1 and monster_level < 4, print the asleep message and deal floor(RND*5000)+1376 damage; otherwise NO EFFECT"
+    },
+    {
+      "index": 2,
+      "name": "MAGIC ZOT",
+      "address": "9214",
+      "cost": 1,
+      "damage": "(floor(RND*4)+1)*player_level + 3"
+    },
+    {
+      "index": 3,
+      "name": "MAGIC BOLT",
+      "address": "9239",
+      "cost": 2,
+      "damage": "floor(RND*27) + 11"
+    },
+    {
+      "index": 4,
+      "name": "SPEED",
+      "address": "9257",
+      "cost": 2,
+      "effect": "agility += 11; marker = (movement_turn == 1 ? 16 : movement_turn) - 1; combat cleanup subtracts 11 when the marker is nonzero",
+      "quirk": "recasting adds another 11 but overwrites the same marker, while cleanup subtracts only 11 once"
+    },
+    {
+      "index": 5,
+      "name": "LIGHTNING",
+      "address": "9298",
+      "cost": 3,
+      "damage": "floor(RND*player_level*4) + player_level*2 + 5"
+    },
+    {
+      "index": 6,
+      "name": "STRENGTH",
+      "address": "92C8",
+      "cost": 3,
+      "effect": "combat_attack_factor += 7; marker = (movement_turn == 1 ? 16 : movement_turn) - 1; combat cleanup subtracts 7 when the marker is nonzero",
+      "quirk": "recasting adds another 7 but overwrites the same marker, while cleanup subtracts only 7 once"
+    },
+    {
+      "index": 7,
+      "name": "GO AWAY!",
+      "address": "9309",
+      "cost": 4,
+      "effect": "threshold = floor(RND*player_level*2)+5; if threshold > monster_level, set the suppress-kill-message flag and enter the normal experience/replacement/loot defeat pipeline; otherwise NO EFFECT",
+      "quirk": "successful GO AWAY! gives normal defeat rewards and loot but suppresses YOU KILLED IT!!"
+    },
+    {
+      "index": 8,
+      "name": "RISE...",
+      "address": "935F",
+      "cost": 4,
+      "effect": "dungeon_level -= 1 and leave combat without removing the monster; enter town if the result is zero"
+    },
+    {
+      "index": 9,
+      "name": "AUTO KILL",
+      "address": "93B8",
+      "cost": 5,
+      "effect": "threshold = floor(RND*player_level*3)+5; enter the normal defeat flow if threshold > monster_level, otherwise NO EFFECT"
+    },
+    {
+      "index": 10,
+      "name": "EXPLOSION",
+      "address": "93E9",
+      "cost": 5,
+      "damage": "floor(RND*player_level*4) + player_level*3 + 20"
+    },
+    {
+      "index": 11,
+      "name": "HEAL",
+      "address": "941B",
+      "cost": 6,
+      "effect": "health_current = health_max"
+    },
+    {
+      "index": 12,
+      "name": "GOD?",
+      "address": "9427",
+      "cost": 6,
+      "effect": "roll = floor(RND*5)+1 and apply the selected outcome",
+      "outcomes": [
+        "1: deal floor(RND*5000)+1376 damage",
+        "2: deduct six spell points, set dungeon_level=0 and player_x=player_y=10, then enter town",
+        "3: deduct six spell points, set health_current=health_max, and return directly to combat input",
+        "4: NO EFFECT",
+        "5: deduct six spell points, subtract 1 from all six attributes, print UH OH, then fall through the ordinary non-damage completion path and deduct another six spell points (12 total)"
+      ]
+    }
+  ],
+  "common_battle_damage_path": {
+    "address": "9569",
+    "steps": [
+      "deduct the selected spell level from spell_points",
+      "subtract current_damage_amount from current_monster_health",
+      "print YOU DO <damage> POINTS",
+      "enter monster defeat/loot if health is below one; otherwise continue with the monster turn"
+    ]
+  }
+}

@@ -5,6 +5,7 @@
 #include "mw_model_viewer.h"
 #include "mw_battle_simulator.h"
 #include "mw_arena.h"
+#include "mr_game.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7450,7 +7451,9 @@ static int player_select_screen(Game *g, int *colosseum_page) {
         MODE_SWITCH_Y = 105,
         SLOT_HEADER_Y = 165,
         SLOT_FIRST_Y = 220,
-        SLOT_ROW_H = 55
+        SLOT_ROW_H = 55,
+        REVENGE_PANEL_TOP_Y = 770,
+        REVENGE_PANEL_BOTTOM_Y = 1065
     };
     while (1) {
         video_clear(v, 0);
@@ -7535,13 +7538,37 @@ static int player_select_screen(Game *g, int *colosseum_page) {
             video_draw_text(v, SX(0), SY(1150),
                             "ESCAPE CANCELS. A FINAL Y/N CONFIRMATION IS REQUIRED.", 14);
         } else {
-            video_draw_text(v, SX(0), SY(1100), "0-9 SELECTS", 5);
-            video_draw_text(v, SX(360), SY(1100), "D DELETE SAVE", 12);
-            video_draw_text(v, SX(780), SY(1100), "ESCAPE OR Q QUITS", 5);
-            video_draw_text(v, SX(0), SY(1150),
-                            "MAIN GAME AND COLOSSEUM SAVES ARE COMPLETELY SEPARATE.",
+            /* Moraff's Revenge is a complete predecessor, not another World
+               save type. Give it a dedicated, high-contrast launch panel so
+               it cannot be mistaken for a low-priority footer shortcut. */
+            video_fill_rect(v, SX(0), SY(REVENGE_PANEL_TOP_Y), LOGICAL_W,
+                            SY(REVENGE_PANEL_BOTTOM_Y) -
+                                SY(REVENGE_PANEL_TOP_Y),
+                            1);
+            video_hline(v, SX(0), SY(REVENGE_PANEL_TOP_Y), LOGICAL_W, 14);
+            video_hline(v, SX(0), SY(REVENGE_PANEL_BOTTOM_Y - 1),
+                        LOGICAL_W, 14);
+            video_draw_text(v, SX(24), SY(785),
+                            "R) PLAY MORAFF'S REVENGE ADVANCED 3.3", 15);
+            video_draw_text(v, SX(24), SY(840),
+                            "THE COMPLETE 1989 PREDECESSOR TO MORAFF'S WORLD.",
+                            14);
+            video_draw_text(v, SX(24), SY(895),
+                            "A SEPARATE 70-FLOOR RPG WITH ITS OWN FIVE CHARACTERS AND SAVES.",
+                            11);
+            video_draw_text(v, SX(24), SY(950),
+                            "ORIGINAL TOWN, MONSTERS, EQUIPMENT, MAGIC, AND COMBAT.",
+                            11);
+            video_draw_text(v, SX(24), SY(1005),
+                            "PRESS R OR CLICK THIS PANEL. ORIGINAL REVENGE 3.3 DATA IS REQUIRED.",
+                            10);
+            video_draw_text(v, SX(0), SY(1080), "0-9 SELECTS", 5);
+            video_draw_text(v, SX(360), SY(1080), "D DELETE SAVE", 12);
+            video_draw_text(v, SX(780), SY(1080), "ESCAPE OR Q QUITS", 5);
+            video_draw_text(v, SX(0), SY(1140),
+                            "WORLD, COLOSSEUM, AND REVENGE SAVES ARE ALL SEPARATE.",
                             8);
-            video_draw_text(v, SX(1210), SY(1150), "ALT+V VIDEO", 14);
+            video_draw_text(v, SX(1210), SY(1140), "ALT+V VIDEO", 14);
         }
         video_present(v);
 
@@ -7559,6 +7586,9 @@ static int player_select_screen(Game *g, int *colosseum_page) {
         if (key == INPUT_MOUSE_CLICK) {
             int x, y;
             if (game_mouse_click_logical(g, &x, &y)) {
+                if (!delete_mode && y >= SY(REVENGE_PANEL_TOP_Y) &&
+                    y < SY(REVENGE_PANEL_BOTTOM_Y))
+                    return -2;
                 if (!delete_mode && y >= SY(1080) && y < SY(1145) &&
                     x >= SX(330) && x < SX(750)) {
                     delete_mode = 1;
@@ -7599,6 +7629,7 @@ static int player_select_screen(Game *g, int *colosseum_page) {
             delete_mode = 1;
             continue;
         }
+        if (!delete_mode && (key == 'r' || key == 'R')) return -2;
         if (key == INPUT_VIDEO_MODE) {
             game_video_mode_menu(g, 0);
             continue;
@@ -9617,6 +9648,11 @@ title_screen:
     int colosseum_page = 0;
     for (;;) {
         slot = player_select_screen(g, &colosseum_page);
+        if (slot == -2) {
+            mr_game_run(g, "revenge");
+            if (input_poll_quit(&g->input)) return;
+            continue;
+        }
         if (slot < 0) return;
         if (colosseum_page) {
             ArenaSave arena;

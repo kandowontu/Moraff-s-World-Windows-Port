@@ -1,0 +1,61 @@
+{
+  "format": "Moraff's Revenge 3.3 defeat-reward schema v1",
+  "provenance": {
+    "module": "DUNSMALL.EXE",
+    "coin_range": "A561-A9FE",
+    "extra_reward_range": "A9FE-B2CE",
+    "method": "Static 16-bit x86 and Microsoft QuickBASIC 3 runtime data-flow reconstruction; no DOS execution"
+  },
+  "coin_categories": ["copper", "silver", "ivory", "gold", "platinum", "jewels"],
+  "complete_loot_pipeline_gate": {
+    "formula": "even_global_index OR INT(RND*5)<>1",
+    "rng": "RND is consumed for both even and odd indices because QuickBASIC evaluates both OR operands",
+    "failure": "skip coins and every extra reward, returning directly to combat cleanup",
+    "input_boundary": "replacement monster is generated first; gate RND is consumed only after the player acknowledges YOU KILLED IT / HIT RETURN"
+  },
+  "spellbook": {
+    "gate": "INT(RND*5)=1",
+    "level": "INT(RND*INT(dungeon_level*.5+1))+1; reroll while >6",
+    "bit": "INT(RND*2)+1",
+    "type": "INT(RND*2): 0 preparation, 1 battle",
+    "duplicate": "No award and no reroll when the selected bit already exists"
+  },
+  "weapon": {
+    "gate": "dungeon_level<9 AND INT(RND*8)=1",
+    "wizard": "Return before consuming the inner RND",
+    "fighter_roll": "INT(RND*5)+1",
+    "results": "1..3 advance equipped ordinary armor through tier 3; 4 grants sword if missing, then falls through; remaining path grants mace if missing"
+  },
+  "wand": {
+    "eligible_behaviors": [5, 7],
+    "gate": "INT(RND*300)<dungeon_level+40",
+    "color": "INT(RND*9)+1",
+    "charges": "INT(RND*2)+1"
+  },
+  "pill": {
+    "eligible_behavior": 5,
+    "gate": "INT(RND*160)<dungeon_level+25",
+    "color": "INT(RND*6)+1",
+    "count": 1
+  },
+  "generic": {
+    "gate": "INT(RND*dungeon_level+7)+1>10 AND INT(RND*5)+1=1",
+    "enchantment": "INT(INT(RND*dungeon_level)/3)+1",
+    "selection": "INT(RND*22)+1",
+    "table": {
+      "1": "Ring of Health",
+      "2": "Bag of Holding; duplicate falls through to magic sword",
+      "3": "magic sword",
+      "4": "magic mace",
+      "5": "magic ring",
+      "6": "magic field-plate armor",
+      "7": "Holy Hand Grenade",
+      "8": "Floor Slosher",
+      "9-17": "carried item 1-9",
+      "18-22": "fresh uniform attribute-book roll 1-5"
+    },
+    "attribute_book_order": ["strength", "learning", "wisdom", "health", "agility"],
+    "redundant_magic_reward": "NOTHING"
+  },
+  "rng_order_note": "Compiled BASIC AND/OR expressions evaluate both halves; all outer gate RND calls are consumed even when eligibility is already decided"
+}

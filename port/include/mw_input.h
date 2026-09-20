@@ -60,6 +60,10 @@ int  input_kbhit(Input *inp);         /* returns nonzero if key available */
 int  input_getch(Input *inp);         /* blocks until key available, returns ASCII/scancode */
 int  input_wait_any_key(Input *inp);  /* consumes a complete key, including extended scancode */
 void input_drain_pending(Input *inp); /* consumes keys already buffered without waiting */
+void input_drain_pending_polls(Input *inp, int polls);
+/* Consumes at most `polls` complete DOS keys.  This models the fixed-count
+   QuickBASIC INKEY$ debounce loops used by Moraff's Revenge; an extended key
+   is one INKEY$ string even though the native DOS queue stores two bytes. */
 int  input_poll_quit(Input *inp);     /* returns 1 if window close requested */
 void input_last_mouse_click(Input *inp, int *x, int *y);
 void input_mouse_position(Input *inp, int *x, int *y, unsigned *serial);

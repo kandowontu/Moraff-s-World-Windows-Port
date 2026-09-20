@@ -1,0 +1,72 @@
+{
+  "program": "DUNSMALL.EXE",
+  "method": "static QuickBASIC 3 / BRUN30 disassembly; no DOS execution",
+  "menus": {
+    "preparation": {"address": "1340", "effects": "16FA-18DB"},
+    "wand": {"address": "7AA1", "effects": "7BF6-7C48"},
+    "pill": {"address": "7C49", "effects": "7D34-7DC8"},
+    "combat_item": {"address": "95BA", "effects": "98FD-9A2C"},
+    "magic_inventory": {"address": "3B16", "end": "3D82", "pages": 2},
+    "drop_carried_treasure": {"address": "1918", "end": "19F4"}
+  },
+  "preparation_items": [
+    {"selection": 1, "name": "Teleport Scroll", "count_index": 1, "effect": "floor=.5; x=18; y=17"},
+    {"selection": 2, "name": "Scroll of Seeing", "count_index": 2, "effect": "all 21 current-floor reveal rows = 2^21-1"},
+    {"selection": 3, "name": "Scroll of Healing", "count_index": 3, "effect": "health=current maximum"},
+    {"selection": 4, "name": "Spell Point Scroll", "count_index": 4, "effect": "spell points += 10"},
+    {"selection": 5, "name": "Bag of Holding", "status_bit": 2, "capacity_coin_units": 15008},
+    {"selection": 6, "name": "Floor Slosher", "status_bit": 64, "effect": "floor += 1 only when floor <= 40", "consumed": false}
+  ],
+  "combat_items": [
+    {"selection": 1, "name": "Speed Potion", "count_index": 5, "effect": "agility += 13; expiry=TIMER+100"},
+    {"selection": 2, "name": "Fire Potion", "count_index": 6, "effect": "breathe-fire expiry=TIMER+100"},
+    {"selection": 3, "name": "Shielding Potion", "count_index": 7, "effect": "shield defense=15; expiry=TIMER+100"},
+    {"selection": 4, "name": "Health Potion", "count_index": 8, "effect": "health=MIN(max,health+75)"},
+    {"selection": 5, "name": "Relocation Potion", "count_index": 9, "effect": "x=INT(RND*16)+3; y=INT(RND*16)+3; leave combat"},
+    {"selection": 6, "name": "Holy Hand Grenade", "magic_value_index": 7, "effect": "ordinary rewarded defeat"}
+  ],
+  "wands": [
+    {"color": 1, "name": "Purple", "persistent_index": 28, "effect": "floor -= 1"},
+    {"color": 2, "name": "Brown", "persistent_index": 29, "effect": "x=10; y=10"},
+    {"color": 3, "name": "Black", "persistent_index": 30, "effect": "health=MIN(max,health+25)"},
+    {"color": 4, "name": "White", "persistent_index": 31, "effect": "monster cannot-strike counter += 10"},
+    {"color": 5, "name": "Orange", "persistent_index": 32, "effect": "one-shot attack bonus=240"},
+    {"color": 6, "name": "Yellow", "persistent_index": 33, "effect": "free Battle Strength in combat"},
+    {"color": 7, "name": "Green", "persistent_index": 34, "effect": "free Lightning in combat"},
+    {"color": 8, "name": "Red", "persistent_index": 35, "effect": "free Explosion in combat"},
+    {"color": 9, "name": "Blue", "persistent_index": 36, "effect": "health=max"}
+  ],
+  "pills": {
+    "persistent_indices": "22..27",
+    "attribute_order": ["Strength", "Intelligence", "Wisdom", "Health", "Agility", "Laziness"],
+    "formula": "subtract 2 from (color+3 wrapped 1..6), add 4 to (7-color)"
+  },
+  "magic_inventory": {
+    "first_page_order": [
+      "rings of health when status bit 1 is set",
+      "bag contents when status bit 2 is set",
+      "magic sword when its bonus is positive",
+      "magic mace when its bonus is positive",
+      "magic ring when status bit 16 is set",
+      "magic armor when status bit 32 is set",
+      "floor slosher when status bit 64 is set",
+      "holy hand grenades when count is positive",
+      "positive carried-item counts 1 through 13"
+    ],
+    "second_page": "positive wand charge counts 1..9 in Purple-to-Blue selector order, followed by all six pill counts including zeros",
+    "page_boundary": "wait for any key after each page"
+  },
+  "drop_carried_treasure": {
+    "empty": "You have no treasure; wait four seconds",
+    "prompt": "Do you want to drop all of your coins?",
+    "confirmed": "carried treasure becomes zero; carried weight becomes 150 + equipped armor*25, or 150 with magic armor",
+    "cancelled": "no mutation",
+    "confirmed_followup": "redraw and show player statistics"
+  },
+  "original_quirks": [
+    "Wand colors 6..8 consume a charge and do nothing outside combat.",
+    "Combat wand spell wrappers refund SP before entering normal spell code.",
+    "Combat consumables return to input without a monster counterattack.",
+    "Shield value is 15 while freshly active and restores to baseline 16 on expiry."
+  ]
+}

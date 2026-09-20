@@ -1,0 +1,87 @@
+{
+  "format": "Moraff's Revenge 3.3 combat schema v1",
+  "provenance": {
+    "module": "DUNSMALL.EXE",
+    "setup_range": "82DC-849E",
+    "player_weapon_attack_range": "89B4-8E73",
+    "monster_turn_range": "9A2F-A010",
+    "method": "Static 16-bit x86 and Microsoft QuickBASIC 3 runtime data-flow reconstruction; no DOS execution"
+  },
+  "monster_behavior_class": {
+    "assignment_order": [
+      "type < 6 => 1",
+      "5 < type < 9 => 2",
+      "8 < type < 14 => 3 and defense modifier -4",
+      "13 < type < 19 => 4",
+      "type > 18 => 5",
+      "deep resource set and type < 6 => type",
+      "deep resource set and 13 < type < 19 => 7",
+      "final class 2 => defense modifier +4"
+    ],
+    "deep_type_16_turn_speed_bonus": 20
+  },
+  "player_weapon_attack": {
+    "attack_codes": "S sword, M mace, K knife, F fist; B breathe fire uses the adjacent direct-damage path",
+    "d20": "roll=INT(RND*20)+1; attack_score += INT(combat_attack_factor*.7)+roll+player_level; repeat the complete accumulation while roll=20",
+    "magic_bonus": "sword adds magic_sword_bonus; mace adds magic_mace_bonus",
+    "monster_defense": "MIN(INT((monster_level-player_level)*.7),5)+5+INT(dungeon_level*.25)+monster_defense_modifier+monster_level",
+    "fighter_defense_reduction": "subtract 5+INT(player_level/6) from monster defense",
+    "damage_thresholds": [
+      "if attack_score>defense add RND*10+combat_attack_factor+1",
+      "if attack_score-15>defense add RND*10+combat_attack_factor+1",
+      "if attack_score-30>defense add RND*12+combat_attack_factor*2+1"
+    ],
+    "integer_conversion": "INT the accumulated damage once before weapon modifiers",
+    "weapon_modifiers": {
+      "behavior_1_mace": "INT(damage*.5+1)",
+      "knife": "INT(damage*.5)+1",
+      "fist": "INT(damage/3)+1",
+      "behavior_2_sword": "INT(damage*.5+1)"
+    },
+    "one_shot_bonus_bug": "DS:B6CE is added and reset only when pre-modifier damage is at least 1; a miss preserves it",
+    "breathe_fire": "INT(RND*30)+10 direct damage",
+    "defeat": "monster_health<1",
+    "next_actor": "INT(RND*50)+monster_turn_speed_bonus+1 < player_agility returns control to the player; otherwise the monster attacks",
+    "cosmetic_rng": "a zero-damage ordinary weapon attack consumes RND once for original message 1..5; a positive attack, including BREATHE FIRE, consumes RND once for message 6..10; both occur before defeat/next-actor tests"
+  },
+  "player_defense": {
+    "formula": "equipped_armor*2 + magic_mace_bonus + magic_ring_bonus + agility_defense_factor + 17",
+    "fighter_bonus": "INT(player_level/6)+5",
+    "comparison": "monster_attack_score > player_defense + combat_shield_defense_bonus"
+  },
+  "monster_attack_score": {
+    "initialization": "attack_score=0; damage=0 unless behavior class 3 retains an attack score after prior positive damage",
+    "shared_roll_bug": "shared_menu_value_and_combat_roll += INT(RND*20)+1",
+    "reroll_condition": "repeat the shared-roll increment and level accumulation only while shared_roll equals exactly 20",
+    "level_accumulation_per_roll": "monster_level-1",
+    "after_roll": "attack_score += shared_roll-2; subtract another 2 when monster_level=1",
+    "note": "DS:52FC is also the numeric menu/player-roll variable. Its previous value is intentionally not reset by the original monster routine."
+  },
+  "monster_damage": {
+    "base_if_score_beats_defense": "INT(RND*4)+1",
+    "low_level_adjustment": "if monster_level<4 and damage>0, damage-=3",
+    "score_bonus_15": "if attack_score-15>defense, add INT(RND*12)+1",
+    "score_bonus_30": "if attack_score-30>defense, add INT(RND*26)+1",
+    "level_term": "INT((monster_level-player_level)*4)",
+    "level_term_bug": "only when level_term<-10: set it to -10 and then ABS it, producing +10",
+    "always_added": "INT(RND*monster_level)+INT(RND*level_term)",
+    "over_level_60": "add INT(RND*49)+18",
+    "behavior_class_6": "multiply damage by 2",
+    "final_clamp": "damage=max(damage,0)",
+    "miss": "final damage equals zero"
+  },
+  "hit_effects": {
+    "deep_type_18": "replace damage with INT(current_health*.25) and print SQUASH!!",
+      "behavior_class_5": "experience*=0.7; player_level-=1; health_max=health_max-INT(RND*10)-health_growth_factor+1; consume another RND and display F2.COM combat message 11..15 before LEVEL DRAINED!; SAVE immediately after this block and before deep-set Strength drain",
+    "deep_type_14_below_player_level_25": "health attribute -=5",
+    "deep_behavior_class_5": "strength attribute -=1",
+    "deep_type_15": "disease_state=1 and agility attribute -=1"
+  },
+  "repeat_attack": {
+    "formula": "INT(RND*(current_monster_turn_speed_bonus+13))+1",
+    "condition": "repeat roll > player agility",
+    "guard": "only one repeat is permitted; the guard resets when control returns to the player"
+  },
+  "death_test": "player_level<0 OR health_current<0 (zero is not treated as dead here)",
+  "cannot_strike": "when the counter is >1, decrement it and skip the strike; the repeat-attack check still runs"
+}

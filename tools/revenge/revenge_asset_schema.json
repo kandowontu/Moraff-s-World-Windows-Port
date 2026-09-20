@@ -1,0 +1,95 @@
+{
+  "format": "Moraff's Revenge Advanced 3.3 monster graphics",
+  "recovery": "Static QuickBASIC BSAVE/GET decoding; no DOS execution",
+  "sets": {
+    "shallow": {
+      "floors": "1-34",
+      "type_to_large_art": {
+        "file": "3.NUM",
+        "bsave_offset": "0A80",
+        "payload_bytes": 92,
+        "element_type": "MBF single",
+        "elements": 23,
+        "maximum_art_index": 15
+      },
+      "large_art": {
+        "file": "4.NUM",
+        "bsave_offset": "2280",
+        "payload_bytes": 7999
+      },
+      "type_to_compact_art": {
+        "file": "5.NUM",
+        "bsave_offset": "1856",
+        "payload_bytes": 92,
+        "element_type": "MBF single",
+        "elements": 23,
+        "maximum_art_index": 18
+      },
+      "compact_art": {
+        "file": "6.NUM",
+        "bsave_offset": "AF30",
+        "payload_bytes": 5129
+      }
+    },
+    "deep": {
+      "floors": "35-70",
+      "type_to_large_art": {
+        "file": "3A.NUM",
+        "bsave_offset": "9040",
+        "payload_bytes": 92,
+        "element_type": "MBF single",
+        "elements": 23,
+        "maximum_art_index": 15
+      },
+      "large_art": {
+        "file": "4A.NUM",
+        "bsave_offset": "A950",
+        "payload_bytes": 7999
+      },
+      "type_to_compact_art": {
+        "file": "5A.NUM",
+        "bsave_offset": "9DC0",
+        "payload_bytes": 92,
+        "element_type": "MBF single",
+        "elements": 23,
+        "maximum_art_index": 18
+      },
+      "compact_art": {
+        "file": "6A.NUM",
+        "bsave_offset": "A760",
+        "payload_bytes": 5129
+      }
+    }
+  },
+  "large_get_array": {
+    "stride_words": 125,
+    "slots": 32,
+    "slot_expression": "art_index * 2 + size_variant",
+    "size_variants": [
+      {"index": 0, "width_bits": 72, "pixel_width": 36, "height": 24},
+      {"index": 1, "width_bits": 54, "pixel_width": 27, "height": 19}
+    ]
+  },
+  "compact_get_array": {
+    "stride_words": 45,
+    "slots": 57,
+    "slot_expression": "art_index * 3 + distance_variant",
+    "distance_variants": [
+      {"index": 0, "width_bits": 40, "pixel_width": 20, "height": 14},
+      {"index": 1, "width_bits": 30, "pixel_width": 15, "height": 11},
+      {"index": 2, "width_bits": 24, "pixel_width": 12, "height": 9}
+    ]
+  },
+  "get_slot": {
+    "word_0": "horizontal storage width in bits",
+    "word_1": "pixel height",
+    "pixel_width": "word_0 / 2 for SCREEN 1",
+    "data": "packed two-bit CGA pixels, four pixels per byte, most-significant two-bit group first",
+    "row_bytes": "ceil(word_0 / 8), byte aligned; unused fixed-slot bytes follow the complete image rather than padding individual rows"
+  },
+  "evidence": [
+    "DUNSMALL.EXE:3F5A-3FFB",
+    "DUNSMALL.EXE:7001-70A0",
+    "DUNSMALL.EXE:C7A5-C8AC"
+  ]
+}

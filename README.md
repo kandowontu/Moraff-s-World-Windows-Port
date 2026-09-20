@@ -1,6 +1,6 @@
 # Moraff's World — Native Windows Edition
 
-Version 1.1.01 is an unofficial native Windows preservation port and optional
+Version 1.1.2 is an unofficial native Windows preservation port and optional
 Enhanced Edition of **Moraff's World**, the DOS dungeon crawler created by
 **Steve Moraff** and published by **MoraffWare**.
 
@@ -32,7 +32,17 @@ before starting. See
 [`ORIGINAL_FILES_REQUIRED.md`](port/ORIGINAL_FILES_REQUIRED.md) for the
 approved executable variants and tested checksums.
 
-## Version 1.1.01 highlights
+## Version 1.1.2 highlights
+
+- Adds the native Moraff's Revenge Advanced 3.3 reconstruction as an optional
+  bonus game when users provide their own original Revenge data. A new strict
+  static-disassembly audit currently records 97 verified routines, 10
+  intentional native adaptations, and 60 unresolved routines; Revenge is
+  therefore included as an audited work in progress, not represented as fully
+  1:1 certified.
+- Corrects Revenge combat-contact dispatch, modal combat input, exploration
+  versus combat poll order, incremental viewport presentation, combat-sprite
+  XOR handling, vertical-feature notices, and false-floor detection.
 
 - A substantially expanded fidelity pass based on `WORLD.ASM`/`WORLD.C`,
   including original-style input repeat timing, keypad behavior, combat flow,
@@ -50,6 +60,11 @@ approved executable variants and tested checksums.
   relics, races, classes, and 60 late-game spells plus matching magic items.
 - A separate ten-save Colosseum roguelike mode with randomized opponents,
   champion rounds, reward drafts, healing, perks, and career statistics.
+- A native, statically reconstructed Moraff's Revenge Advanced 3.3 bonus game:
+  Steve Moraff's 1989 predecessor, with its separate 70-floor quest,
+  five-character roster, saves, town, monsters, equipment, and spell system.
+  Its highlighted character-selection panel launches with `R` or a click when
+  the legally obtained original Revenge 3.3 data is installed.
 - A live-formula battle simulator, expanded trainer, detailed Beastiary,
   game-statistics screen, model/palette viewer, mouse support, and documented
   optional diagnostic shortcuts.
@@ -60,7 +75,9 @@ approved executable variants and tested checksums.
 See the packaged guides for complete details:
 
 - [`README_RELEASE.md`](port/README_RELEASE.md) — installation and operation
-- [`RELEASE_NOTES.md`](port/RELEASE_NOTES.md) — Version 1.1.01 changes
+- [`RELEASE_NOTES.md`](port/RELEASE_NOTES.md) — Version 1.1.2 changes
+- [`REVENGE_PORT_AUDIT.md`](port/REVENGE_PORT_AUDIT.md) — strict Revenge
+  routine-level parity evidence and remaining work
 - [`EXPERIENCE_MODES.md`](port/EXPERIENCE_MODES.md) — Classic versus Enhanced
 - [`DEEP_DUNGEON.md`](port/DEEP_DUNGEON.md) — Enhanced progression and rewards
 - [`DEEP_SPELLS.md`](port/DEEP_SPELLS.md) — Enhanced spell catalog
@@ -84,7 +101,7 @@ For a distributable package that intentionally excludes copyrighted original
 files:
 
 ```powershell
-.\package_release.ps1 -Version 1.1.01
+.\package_release.ps1 -Version 1.1.2
 ```
 
 The port source is covered by [`LICENSE_PORT.txt`](port/LICENSE_PORT.txt).
