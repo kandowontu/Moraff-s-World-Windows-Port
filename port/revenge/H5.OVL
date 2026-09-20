@@ -1,0 +1,43 @@
+~Player Statistics:
+
+~     The following numbers represent your character's status and capabilities:
+
+~Strength:       Useful for opening doors,  increases chance of hitting  monsters
+		   and damage done to monsters.
+
+~Intelligence:   Determines number of spell points player receives.
+
+~Wisdom:         Also determines spell points.
+
+~Health:         Determines health points.
+
+~Agility:        Can effect  likelihood of dodging attacks,  and may allow you to
+		   take  multiple  strikes  at monsters.  Also  effects  chances
+		   of running away from monsters.
+
+~Laziness:       Wastes some of the  limited  points that  could be part of other
+		   important characteristics and serves no purpose whatsoever.
+
+~Health Points:  The amount of damage that you can take before dying. This number
+		   goes up (usually) each time you gain an experience level.
+
+
+~                                MORE (Hit any key)
+~Spell Points:   Spells takes one  spell point for each level of the  spell cast.
+		   Spell points can be  regained only by  sleeping  at an Inn or
+		   using a spell point scroll.
+
+~Player level:   Perhaps the most important number, player level has an effect on
+		   almost everything.
+
+~Player Weight:  Increases as you accumulate treasure.  High player weight causes
+		   Sluggishness while fighting and running.
+
+~Pocket Money:   Cash on hand.  Treasure and  coins do not appear as pocket money
+		   until you visit the bank and the treasure is cashed in.
+
+~Experience:     Represents  experience  absorbed to date.  Experience is  gained
+		   every time you kill a monster.  However,  it is only absorbed
+		   when you stay at an Inn.
+
+~Money in Bank:  Total savings of the character.

@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.1.2"
+    [string]$Version = "1.1.3"
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,10 +70,30 @@ foreach ($name in $originalFiles) {
         throw "Refusing to package copyrighted original file: $name"
     }
 }
-if (Test-Path -LiteralPath (Join-Path $packageRoot "revenge")) {
-    throw "Refusing to package copyrighted original Revenge resources."
-}
 
+$revengeSource = Join-Path $sourceRoot "revenge"
+$revengeRequired = @(
+    "NAME",
+    "F1.COM", "F2.COM", "F5.COM", "F6.COM", "F7.COM", "F9.EXE",
+    "1.EXE", "1.BIN", "2.EXE", "2.BIN",
+    "1.NUM", "2.NUM", "3.NUM", "4.NUM", "5.NUM", "6.NUM", "7.NUM",
+    "3A.NUM", "4A.NUM", "5A.NUM", "6A.NUM",
+    "H1.OVL", "H2.OVL", "H3.OVL", "H4.OVL",
+    "H5.OVL", "H6.OVL", "H7.OVL", "H8.OVL",
+    "REVIEW.1", "REVIEW.2", "REVIEW.3",
+    "REVIEW.4", "REVIEW.5", "REVIEW.6"
+)
+foreach ($name in $revengeRequired) {
+    if (-not (Test-Path -LiteralPath (Join-Path $revengeSource $name) -PathType Leaf)) {
+        throw "Bundled Revenge runtime file is missing: $name"
+    }
+}
+$revengeFiles = @(Get-ChildItem -LiteralPath $revengeSource -File)
+if ($revengeFiles.Count -ne $revengeRequired.Count) {
+    throw "Bundled Revenge directory must contain exactly $($revengeRequired.Count) files."
+}
+Copy-Item -LiteralPath $revengeSource `
+    -Destination (Join-Path $packageRoot "revenge") -Recurse
 Compress-Archive -LiteralPath $packageRoot -DestinationPath $archivePath
 
 $exeHash = Get-FileHash -LiteralPath `

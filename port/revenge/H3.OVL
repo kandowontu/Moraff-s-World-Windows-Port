@@ -1,0 +1,34 @@
+~The Maps:
+
+~     The mapping  system of this  game is perhaps  its greatest feature.  On the
+right  side  of  the  screen  we  have a  three-dimensional  view  of  all  four
+directions;  forward, left, right, and behind.  Monsters become visible far down
+the corridor, giving you the opportunity to run away from them before they reach
+you.  Monsters can not attack until they reach you.  When a monster reaches you,
+it will appear in the space between the 3-D images. The name of the monster will
+be  printed  at the top of the screen,  along  with its  health points  and your
+health points.
+~     The map on the left side represents hours worth of mapping that is all done
+automatically.  Here is a key to the map:
+
+~The arrow.............Represents your position and the direction you are facing.
+~Straight line.........Represents wall.
+~Small break in line...Represents door.
+~No line...............Represents opening.
+~Hollow square.........Ladder going up.
+~Filled square.........Ladder going down.
+~Circle................Chute.
+~Letters...............Temples, Stores, Banks, Inns, Wizard's guild.
+
+~     The computer remembers where each  character has been in the giant 70 level
+dungeon, so that only the squares you visit are mapped.
+~                           MORE (Hit Any Key)
+~Movement:
+
+~     You will often need to run away from monsters.  It is almost impossible for
+ANY character to kill a 65'th level ghost.  You should  learn to use the 3-D map
+to avoid certain monsters when you see them down the corridors.
+
+~     There is a faster, more convenient way to move around the dungeon using the
+flat map on the left hand side of the screen. To switch between the two types of
+movement, hit the `Esc' key.

@@ -1,21 +1,26 @@
-# Release notes — Version 1.1.2
+# Release notes — Version 1.1.3
 
 Released September 19, 2026.
 
 ## Moraff's World Native Windows Edition
 
-This release packages the native Windows port as a legally clean executable
-and documentation bundle. Users supply the required original MoraffWare files
-from their own installation.
+This release packages the native Windows port, documentation, and bundled
+Moraff's Revenge runtime data. Users supply the required original Moraff's
+World files from their own installation.
 
 Highlights include:
+
+- The 36-file, 79,129-byte Moraff's Revenge runtime-data subset is now bundled
+  with the Windows package and source tree. Users no longer need a separate
+  Revenge installation or manual `revenge` directory setup. Mutable Revenge
+  characters and world state remain isolated in `revenge-native`.
 
 - The optional native Moraff's Revenge Advanced 3.3 reconstruction is now
   integrated into the character-selection flow. It uses a separate local
   `revenge` data directory and never reads or modifies World or Colosseum
   saves.
 - A new source-backed parity gate inventories all 167 recovered Revenge
-  routines. Version 1.1.2 has 97 verified routines, 10 documented native
+  routines. Version 1.1.3 has 97 verified routines, 10 documented native
   adaptations, and 60 unresolved routines, so the bonus game is explicitly
   shipped as an audited work in progress rather than described as fully 1:1
   certified.
@@ -79,4 +84,6 @@ Highlights include:
 - Verification of the required original `MW.EXE` and `WORLD.EXE`
 
 This release does not include original Moraff's World executables or assets.
-See `ORIGINAL_FILES_REQUIRED.md`.
+It does include the minimal original Moraff's Revenge runtime-data subset used
+by the optional native bonus game; those files remain MoraffWare property. See
+`ORIGINAL_FILES_REQUIRED.md` for the World requirements.

@@ -1,13 +1,13 @@
-# Moraff's World Native Port 1.1.2
+# Moraff's World Native Port 1.1.3
 
-Version 1.1.2 adds the optional native Moraff's Revenge Advanced 3.3
-reconstruction and a strict, source-backed parity gate while retaining the
-World and Colosseum improvements from earlier 1.1 releases.
+Version 1.1.3 bundles the optional native Moraff's Revenge Advanced 3.3
+runtime data and retains the strict, source-backed parity gate plus the World
+and Colosseum improvements from earlier 1.1 releases.
 
 ## Highlights
 
-- integrates Moraff's Revenge as an optional, separate-save bonus game when
-  users supply the legally obtained original Revenge 3.3 data
+- integrates Moraff's Revenge as an optional, separate-save bonus game with
+  its required 79 KB runtime-data subset included—no manual data copy needed
 - publishes an honest routine-level Revenge audit: 97 verified routines, 10
   documented adaptations, and 60 unresolved routines; full 1:1 parity is not
   yet certified
@@ -43,19 +43,21 @@ World and Colosseum improvements from earlier 1.1 releases.
   endurance later in a run so strong builds do not flatten the long game
 
 Download and extract the Windows x64 ZIP, then supply the ten required files
-from your own legally obtained Moraff's World installation. Original
-MoraffWare executables and assets are **not included**. The exact required file
-list and approved executable checksums are in `ORIGINAL_FILES_REQUIRED.md`.
+from your own legally obtained Moraff's World installation. Original Moraff's
+World executables and assets are **not included**. The exact required World
+file list and approved executable checksums are in
+`ORIGINAL_FILES_REQUIRED.md`. The minimal Revenge runtime-data subset is
+included and remains original MoraffWare material.
 
 ## Release SHA-256
 
 ```text
-f7f21cc30fbc20ec540c0b275d7f8b4a4d89f7df41719dcfe7f0a195ee5a35c1  moraffs_world.exe
-49fc6982720872da32b57a569c3abb14901a9738aa98132e5f3b02ac660809b4  Moraffs-World-Native-Port-1.1.2-win64.zip
+159c3962adc6525bf142b23bffa7fc01c06ee031655192fd38bfb2c19b15231e  moraffs_world.exe
+ff7511aa5f9c2d58bdd5e7f8b2c1c812dcc448cae529b8386e2768fd627c1076  Moraffs-World-Native-Port-1.1.3-win64.zip
 ```
 
 The same values are attached as
-`Moraffs-World-Native-Port-1.1.2-win64-SHA256.txt`.
+`Moraffs-World-Native-Port-1.1.3-win64-SHA256.txt`.
 
 Moraff's World and its original assets remain the work and property of Steve
 Moraff / MoraffWare. This independent fan preservation project is not

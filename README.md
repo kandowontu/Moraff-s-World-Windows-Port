@@ -1,13 +1,14 @@
 # Moraff's World — Native Windows Edition
 
-Version 1.1.2 is an unofficial native Windows preservation port and optional
+Version 1.1.3 is an unofficial native Windows preservation port and optional
 Enhanced Edition of **Moraff's World**, the DOS dungeon crawler created by
 **Steve Moraff** and published by **MoraffWare**.
 
 The original game, its name, design, text, graphics, fonts, maps, and data
 remain the work and property of Steve Moraff / MoraffWare. This fan project is
-not affiliated with or endorsed by MoraffWare, and does not distribute the
-original game files.
+not affiliated with or endorsed by MoraffWare. It does not distribute the
+original Moraff's World files; the minimal runtime data for the included
+Moraff's Revenge bonus game is bundled and remains MoraffWare property.
 
 ## Download and installation
 
@@ -32,11 +33,12 @@ before starting. See
 [`ORIGINAL_FILES_REQUIRED.md`](port/ORIGINAL_FILES_REQUIRED.md) for the
 approved executable variants and tested checksums.
 
-## Version 1.1.2 highlights
+## Version 1.1.3 highlights
 
 - Adds the native Moraff's Revenge Advanced 3.3 reconstruction as an optional
-  bonus game when users provide their own original Revenge data. A new strict
-  static-disassembly audit currently records 97 verified routines, 10
+  bonus game with its required 79 KB runtime-data subset bundled. No separate
+  Revenge installation or data-copy step is required. A strict static-
+  disassembly audit currently records 97 verified routines, 10
   intentional native adaptations, and 60 unresolved routines; Revenge is
   therefore included as an audited work in progress, not represented as fully
   1:1 certified.
@@ -63,8 +65,7 @@ approved executable variants and tested checksums.
 - A native, statically reconstructed Moraff's Revenge Advanced 3.3 bonus game:
   Steve Moraff's 1989 predecessor, with its separate 70-floor quest,
   five-character roster, saves, town, monsters, equipment, and spell system.
-  Its highlighted character-selection panel launches with `R` or a click when
-  the legally obtained original Revenge 3.3 data is installed.
+  Its highlighted character-selection panel launches with `R` or a click.
 - A live-formula battle simulator, expanded trainer, detailed Beastiary,
   game-statistics screen, model/palette viewer, mouse support, and documented
   optional diagnostic shortcuts.
@@ -75,7 +76,7 @@ approved executable variants and tested checksums.
 See the packaged guides for complete details:
 
 - [`README_RELEASE.md`](port/README_RELEASE.md) — installation and operation
-- [`RELEASE_NOTES.md`](port/RELEASE_NOTES.md) — Version 1.1.2 changes
+- [`RELEASE_NOTES.md`](port/RELEASE_NOTES.md) — Version 1.1.3 changes
 - [`REVENGE_PORT_AUDIT.md`](port/REVENGE_PORT_AUDIT.md) — strict Revenge
   routine-level parity evidence and remaining work
 - [`EXPERIENCE_MODES.md`](port/EXPERIENCE_MODES.md) — Classic versus Enhanced
@@ -101,7 +102,7 @@ For a distributable package that intentionally excludes copyrighted original
 files:
 
 ```powershell
-.\package_release.ps1 -Version 1.1.2
+.\package_release.ps1 -Version 1.1.3
 ```
 
 The port source is covered by [`LICENSE_PORT.txt`](port/LICENSE_PORT.txt).

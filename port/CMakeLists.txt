@@ -1,12 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
-project(moraffs_world VERSION 1.1.2 LANGUAGES C)
+project(moraffs_world VERSION 1.1.3 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 option(MORAFF_COPY_ORIGINAL_DATA
     "Copy the developer's locally owned original Moraff's World files into the build directory"
     ON)
-set(MORAFF_REVENGE_DATA_SOURCE_DIR "" CACHE PATH
-    "Optional locally owned Moraff's Revenge 3.3 directory copied to build/revenge")
 
 # ── Fetch SDL2 automatically if not found ──
 include(FetchContent)
@@ -99,25 +97,33 @@ if(MORAFF_COPY_ORIGINAL_DATA)
     endforeach()
 endif()
 
-# Revenge's native code opens only relative paths below ./revenge. A developer
-# may point CMake at a locally owned original installation; no workstation or
-# network path is compiled into the executable and no original file is part of
-# the source repository.
-if(MORAFF_REVENGE_DATA_SOURCE_DIR)
-    if(IS_DIRECTORY "${MORAFF_REVENGE_DATA_SOURCE_DIR}")
-        add_custom_command(TARGET moraffs_world POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-                "$<TARGET_FILE_DIR:moraffs_world>/revenge"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${MORAFF_REVENGE_DATA_SOURCE_DIR}"
-                "$<TARGET_FILE_DIR:moraffs_world>/revenge"
-            VERBATIM
-        )
-    else()
+# Revenge's native code opens only relative paths below ./revenge. The small
+# runtime data subset is bundled with the port; mutable characters and world
+# state are seeded into the separate ./revenge-native directory at runtime.
+set(MORAFF_BUNDLED_REVENGE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/revenge")
+set(MORAFF_REVENGE_RUNTIME_FILES
+    NAME
+    F1.COM F2.COM F5.COM F6.COM F7.COM F9.EXE
+    1.EXE 1.BIN 2.EXE 2.BIN
+    1.NUM 2.NUM 3.NUM 4.NUM 5.NUM 6.NUM 7.NUM
+    3A.NUM 4A.NUM 5A.NUM 6A.NUM
+    H1.OVL H2.OVL H3.OVL H4.OVL H5.OVL H6.OVL H7.OVL H8.OVL
+    REVIEW.1 REVIEW.2 REVIEW.3 REVIEW.4 REVIEW.5 REVIEW.6
+)
+foreach(MORAFF_REVENGE_FILE IN LISTS MORAFF_REVENGE_RUNTIME_FILES)
+    if(NOT EXISTS "${MORAFF_BUNDLED_REVENGE_DIR}/${MORAFF_REVENGE_FILE}")
         message(FATAL_ERROR
-            "MORAFF_REVENGE_DATA_SOURCE_DIR is not a directory: ${MORAFF_REVENGE_DATA_SOURCE_DIR}")
+            "Missing bundled Revenge runtime file: ${MORAFF_REVENGE_FILE}")
     endif()
-endif()
+endforeach()
+add_custom_command(TARGET moraffs_world POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:moraffs_world>/revenge"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${MORAFF_BUNDLED_REVENGE_DIR}"
+        "$<TARGET_FILE_DIR:moraffs_world>/revenge"
+    VERBATIM
+)
 
 add_custom_command(TARGET moraffs_world POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

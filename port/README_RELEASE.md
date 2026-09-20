@@ -1,6 +1,6 @@
 # Moraff's World — Native Windows Edition
 
-Version 1.1.2 for 64-bit Windows.
+Version 1.1.3 for 64-bit Windows.
 
 An unofficial native Windows preservation port and Enhanced Edition of
 **Moraff's World**, the DOS dungeon crawler created by **Steve Moraff** and
@@ -9,7 +9,9 @@ published by **MoraffWare**.
 The original game, its name, design, text, graphics, fonts, maps, and data
 remain the work and property of Steve Moraff / MoraffWare. This fan project is
 not affiliated with or endorsed by MoraffWare. It does not include the
-original game files.
+original Moraff's World files. The small runtime-data subset used by the
+included Moraff's Revenge bonus game is bundled and remains original
+MoraffWare material.
 
 ## Quick installation
 
@@ -32,9 +34,9 @@ original game files.
    subdirectory.
 4. Run `moraffs_world.exe`.
 
-To enable the statically reconstructed Moraff's Revenge bonus game, copy its
-original 3.3 data into a local `revenge` subdirectory. The exact list is in
-`REVENGE_FILES_REQUIRED.md`; no DOSBox or DOS executable is launched.
+The statically reconstructed Moraff's Revenge bonus game and its required
+runtime data are included. No separate Revenge installation or copy step is
+needed, and no DOSBox or DOS executable is launched.
 
 The highlighted **Moraff's Revenge Advanced 3.3** panel on either character
 selection page launches Steve Moraff's 1989 predecessor to Moraff's
@@ -43,7 +45,7 @@ roster, saves, town, monsters, equipment, and magic. Press `R` or click the
 panel; Revenge never reads or modifies World or Colosseum saves.
 
 The Revenge reconstruction is undergoing a strict routine-by-routine static
-disassembly audit. In Version 1.1.2, 97 recovered routines are verified, 10
+disassembly audit. In Version 1.1.3, 97 recovered routines are verified, 10
 are documented native adaptations, and 60 remain unresolved. It is playable
 but is not yet represented as fully 1:1 certified. See
 `REVENGE_PORT_AUDIT.md` for the exact evidence and remaining work.
@@ -140,8 +142,8 @@ only the selected Colosseum record.
 - `COLOSSEUM.md` — separate-save roguelike arena mode
 - `HOTKEYS.md` — controls and optional diagnostic shortcuts
 - `CREDITS.md` — original-game, port, and preservation credits
-- `REVENGE_FILES_REQUIRED.md` — original Revenge 3.3 data needed by its
-  native static reconstruction
+- `REVENGE_FILES_REQUIRED.md` — inventory and ownership notice for the
+  bundled Revenge runtime data
 - `REVENGE_PORT_AUDIT.md` — strict Revenge parity status and routine-level
   evidence
 - `THIRD_PARTY_NOTICES.md` — SDL and build-tool acknowledgements

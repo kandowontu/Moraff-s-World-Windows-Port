@@ -1,0 +1,46 @@
+~Spells and Magic Items:
+
+~     Spells are an important  part of this game for both  fighters and  wizards.
+To be able to  cast a spell,  you must first find that  spell book.  Spell books
+are found as  treasure when  you kill  monsters.  The deeper in the  dungeon you
+are, the more powerful the spell tends to be.  Once you have found a spell book,
+you possess that spell forever.
+~     Casting  spells  requires  spell points.  First level spells  use one spell
+point, second level spells use two points,  third level spells use three points,
+etc. As you become higher level, your spell points will increase.  After you use
+up some  spell points,  you may  stay at an Inn to  restore  them to their  full
+amount.
+~     To find out what spell books you have you can type `C' for Cast spells, and
+then type the level of the spell you want to examine.
+~     Note that  there are  two types  of spells.  There are  attack  spells  and
+preparatory  spells.  Attack spells can only be cast when you are being attacked
+by a  monster  (it is in the middle of the  3-D image).  Preparatory  spells can
+only be cast while you are not being attacked. Thus if you find an attack spell,
+you will have to wait until you are in combat to find out what it does.
+
+~     Magic items also are devided  into attack items and preparatory items.  You
+can, however, examine all of your magic items by hitting `M'.
+~     You can find out what these  spells and magic items do by paying a visit to
+the Wizard's guild.
+~                           MORE (Hit Any Key)
+~Pills and Wands:
+
+~     Pills and wands come in various  colors.  There is no way to determine what
+each of these items does until you use it.  Once you know what each colored item
+does, it will not change so you should write it down.
+~     Pills  will  generally  affect  characteristics,  while wands will do other
+things.
+~     Pills can only be found by killing level-drainers, while wands can be found
+by killing level drainers or other special monsters like Invaders.
+
+~Rings, Weapons, and Armor:
+
+~Ring of Health - Heals one health point per step.
+~+ ? Ring - Improves armor protection.
+~+ ? Mace, Sword - Hits more often, does more damage.
+~+ ? Magic Armor - Harder to hit.
+
+~Magical  weapons  and armor  replace  existing  weapons and armor automatically.
+     Wands and pills must be used to find out what they do.
+
+

@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Preserved Moraff's Revenge runtime resources must remain byte-exact.
+port/revenge/** binary

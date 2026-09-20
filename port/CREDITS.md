@@ -10,6 +10,11 @@ fonts, maps, executable code, and original data are credited to Steve Moraff /
 MoraffWare. Their original work is the reason this preservation project
 exists.
 
+The release also bundles the minimal runtime-data subset needed by Moraff's
+Revenge Advanced 3.3, Steve Moraff's 1989 predecessor. That data and all
+associated names, writing, graphics, and formats remain credited to Steve
+Moraff / MoraffWare and are not relicensed by this project.
+
 All copyrights and other rights in the original game remain with their
 respective owner. No original-game asset is relicensed by this project.
 

@@ -1,0 +1,4 @@
+"THE FIRST CHARACTER"
+"K"
+"END"
+

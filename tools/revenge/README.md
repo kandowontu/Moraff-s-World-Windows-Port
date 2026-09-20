@@ -169,22 +169,21 @@ or redistributing MoraffWare's original files.
    Both the literal stored values and decoded gameplay values are reported;
    this includes all eight stat/wealth offsets recovered from the loader.
 
-6. Native development builds can copy a locally owned original directory into
-   the executable's relative `revenge` data directory without embedding a hard
-   path:
+6. Native development and release builds copy the bundled runtime subset from
+   the source tree's relative `port/revenge` directory into the executable's
+   relative `revenge` data directory:
 
    ```powershell
-   cmake -S . -B build `
-       -DMORAFF_REVENGE_DATA_SOURCE_DIR='D:\Games\Revenge'
+   cmake -S . -B build
    cmake --build build
    ```
 
-   The cache path is used only by the build copy step. Runtime code opens
-   `revenge/F1.COM`, `revenge/F2.COM`, and the other local original resources.
+   Runtime code opens `revenge/F1.COM`, `revenge/F2.COM`, and the other local
+   bundled resources.
    On first entry to the native Revenge menu it seeds mutable state into the
    relative peer directory `revenge-native`. `NAME`, character pairs,
    `F5.COM`, `F9.EXE`, and the global monster tables are subsequently written
-   only in that native directory; the supplied originals remain unchanged.
+   only in that native directory; the bundled seed resources remain unchanged.
    The first numeric `NAME` record retains BEGIN's original `10` first-run
    sentinel and later `0`/`1` monochrome/color state. Each seed file is copied
    through a temporary file and `.seed-complete` is created only after the

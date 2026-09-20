@@ -1,0 +1,25 @@
+OPTIONS:
+
+~View Stats--------Displays vital statistics of your character.
+~Magic-------------Displays magic items possessed by you.
+~Quit--------------Saves all data and ends game.
+~Item--------------Allows use of magic items. Some items are for use while
+		       fighting, and some are for use while exploring.
+~Cast Spell--------Allows spells to be cast. Some spells are for use while
+		       fighting, and some are for use while exploring.
+~Pause-------------Stops all activity.
+~Abandon Treasure--Allows you to drop all coins, reducing player weight.
+~Enter delay-------Delays printing so that you may enter many movement commands.
+~@,#---------------Changes color of foreground, background.
+~O-----------------Turns sound on/off.
+~Take pill---------Allows you to take any pills you have found.
+~Wand--------------Lets you use any wand you have found.
+~ESC---------------Switches between movement modes.
+
+~FOR  MORE  HELP  PRESS:
+
+~1....Objectives            2....The Maps, Moving    3....The Town
+4....Player Statistics     5....Spells and Magic    6....Survival Tips
+7....How to Fight
+
+~Press any other key to return to the game.

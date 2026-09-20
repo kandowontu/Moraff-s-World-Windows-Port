@@ -62,8 +62,11 @@ The executable imports standard Microsoft Windows system libraries and the
 Universal C Runtime supplied by Windows. No Microsoft DLL is bundled in this
 package.
 
-## Original Moraff's World material
+## Original MoraffWare material
 
 Steve Moraff / MoraffWare's original game files are not third-party
-open-source components. They remain copyrighted proprietary game material,
-are not included in this release, and are not covered by any license above.
+open-source components. They remain copyrighted proprietary game material and
+are not covered by any license above. Original Moraff's World files are not
+included in this release. The minimal runtime-data subset for Moraff's Revenge
+Advanced 3.3 is bundled for the native bonus game and is not relicensed by
+this project.
